@@ -31,6 +31,7 @@ static SDL_AudioSpec g_obtained_audio_spec;
 // Returns a non-zero error code on failure.
 DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels);
 DLL_EXPORT void Quit();
+DLL_EXPORT char *ErrorString();
 
 // TEXTURES
 // Creates a texture with a modifiable pixel buffer.
@@ -107,6 +108,10 @@ enum EventType {
 //   MOUSEWHEEL: mouse_x,mouse_y (representing horizontal and vertical scroll amount)
 //   MOUSEMOVE: mouse_x,mouse_y (representing pixel position)
 DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char text[32]);
+// Returns the name of the scancode.
+DLL_EXPORT char* ScancodeName(SDL_Scancode scancode);
+// Returns the scancode with the given name.
+DLL_EXPORT SDL_Scancode ScancodeFromName(char *name);
 
 DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels) {
 #define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
@@ -135,6 +140,10 @@ DLL_EXPORT void Quit() {
   SDL_CloseAudioDevice(g_audio_device_id);
   TTF_Quit();
   SDL_Quit();
+}
+
+DLL_EXPORT char* ErrorString() {
+  return SDL_GetError();
 }
 
 DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height) {
@@ -285,5 +294,12 @@ DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, i
     }
   }
   return NO_EVENT;
+}
+
+DLL_EXPORT char* ScancodeName(SDL_Scancode scancode) {
+  return SDL_GetScancodeName(scancode);
+}
+DLL_EXPORT SDL_Scancode GetScancodeFromName(char *name) {
+  return SDL_GetScancodeFromName(name);
 }
 
