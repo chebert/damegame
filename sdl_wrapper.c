@@ -2,6 +2,7 @@
 #include "SDL_ttf.h"
 #include <stdint.h>
 
+// TYPES
 #define DLL_EXPORT __declspec(dllexport)
 
 typedef uint8_t u8;
@@ -13,23 +14,25 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
+// PARAMETERS
 const SDL_AudioFormat AUDIO_FORMAT = AUDIO_S16LSB;
-
 static int g_audio_frequency = 48000;
 static u8 g_audio_channels = 2;
-
 // An audio frame is a collection of samples that make up a channel.
 const u16 AUDIO_FRAMES = 4096;
 
+// GLOBALS
 static SDL_Window *g_window;
 static SDL_Renderer *g_renderer;
 static SDL_AudioDeviceID g_audio_device_id;
 static SDL_AudioSpec g_obtained_audio_spec;
 
-// Starts SDL. Loads TTF. Creates a window/renderer. 
+// Starts SDL. Loads TTF. Creates a window/renderer.
 // Returns a non-zero error code on failure.
 DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels);
 DLL_EXPORT void Quit();
+
+// TEXTURES
 // Creates a texture with a modifiable pixel buffer.
 // Format of color is 4 u8's: R,G,B,A
 DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height);
@@ -44,11 +47,15 @@ DLL_EXPORT SDL_Texture *LoadBMPWithColorKey(const char* path, u8 r, u8 g, u8 b);
 DLL_EXPORT void FreeTexture(SDL_Texture* texture);
 DLL_EXPORT int TextureWidth(SDL_Texture *texture);
 DLL_EXPORT int TextureHeight(SDL_Texture *texture);
+
+// TEXT
 // Returns NULL on failure
 DLL_EXPORT TTF_Font *OpenFont(const char *path, int point_size);
 DLL_EXPORT void CloseFont(TTF_Font* font);
 // Creates white text on a transparent background.
 DLL_EXPORT SDL_Texture* CreateTextTexture(TTF_Font *font, const char* text);
+
+// RENDERING
 // Clear the screen to the draw color
 DLL_EXPORT void Clear();
 // Set the current draw color.
@@ -64,6 +71,7 @@ DLL_EXPORT void TextureColorMod(SDL_Texture* texture, u8 r, u8 g, u8 b);
 // Flip the display buffer.
 DLL_EXPORT void Present();
 
+// AUDIO
 // Returns the number of bytes currently buffered.
 DLL_EXPORT u32 BufferedAudioBytes();
 // Fills the audio buffer with the provided bytes array.
@@ -75,6 +83,30 @@ DLL_EXPORT void PauseAudio();
 DLL_EXPORT void PlayAudio();
 // Inserts a time delay on the current thread before resuming.
 DLL_EXPORT void Delay(int milliseconds);
+
+// EVENTS
+enum EventType {
+  NO_EVENT,
+  QUIT,
+  KEYDOWN,
+  KEYUP,
+  TEXTINPUT,
+  MOUSEDOWN,
+  MOUSEUP,
+  MOUSEWHEEL,
+  MOUSEMOVE
+};
+
+// Polls for the next input event and returns the type of the event.
+// If no events are left on the event queue, NO_EVENT is returned.
+// The following out parameters will be filled based on the type:
+//   NO_EVENT/QUIT: N/A
+//   KEYDOWN/KEYUP: scancode (note: repeated key presses are ignored)
+//   TEXTINPUT: text
+//   MOUSEDOWN/MOUSEUP: mouse_button, clicks
+//   MOUSEWHEEL: mouse_x,mouse_y (representing horizontal and vertical scroll amount)
+//   MOUSEMOVE: mouse_x,mouse_y (representing pixel position)
+DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char text[32]);
 
 DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels) {
 #define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
@@ -105,8 +137,6 @@ DLL_EXPORT void Quit() {
   SDL_Quit();
 }
 
-// Creates a texture with a modifiable pixel buffer.
-// Format of color is 4 u8's: R,G,B,A
 DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height) {
   return SDL_CreateTexture(g_renderer,
       SDL_PIXELFORMAT_RGBA8888,
@@ -114,7 +144,6 @@ DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height) {
       width, height);
 }
 
-// Replaces the pixel buffer of a texture that hs been created with CreatePixelBufferTexture.
 DLL_EXPORT void ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels, int texture_height) {
   void *pixels;
   int *pitch;
@@ -123,8 +152,6 @@ DLL_EXPORT void ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels, int te
   SDL_UnlockTexture(texture);
 }
 
-// Loads a BMP from path.
-// Returns NULL on failure
 DLL_EXPORT SDL_Texture *LoadBMP(const char* path) {
   SDL_Surface *surface = SDL_LoadBMP(path);
   if (!surface) return NULL;
@@ -133,8 +160,6 @@ DLL_EXPORT SDL_Texture *LoadBMP(const char* path) {
   return texture;
 }
 
-// Loads a BMP from path, using pure black as a transparent pixel.
-// Returns NULL on failure
 DLL_EXPORT SDL_Texture *LoadBMPWithColorKey(const char* path, u8 r, u8 g, u8 b) {
   SDL_Surface *surface = SDL_LoadBMP(path);
   if (!surface) return NULL;
@@ -160,7 +185,6 @@ DLL_EXPORT int TextureHeight(SDL_Texture *texture) {
   return height;
 }
 
-// Returns NULL on failure
 DLL_EXPORT TTF_Font *OpenFont(const char *path, int point_size) {
   return TTF_OpenFont(path, point_size);
 }
@@ -168,7 +192,6 @@ DLL_EXPORT void CloseFont(TTF_Font* font) {
   TTF_CloseFont(font);
 }
 
-// Creates white text on a transparent background.
 DLL_EXPORT SDL_Texture* CreateTextTexture(TTF_Font *font, const char* text) {
   SDL_Color color = {.r = 255, .g = 255, .b = 255};
   SDL_Surface *surface = TTF_RenderUTF8_Solid(font, text, color);
@@ -204,22 +227,15 @@ DLL_EXPORT void Present() {
   SDL_RenderPresent(g_renderer);
 }
 
-// Returns the number of bytes currently buffered.
 DLL_EXPORT u32 BufferedAudioBytes() {
   return SDL_GetQueuedAudioSize(g_audio_device_id);
 }
-
-// Fills the audio buffer with the provided bytes array.
-// Returns non-zero on error.
 DLL_EXPORT int BufferAudio(u8 *bytes, u32 num_bytes) {
   return SDL_QueueAudio(g_audio_device_id, bytes, num_bytes);
 }
-
-// Pauses playback of the audio device.
 DLL_EXPORT void PauseAudio() {
   SDL_PauseAudioDevice(g_audio_device_id, 1);
 }
-// Resumes playback of the audio device.
 DLL_EXPORT void PlayAudio() {
   SDL_PauseAudioDevice(g_audio_device_id, 0);
 }
@@ -227,3 +243,47 @@ DLL_EXPORT void PlayAudio() {
 DLL_EXPORT void Delay(int milliseconds) {
   SDL_Delay(milliseconds);
 }
+
+DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char text[32]) {
+  SDL_Event event;
+  while (SDL_PollEvent(&event)) {
+    switch (event.type) {
+      case SDL_QUIT:
+        return QUIT;
+      case SDL_KEYDOWN:
+        if (!event.key.repeat) {
+          *scancode = event.key.keysym.scancode;
+          return KEYDOWN;
+        }
+        break;
+      case SDL_KEYUP:
+        *scancode = event.key.keysym.scancode;
+        return KEYUP;
+      case  SDL_TEXTINPUT:
+        memcpy(text, event.text.text, sizeof(event.text.text));
+        return TEXTINPUT;
+      case SDL_MOUSEMOTION:
+        *mouse_x = event.motion.x;
+        *mouse_y = event.motion.y;
+        return MOUSEMOVE;
+      case SDL_MOUSEBUTTONDOWN:
+        *mouse_x = event.button.x;
+        *mouse_y = event.button.y;
+        *mouse_button = event.button.button;
+        *clicks = event.button.clicks;
+        return MOUSEDOWN;
+      case SDL_MOUSEBUTTONUP:
+        *mouse_x = event.button.x;
+        *mouse_y = event.button.y;
+        *mouse_button = event.button.button;
+        *clicks = event.button.clicks;
+        return MOUSEDOWN;
+      case  SDL_MOUSEWHEEL:
+        *mouse_x = event.wheel.x;
+        *mouse_y = event.wheel.y;
+        return MOUSEWHEEL;
+    }
+  }
+  return NO_EVENT;
+}
+
