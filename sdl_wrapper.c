@@ -28,6 +28,54 @@ static SDL_AudioSpec g_obtained_audio_spec;
 
 // Starts SDL. Loads TTF. Creates a window/renderer. 
 // Returns a non-zero error code on failure.
+DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels);
+DLL_EXPORT void Quit();
+// Creates a texture with a modifiable pixel buffer.
+// Format of color is 4 u8's: R,G,B,A
+DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height);
+// Replaces the pixel buffer of a texture that hs been created with CreatePixelBufferTexture.
+DLL_EXPORT void ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels, int texture_height);
+// Loads a BMP from path.
+// Returns NULL on failure
+DLL_EXPORT SDL_Texture *LoadBMP(const char* path);
+// Loads a BMP from path, using pure black as a transparent pixel.
+// Returns NULL on failure
+DLL_EXPORT SDL_Texture *LoadBMPWithColorKey(const char* path, u8 r, u8 g, u8 b);
+DLL_EXPORT void FreeTexture(SDL_Texture* texture);
+DLL_EXPORT int TextureWidth(SDL_Texture *texture);
+DLL_EXPORT int TextureHeight(SDL_Texture *texture);
+// Returns NULL on failure
+DLL_EXPORT TTF_Font *OpenFont(const char *path, int point_size);
+DLL_EXPORT void CloseFont(TTF_Font* font);
+// Creates white text on a transparent background.
+DLL_EXPORT SDL_Texture* CreateTextTexture(TTF_Font *font, const char* text);
+// Clear the screen to the draw color
+DLL_EXPORT void Clear();
+// Set the current draw color.
+DLL_EXPORT void SetDrawColor(u8 r, u8 g, u8 b, u8 a);
+// Draw a rectangle outline with the current draw color.
+DLL_EXPORT void DrawRect(s32 x, s32 y, s32 w, s32 h);
+// Draw a filled rectangle with the current draw color.
+DLL_EXPORT void FillRect(s32 x, s32 y, s32 w, s32 h);
+// Draw texture to the screen. sx,sy,sw,sh outlines the source rectangle, while dx,dy,dw,dh outlines the destination rectangle.
+DLL_EXPORT void DrawTexture(SDL_Texture* texture, int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh);
+// Mod the texture's pixel colors with the provided color.
+DLL_EXPORT void TextureColorMod(SDL_Texture* texture, u8 r, u8 g, u8 b);
+// Flip the display buffer.
+DLL_EXPORT void Present();
+
+// Returns the number of bytes currently buffered.
+DLL_EXPORT u32 BufferedAudioBytes();
+// Fills the audio buffer with the provided bytes array.
+// Returns non-zero on error.
+DLL_EXPORT int BufferAudio(u8 *bytes, u32 num_bytes);
+// Pauses playback of the audio device.
+DLL_EXPORT void PauseAudio();
+// Resumes playback of the audio device.
+DLL_EXPORT void PlayAudio();
+// Inserts a time delay on the current thread before resuming.
+DLL_EXPORT void Delay(int milliseconds);
+
 DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels) {
 #define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
   CHECK(SDL_Init(SDL_INIT_EVERYTHING));
@@ -55,6 +103,24 @@ DLL_EXPORT void Quit() {
   SDL_CloseAudioDevice(g_audio_device_id);
   TTF_Quit();
   SDL_Quit();
+}
+
+// Creates a texture with a modifiable pixel buffer.
+// Format of color is 4 u8's: R,G,B,A
+DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height) {
+  return SDL_CreateTexture(g_renderer,
+      SDL_PIXELFORMAT_RGBA8888,
+      SDL_TEXTUREACCESS_STREAMING,
+      width, height);
+}
+
+// Replaces the pixel buffer of a texture that hs been created with CreatePixelBufferTexture.
+DLL_EXPORT void ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels, int texture_height) {
+  void *pixels;
+  int *pitch;
+  SDL_LockTexture(texture, NULL, &pixels, &pitch);
+  memcpy(pixels, rgba_pixels, *pitch * texture_height);
+  SDL_UnlockTexture(texture);
 }
 
 // Loads a BMP from path.

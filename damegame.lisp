@@ -14,10 +14,3 @@
 ;;  create text
 ;;  draw texture to screen
 ;;  draw rectangles
-
-
-;; Determine speed of
-;;  converting structure
-;;  calling function
-;;  filling lisp array with c data
-
