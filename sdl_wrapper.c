@@ -107,7 +107,7 @@ enum EventType {
 //   MOUSEDOWN/MOUSEUP: mouse_button, clicks
 //   MOUSEWHEEL: mouse_x,mouse_y (representing horizontal and vertical scroll amount)
 //   MOUSEMOVE: mouse_x,mouse_y (representing pixel position)
-DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char text[32]);
+DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char *text);
 // Returns the name of the scancode.
 DLL_EXPORT char* ScancodeName(SDL_Scancode scancode);
 // Returns the scancode with the given name.
@@ -253,7 +253,7 @@ DLL_EXPORT void Delay(int milliseconds) {
   SDL_Delay(milliseconds);
 }
 
-DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char text[32]) {
+DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char *text) {
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
     switch (event.type) {

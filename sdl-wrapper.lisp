@@ -6,7 +6,7 @@
   (clicks int :out)
   (mouse-x int :out)
   (mouse-y int :out)
-  (text (array char 32) :out))
+  (text (* char)))
 
 (defstruct event-quit
   "Event that occurs when the user tries to close the window (e.g. Alt-F4 or clicking X in the top right)")
@@ -46,17 +46,18 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
     (2 :middle)
     (3 :right)))
 
+(defparameter *text-buffer* (make-alien char 32))
 (defun next-event! ()
   "Retrieves the next event from the queue or NIL if there are no more events."
-  (multiple-value-bind (type scancode button clicks mouse-x mouse-y text)
-      (next-event%!)
+  (multiple-value-bind (type scancode button clicks mouse-x mouse-y)
+      (next-event%! *text-buffer*)
     (ecase type
       ;; no-event
       (0 nil)
       (1 (make-event-quit))
       (2 (make-event-keydown :scancode scancode))
       (3 (make-event-keyup :scancode scancode))
-      (4 (make-event-textinput :text (cast text c-string)))
+      (4 (make-event-textinput :text (cast *text-buffer* c-string)))
       (5 (make-event-mousedown :button (mouse-button button) :clicks clicks))
       (6 (make-event-mouseup :button (mouse-button button) :clicks clicks))
       (7 (make-event-mousewheel :horizontal-scroll mouse-x :vertical-scroll mouse-y))
@@ -206,8 +207,6 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
   (clear!)
   (present!)
   (loop for i below 5000
-	do (loop while (let ((event (next-event!)))
-			 (when event (print event))
-			 event))
+	do (loop while (next-event!))
 	   (delay! 1))
   (quit!))
