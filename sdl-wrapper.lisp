@@ -1,20 +1,5 @@
 (in-package #:sdl-wrapper)
 
-#||
-
-
-// Polls for the next input event and returns the type of the event.
-// If no events are left on the event queue, NO_EVENT is returned.
-// The following out parameters will be filled based on the type:
-//   NO_EVENT/QUIT: N/A
-//   KEYDOWN/KEYUP: scancode (note: repeated key presses are ignored)
-//   TEXTINPUT: text
-//   MOUSEDOWN/MOUSEUP: mouse_button, clicks
-//   MOUSEWHEEL: mouse_x,mouse_y (representing horizontal and vertical scroll amount)
-//   MOUSEMOVE: mouse_x,mouse_y (representing pixel position)
-DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, int *clicks, int *mouse_x, int *mouse_y, char text[32]);
-||#
-
 (define-alien-routine ("NextEvent" next-event%!) int
   (scancode int :out)
   (mouse-button int :out)
@@ -42,6 +27,12 @@ DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, i
 (defstruct event-mousemove
   x y)
 
+(defun mouse-button (sdl-mouse-button)
+  (case sdl-mouse-button
+    (1 :left)
+    (2 :middle)
+    (3 :right)))
+
 (defun next-event! ()
   (multiple-value-bind (type scancode button clicks mouse-x mouse-y text)
       (next-event%!)
@@ -52,8 +43,8 @@ DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, i
       (2 (make-event-keydown :scancode scancode))
       (3 (make-event-keyup :scancode scancode))
       (4 (make-event-textinput :text (cast text c-string)))
-      (5 (make-event-mousedown :button button :clicks clicks))
-      (6 (make-event-mouseup :button button :clicks clicks))
+      (5 (make-event-mousedown :button (mouse-button button) :clicks clicks))
+      (6 (make-event-mouseup :button (mouse-button button) :clicks clicks))
       (7 (make-event-mousewheel :horizontal-scroll mouse-x :vertical-scroll mouse-y))
       (8 (make-event-mousemove :x mouse-x :y mouse-y)))))
 
