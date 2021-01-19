@@ -124,12 +124,46 @@ Removes events from the queue."
 (defun w (r) (aref r 2))
 (defun h (r) (aref r 3))
 
-;; Just a hash table for now, but I think at some point there will be a layering
-;; scheme
-(defvar *drawings* (make-hash-table)
-  "A hash table of drawings that should be rendered every frame.")
+(defun alist (&rest plist)
+  (nlet rec ((plist plist)
+	     (result ()))
+    (if plist
+	(let ((key (first plist))
+	      (value (second plist))
+	      (rest (rest (rest plist))))
+	  (rec rest (acons key value result)))
+	result)))
+(defun aval (key alist)
+  (cdr (assoc key alist)))
+(defun aremove (alist &rest keys)
+  (remove-if (fn (member % keys))
+	     alist
+	     :key 'car))
+(defun aset (key value alist)
+  (acons key value (aremove alist key)))
+(defun akeys (alist)
+  (mapcar 'car alist))
+(defun amerge (old new)
+  (nconc (apply 'aremove old (akeys new))
+	 new))
+(defun amap (fn alist)
+  (mapcar (fn (funcall fn (car %) (cdr %)))
+	  alist))
 
-(defstruct drawing-full-texture
+
+(defvar *drawings* ()
+  "An association list of drawings.")
+
+(defstruct drawing
+  layer)
+
+(defun sort-drawings-by-layer! ()
+  (setq *drawings* (sort *drawings* #'< :key (fn (drawing-layer (cdr %))))))
+(defun remove-drawing! (drawing-id)
+  (setq *drawings* (aremove *drawings* drawing-id))
+  (sort-drawings-by-layer!))
+
+(defstruct (drawing-full-texture (:include drawing))
   texture-id
   pos)
 (defmethod draw! (drawing-id (drawing drawing-full-texture))
@@ -142,19 +176,35 @@ Removes events from the queue."
 	  (warn "Unable to find texture ~S when drawing ~S. Removing drawing from *DRAWINGS*"
 		texture-id
 		drawing)
-	  (remhash drawing-id *drawings*)))))
+	  (aremove *drawings* drawing-id)))))
+
+(defun color (r g b a) (vector r g b a))
+(defun r (color) (aref color 0))
+(defun g (color) (aref color 1))
+(defun b (color) (aref color 2))
+(defun a (color) (aref color 3))
+
+(defstruct (drawing-fill-rect (:include drawing))
+  color
+  rect)
+(defmethod draw! (drawing-id (drawing drawing-fill-rect))
+  (let* ((color (drawing-fill-rect-color drawing))
+	 (rect (drawing-fill-rect-rect drawing)))
+    (set-draw-color! (r color) (g color) (b color) (a color))
+    (fill-rect! (x rect) (y rect) (w rect) (h rect))))
 
 (defstruct event-add-drawing
   id
   drawing)
 (defmethod handle! ((event event-add-drawing))
-  (setf (gethash (event-add-drawing-id event) *drawings*)
-	(event-add-drawing-drawing event)))
+  (setq *drawings*
+	(aset (event-add-drawing-id event) (event-add-drawing-drawing event) *drawings*))
+  (sort-drawings-by-layer!))
 
 
 (defstruct event-remove-drawing id)
 (defmethod handle! ((event event-remove-drawing))
-  (remhash (event-remove-drawing-id event) *drawings*))
+  (remove-drawing! (event-remove-drawing-id event)))
 
 (defvar *quit?* nil
   "When true the main-loop! will terminate.")
@@ -175,7 +225,7 @@ updates based on timestep, and renders to the screen."
   ;; Render to the screen
   (set-draw-color! 0 255 0 255)
   (clear!)
-  (maphash (fn (draw! % %%)) *drawings*)
+  (amap 'draw! *drawings*)
   (present!)
   
   (update-swank!))
@@ -188,7 +238,8 @@ updates based on timestep, and renders to the screen."
   (> (frame-milliseconds-elapsed last-update-milliseconds current-milliseconds)
      (milliseconds/frame)))
 
-(check (frame-time-elapsed? 60 78))
+(defun test-frame-time-elapsed? ()
+  (check (frame-time-elapsed? 60 78)))
 
 (defun frame-milliseconds-elapsed (frame-start-milliseconds current-milliseconds)
   "Returns milliseconds elapsed since the start of the frame."
@@ -204,8 +255,10 @@ updates based on timestep, and renders to the screen."
 	(- (milliseconds/frame)
 	   (frame-milliseconds-elapsed frame-start-milliseconds current-milliseconds)))))
 
-(checkeql (frame-time-remaining 32 40) 8)
-(checkeql (frame-time-remaining 32 70) 0)
+(defun test-frame-time-remaining ()
+  (checkeql (frame-milliseconds-remaining 32 40) 8)
+  (checkeql (frame-milliseconds-remaining 32 70) 0))
+
 (defun main-loop! ()
   "Loops *FPS* times per second, calling update! until *quit?* is true."
   (let ((last-update-milliseconds (elapsed-milliseconds)))
@@ -227,7 +280,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (setq *quit?* nil)
 	 (clrhash *fonts*)
 	 (clrhash *textures*)
-	 (clrhash *drawings*)
+	 (setq *drawings* ())
 	 (setq *events* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (main-loop!))
@@ -244,6 +297,18 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   (make-event-create-text-texture :id :text :font-id :font :text "Hello, cruel world")
   (make-event-add-drawing
    :id :drawing
-   :drawing (make-drawing-full-texture :texture-id :text :pos (v2 40 40)))
+   :drawing (make-drawing-full-texture :layer 2 :texture-id :text :pos (v2 40 40)))))
 
-  ))
+#+nil
+(event!
+ (make-event-add-drawing
+  :id :background
+  :drawing (make-drawing-fill-rect :layer 1 :color (color 0 0 0 0)
+				   :rect (let ((texture (gethash :text *textures*)))
+					   (rect 40 40
+						 (texture-width texture)
+						 (texture-height texture))))))
+
+#+nil
+(event!
+ (make-event-remove-drawing :id :background))
