@@ -12,7 +12,7 @@
    errors don't kill the app."
   `(restart-case
        (progn ,@body)
-     (continue () :report "Swank.Live: Continue")))
+     (continue () :report "Continue")))
 
 ;; From CBaggers' Swank.Live
 (defun update-swank! ()
@@ -126,7 +126,8 @@ Removes events from the queue."
 
 ;; Just a hash table for now, but I think at some point there will be a layering
 ;; scheme
-(defvar *drawings* (make-hash-table))
+(defvar *drawings* (make-hash-table)
+  "A hash table of drawings that should be rendered every frame.")
 
 (defstruct drawing-full-texture
   texture-id
@@ -155,33 +156,29 @@ Removes events from the queue."
 (defmethod handle! ((event event-remove-drawing))
   (remhash (event-remove-drawing-id event) *drawings*))
 
+(defvar *quit?* nil
+  "When true the main-loop! will terminate.")
 
 (defun update! ()
   "Handles events, handles input events,
-updates based on timestep, and renders to the screen.
-Returns T if a quit event was signaled."
-  (let ((quit? nil))
-    ;; Handle global events.
-    (mapcar 'handle! (reverse *events*))
-    (setq *events* ())
+updates based on timestep, and renders to the screen."
+  (mapcar 'handle! (reverse *events*))
+  (setq *events* ())
 
-    ;; Handle input events.
-    (for-each-input-event!
-     (fn (typecase %
-	   (event-quit
-	    (print 'quit-event)
-	    (setq quit? t)))))
+  ;; Handle input events.
+  (for-each-input-event!
+   (fn (typecase %
+	 (event-quit (setq *quit?* t)))))
 
-    ;; Update based on time-step
+  ;; Update based on time-step
 
-    ;; Render to the screen
-    (set-draw-color! 0 255 0 255)
-    (clear!)
-    (maphash (fn (draw! % %%)) *drawings*)
-    (present!)
-    
-    (update-swank!)
-    quit?))
+  ;; Render to the screen
+  (set-draw-color! 0 255 0 255)
+  (clear!)
+  (maphash (fn (draw! % %%)) *drawings*)
+  (present!)
+  
+  (update-swank!))
 
 (defun milliseconds/frame ()
   "Duration of a frame in milliseconds."
@@ -210,26 +207,24 @@ Returns T if a quit event was signaled."
 (checkeql (frame-time-remaining 32 40) 8)
 (checkeql (frame-time-remaining 32 70) 0)
 (defun main-loop! ()
-  "Loops *FPS* times per second, calling update! until a quit event is signaled."
-  (let ((quit? nil)
-	(last-update-milliseconds (elapsed-milliseconds)))
+  "Loops *FPS* times per second, calling update! until *quit?* is true."
+  (let ((last-update-milliseconds (elapsed-milliseconds)))
     (loop
-      until quit?
-      for ticks from 0
+      until *quit?*
       do
 	 (when (frame-time-elapsed? last-update-milliseconds (elapsed-milliseconds))
 	   (setq last-update-milliseconds (elapsed-milliseconds))
-	   (setq quit? (continuable (update!)))
+	   (continuable (update!))
 	   (delay! (frame-milliseconds-remaining last-update-milliseconds
 						 (elapsed-milliseconds)))))))
 
 (defun main! ()
   "Entry point into the application. Recompiles the SDL-Wrapper, creates the window, 
-and starts the update loop until a quit event is signaled, then closes SDL and cleans up the
-application."
+and starts the update loop, then afterwards closes SDL and cleans up the application."
   (recompile-sdl-wrapper-dll!)
   (unwind-protect 
        (progn
+	 (setq *quit?* nil)
 	 (clrhash *fonts*)
 	 (clrhash *textures*)
 	 (clrhash *drawings*)
@@ -242,9 +237,13 @@ application."
 
 
 #+nil
-(mapcar 'event! (list
-		 (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16)
-		 (make-event-create-text-texture :id :text :font-id :font :text "Hello, cruel world")
-		 (make-event-add-drawing :id :drawing :drawing (make-drawing-full-texture :texture-id :text :pos (v2 40 40)))
+(mapcar
+ 'event!
+ (list
+  (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16)
+  (make-event-create-text-texture :id :text :font-id :font :text "Hello, cruel world")
+  (make-event-add-drawing
+   :id :drawing
+   :drawing (make-drawing-full-texture :texture-id :text :pos (v2 40 40)))
 
-		 ))
+  ))
