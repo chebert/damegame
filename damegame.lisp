@@ -111,10 +111,50 @@ Removes events from the queue."
        (setf (gethash id *textures*)
 	     (create-text-texture! font (event-create-text-texture-text event)))))))
 
+
 (defun draw-full-texture! (texture dx dy)
   (let* ((w (texture-width texture))
 	 (h (texture-height texture)))
     (draw-texture! texture 0 0 w h dx dy w h)))
+
+(defun v2 (x y) (vector x y))
+(defun rect (x y w h) (vector x y w h))
+(defun x (v) (aref v 0))
+(defun y (v) (aref v 1))
+(defun w (r) (aref r 2))
+(defun h (r) (aref r 3))
+
+;; Just a hash table for now, but I think at some point there will be a layering
+;; scheme
+(defvar *drawings* (make-hash-table))
+
+(defstruct drawing-full-texture
+  texture-id
+  pos)
+(defmethod draw! (drawing-id (drawing drawing-full-texture))
+  (let* ((pos (drawing-full-texture-pos drawing))
+	 (texture-id (drawing-full-texture-texture-id drawing))
+	 (texture (gethash texture-id *textures*)))
+    (if texture
+	(draw-full-texture! texture (x pos) (y pos))
+	(progn
+	  (warn "Unable to find texture ~S when drawing ~S. Removing drawing from *DRAWINGS*"
+		texture-id
+		drawing)
+	  (remhash drawing-id *drawings*)))))
+
+(defstruct event-add-drawing
+  id
+  drawing)
+(defmethod handle! ((event event-add-drawing))
+  (setf (gethash (event-add-drawing-id event) *drawings*)
+	(event-add-drawing-drawing event)))
+
+
+(defstruct event-remove-drawing id)
+(defmethod handle! ((event event-remove-drawing))
+  (remhash (event-remove-drawing-id event) *drawings*))
+
 
 (defun update! ()
   "Handles events, handles input events,
@@ -122,7 +162,7 @@ updates based on timestep, and renders to the screen.
 Returns T if a quit event was signaled."
   (let ((quit? nil))
     ;; Handle global events.
-    (mapcar 'handle! *events*)
+    (mapcar 'handle! (reverse *events*))
     (setq *events* ())
 
     ;; Handle input events.
@@ -134,11 +174,10 @@ Returns T if a quit event was signaled."
 
     ;; Update based on time-step
 
-
     ;; Render to the screen
     (set-draw-color! 0 255 0 255)
     (clear!)
-    (draw-full-texture! (gethash :text *textures*) 64 72)
+    (maphash (fn (draw! % %%)) *drawings*)
     (present!)
     
     (update-swank!)
@@ -170,7 +209,6 @@ Returns T if a quit event was signaled."
 
 (checkeql (frame-time-remaining 32 40) 8)
 (checkeql (frame-time-remaining 32 70) 0)
-
 (defun main-loop! ()
   "Loops *FPS* times per second, calling update! until a quit event is signaled."
   (let ((quit? nil)
@@ -194,8 +232,19 @@ application."
        (progn
 	 (clrhash *fonts*)
 	 (clrhash *textures*)
+	 (clrhash *drawings*)
+	 (setq *events* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
     (quit!)))
+
+
+#+nil
+(mapcar 'event! (list
+		 (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16)
+		 (make-event-create-text-texture :id :text :font-id :font :text "Hello, cruel world")
+		 (make-event-add-drawing :id :drawing :drawing (make-drawing-full-texture :texture-id :text :pos (v2 40 40)))
+
+		 ))
