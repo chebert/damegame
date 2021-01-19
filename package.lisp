@@ -71,7 +71,10 @@
    #:set-draw-color!
    #:draw-rect!
    #:fill-rect!
-   #:recompile-sdl-wrapper-dll!))
+   #:recompile-sdl-wrapper-dll!
+   #:error-string
+   #:scancode-name
+   #:scancode-from-name))
 
 (defpackage #:damegame
   (:use #:cl #:sdl-wrapper))

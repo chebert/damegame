@@ -200,7 +200,6 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
       (error "Could not make dll~%~S" error-string)))
   (load-shared-object (merge-pathnames *default-pathname-defaults* "sdl_wrapper.dll")))
 
-
 (defparameter *pixel-array*
   (let* ((w 200)
 	 (h 300)
