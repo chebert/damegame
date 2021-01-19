@@ -38,7 +38,7 @@ DLL_EXPORT char *ErrorString();
 // Format of color is 4 u8's: R,G,B,A
 DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height);
 // Replaces the pixel buffer of a texture that hs been created with CreatePixelBufferTexture.
-DLL_EXPORT void ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels, int texture_height);
+DLL_EXPORT int ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels);
 // Loads a BMP from path.
 // Returns NULL on failure
 DLL_EXPORT SDL_Texture *LoadBMP(const char* path);
@@ -148,17 +148,23 @@ DLL_EXPORT char* ErrorString() {
 
 DLL_EXPORT SDL_Texture *CreatePixelBufferTexture(int width, int height) {
   return SDL_CreateTexture(g_renderer,
-      SDL_PIXELFORMAT_RGBA8888,
+      SDL_PIXELFORMAT_ABGR8888,
       SDL_TEXTUREACCESS_STREAMING,
       width, height);
 }
 
-DLL_EXPORT void ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels, int texture_height) {
+DLL_EXPORT int ReplacePixelBuffer(SDL_Texture *texture, u8* rgba_pixels) {
   void *pixels;
   int *pitch;
-  SDL_LockTexture(texture, NULL, &pixels, &pitch);
-  memcpy(pixels, rgba_pixels, *pitch * texture_height);
+  int width, height;
+  if (SDL_LockTexture(texture, NULL, &pixels, &pitch))
+    return 0;
+
+  SDL_QueryTexture(texture, 0, 0, &width, &height);
+
+  memcpy(pixels, rgba_pixels, width * height * 4);
   SDL_UnlockTexture(texture);
+  return 1;
 }
 
 DLL_EXPORT SDL_Texture *LoadBMP(const char* path) {

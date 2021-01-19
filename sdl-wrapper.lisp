@@ -84,12 +84,16 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
   "Creates a texture that can have its pixel buffer replaced using replace-pixel-buffer!"
   (width int)
   (height int))
-(define-alien-routine ("ReplacePixelBuffer" replace-pixel-buffer!) void
+(define-alien-routine ("ReplacePixelBuffer" replace-pixel-buffer%!) boolean
   "Replaces the pixel buffer of the texture created with create-pixel-buffer-texture!.
 Format of each pixel is 4 8-bit unsigned integers R,G,B,A, organized from left-to-right top-to-bottom."
   (texture system-area-pointer)
-  (rgba-pixels (* (unsigned 8)))
-  (texture-height int))
+  (rgba-pixels (* (unsigned 8))))
+
+(defun replace-pixel-buffer! (texture rgba-pixels)
+  (sb-sys:with-pinned-objects (rgba-pixels)
+    (replace-pixel-buffer%! texture (sb-sys:vector-sap rgba-pixels))))
+
 (define-alien-routine ("LoadBMP" load-bmp!) system-area-pointer
   "Load the BMP."
   (path c-string))
@@ -184,7 +188,6 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
   "Returns the scancode. Can be called at any time (even before start!)."
   (name c-string))
 
-
 (defun recompile-sdl-wrapper-dll! ()
   "Unloads sdl_wrapper.dll, recompiles it, and reloads it."
   (unload-shared-object (merge-pathnames *default-pathname-defaults* "sdl_wrapper.dll"))
@@ -198,15 +201,51 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
   (load-shared-object (merge-pathnames *default-pathname-defaults* "sdl_wrapper.dll")))
 
 
-(defparameter *audio-frequency* 48000)
-(defparameter *audio-channels* 2)
+(defparameter *pixel-array*
+  (let* ((w 200)
+	 (h 300)
+	 (pixel-array (make-array (* 4 w h) :element-type '(unsigned-byte 8))))
+    (loop for x below w do
+      (loop for y below h do
+	(let ((idx (* 4 (+ x (* y w)))))
+	  (setf (aref pixel-array (+ 0 idx)) (truncate (* (/ x w) 255)))
+	  (setf (aref pixel-array (+ 1 idx)) 0)
+	  (setf (aref pixel-array (+ 2 idx)) (truncate (* (/ y h) 255)))
+	  (setf (aref pixel-array (+ 3 idx)) 0))))
+    pixel-array))
 
 (defun sdl-test! ()
-  (start! 800 600 *audio-frequency* *audio-channels*)
+  (let ((width 800)
+	(height 600)
+	(audio-frequency 48000)
+	(audio-channels 2))
+    (start! width height audio-frequency audio-channels))
   (set-draw-color! 255 0 255 255)
   (clear!)
+  (let* ((texture (create-pixel-buffer-texture! 200 300)))
+    (replace-pixel-buffer! texture *pixel-array*)
+    (draw-texture! texture
+		   0 0 (texture-width texture) (texture-height texture)
+		   32 32 (texture-width texture) (texture-height texture))
+    (free-texture! texture))
+  (let* ((font (open-font! "DroidSansMono.ttf" 16))
+	 (texture (create-text-texture! font "I want to live.")))
+    (texture-color-mod! texture 0 255 0)
+    (draw-texture! texture
+		   0 0 (texture-width texture) (texture-height texture)
+		   300 32 (texture-width texture) (texture-height texture))
+    (free-texture! texture)
+    (close-font! font))
+
+  (set-draw-color! 0 255 0 255)
+  (draw-rect! 400 100 40 80)
+  (fill-rect! 400 200 40 80)
   (present!)
-  (loop for i below 5000
-	do (loop while (next-event!))
-	   (delay! 1))
+  (let ((quit? nil))
+    (loop until quit?
+	  do (loop while (let ((event (next-event!)))
+			   (when (event-quit-p event)
+			     (setq quit? t))
+			   event))
+	     (delay! 1)))
   (quit!))
