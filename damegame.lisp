@@ -61,18 +61,72 @@
      (declare (ignorable % %% %%%))
      ,@body))
 
-(defun for-each-event! (fn)
+(defun for-each-input-event! (fn)
   "Iterate over each event in the sdl-event queue, applying fn to each event.
 Removes events from the queue."
   (loop while (let ((event (next-event!)))
 		(funcall fn event)
 		event)))
 
+(defvar *events* ())
+(defun event! (event)
+  (push event *events*))
+
+(defvar *fonts* (make-hash-table))
+(defvar *textures* (make-hash-table))
+
+(defstruct event-open-font
+  id
+  path
+  size)
+(defmethod handle! ((event event-open-font))
+  (let* ((id  (event-open-font-id event))
+	 (existing-font (gethash id *fonts*)))
+    ;; If another font with the same id is already open, close it first.
+    (when existing-font
+      (close-font! existing-font))
+    ;; Open the font and add it to the *fonts* hash-table
+    (setf (gethash id *fonts*)
+	  (open-font! (event-open-font-path event)
+		      (event-open-font-size event)))))
+
+(defstruct event-create-text-texture
+  id
+  font-id
+  text)
+(defmethod handle! ((event event-create-text-texture))
+  (let* ((id (event-create-text-texture-id event))
+	 (font-id (event-create-text-texture-font-id event))
+	 (font (gethash font-id *fonts*))
+	 (existing-texture (gethash id *textures*)))
+    (cond
+      ((null font)
+       ;; If the font doesn't exist, warn and don't do anyting else
+       (warn "Unable to find font ~S when creating text-texture ~S" font-id event))
+      (t
+       ;; If another texture with the same id already exists, free it
+       (when existing-texture
+	 (free-texture! existing-texture))
+       ;; Create the texture and add it to the textures hash-table
+       (setf (gethash id *textures*)
+	     (create-text-texture! font (event-create-text-texture-text event)))))))
+
+(defun draw-full-texture! (texture dx dy)
+  (let* ((w (texture-width texture))
+	 (h (texture-height texture)))
+    (draw-texture! texture 0 0 w h dx dy w h)))
+
 (defun update! ()
-  "Handles events, updates based on timestep, and renders to the screen.
+  "Handles events, handles input events,
+updates based on timestep, and renders to the screen.
 Returns T if a quit event was signaled."
   (let ((quit? nil))
-    (for-each-event!
+    ;; Handle global events.
+    (mapcar 'handle! *events*)
+    (setq *events* ())
+
+    ;; Handle input events.
+    (for-each-input-event!
      (fn (typecase %
 	   (event-quit
 	    (print 'quit-event)
@@ -84,6 +138,7 @@ Returns T if a quit event was signaled."
     ;; Render to the screen
     (set-draw-color! 0 255 0 255)
     (clear!)
+    (draw-full-texture! (gethash :text *textures*) 64 72)
     (present!)
     
     (update-swank!)
@@ -137,6 +192,10 @@ application."
   (recompile-sdl-wrapper-dll!)
   (unwind-protect 
        (progn
+	 (clrhash *fonts*)
+	 (clrhash *textures*)
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (main-loop!))
+    (maphash (fn (close-font! %%)) *fonts*)
+    (maphash (fn (free-texture! %%)) *textures*)
     (quit!)))
