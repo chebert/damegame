@@ -187,6 +187,9 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
 (define-alien-routine ("ScancodeFromName" scancode-from-name) int
   "Returns the scancode. Can be called at any time (even before start!)."
   (name c-string))
+(define-alien-routine ("ElapsedMilliseconds" elapsed-milliseconds) (unsigned 32)
+  "Returns the time elapsed since start was called in milliseconds.")
+
 
 (defun recompile-sdl-wrapper-dll! ()
   "Unloads sdl_wrapper.dll, recompiles it, and reloads it."

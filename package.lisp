@@ -74,7 +74,8 @@
    #:recompile-sdl-wrapper-dll!
    #:error-string
    #:scancode-name
-   #:scancode-from-name))
+   #:scancode-from-name
+   #:elapsed-milliseconds))
 
 (defpackage #:damegame
   (:use #:cl #:sdl-wrapper))

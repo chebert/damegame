@@ -112,6 +112,7 @@ DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, i
 DLL_EXPORT char* ScancodeName(SDL_Scancode scancode);
 // Returns the scancode with the given name.
 DLL_EXPORT SDL_Scancode ScancodeFromName(char *name);
+DLL_EXPORT u32 ElapsedMilliseconds();
 
 DLL_EXPORT int Start(int window_width, int window_height, int audio_frequency, u8 audio_channels) {
 #define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
@@ -307,5 +308,8 @@ DLL_EXPORT char* ScancodeName(SDL_Scancode scancode) {
 }
 DLL_EXPORT SDL_Scancode GetScancodeFromName(char *name) {
   return SDL_GetScancodeFromName(name);
+}
+DLL_EXPORT u32 ElapsedMilliseconds() {
+  return SDL_GetTicks();
 }
 
