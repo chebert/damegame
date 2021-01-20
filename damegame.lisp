@@ -82,17 +82,18 @@ Removes events from the queue."
 (defstruct event-font-opened
   font-id)
 
-(defmethod handle! ((event event-open-font))
-  (let* ((id  (event-open-font-id event))
-	 (existing-font (gethash id *fonts*)))
-    ;; If another font with the same id is already open, close it first.
-    (when existing-font
-      (close-font! existing-font))
-    ;; Open the font and add it to the *fonts* hash-table
-    (setf (gethash id *fonts*)
-	  (open-font! (event-open-font-path event)
-		      (event-open-font-size event)))
-    (notify-handlers! (make-event-font-opened :font-id id))))
+(defhandler handle-open-font! (event)
+  (when (event-open-font-p event)
+    (let* ((id  (event-open-font-id event))
+	   (existing-font (gethash id *fonts*)))
+      ;; If another font with the same id is already open, close it first.
+      (when existing-font
+	(close-font! existing-font))
+      ;; Open the font and add it to the *fonts* hash-table
+      (setf (gethash id *fonts*)
+	    (open-font! (event-open-font-path event)
+			(event-open-font-size event)))
+      (notify-handlers! (make-event-font-opened :font-id id)))))
 
 (defstruct event-texture-created
   texture-id)
@@ -100,24 +101,24 @@ Removes events from the queue."
   id
   font-id
   text)
-(defmethod handle! ((event event-create-text-texture))
-  (let* ((id (event-create-text-texture-id event))
-	 (font-id (event-create-text-texture-font-id event))
-	 (font (gethash font-id *fonts*))
-	 (existing-texture (gethash id *textures*)))
-    (cond
-      ((null font)
-       ;; If the font doesn't exist, warn and don't do anyting else
-       (warn "Unable to find font ~S when creating text-texture ~S" font-id event))
-      (t
-       ;; If another texture with the same id already exists, free it
-       (when existing-texture
-	 (free-texture! existing-texture))
-       ;; Create the texture and add it to the textures hash-table
-       (setf (gethash id *textures*)
-	     (create-text-texture! font (event-create-text-texture-text event)))
-       (notify-handlers! (make-event-texture-created :texture-id id))))))
-
+(defhandler handle-create-text-texture! (event)
+  (when (event-create-text-texture-p event)
+    (let* ((id (event-create-text-texture-id event))
+	   (font-id (event-create-text-texture-font-id event))
+	   (font (gethash font-id *fonts*))
+	   (existing-texture (gethash id *textures*)))
+      (cond
+	((null font)
+	 ;; If the font doesn't exist, warn and don't do anyting else
+	 (warn "Unable to find font ~S when creating text-texture ~S" font-id event))
+	(t
+	 ;; If another texture with the same id already exists, free it
+	 (when existing-texture
+	   (free-texture! existing-texture))
+	 ;; Create the texture and add it to the textures hash-table
+	 (setf (gethash id *textures*)
+	       (create-text-texture! font (event-create-text-texture-text event)))
+	 (notify-handlers! (make-event-texture-created :texture-id id)))))))
 
 (defun draw-full-texture! (texture dx dy)
   (let* ((w (texture-width texture))
@@ -211,13 +212,16 @@ Removes events from the queue."
 (defstruct event-add-drawing
   id
   drawing)
-(defmethod handle! ((event event-add-drawing))
-  (add-drawing! (event-add-drawing-id event) (event-add-drawing-drawing event)))
+
+(defhandler handle-add-drawing! (event)
+  (when (event-add-drawing-p event)
+    (add-drawing! (event-add-drawing-id event) (event-add-drawing-drawing event))))
 
 
 (defstruct event-remove-drawing id)
-(defmethod handle! ((event event-remove-drawing))
-  (remove-drawing! (event-remove-drawing-id event)))
+(defhandler handle-remove-drawing! (event)
+  (when (event-remove-drawing-p event)
+    (remove-drawing! (event-remove-drawing-id event))))
 
 (defvar *quit?* nil
   "When true the main-loop! will terminate.")
@@ -237,14 +241,15 @@ Removes events from the queue."
 
 (defstruct event-add-control
   id control)
-(defmethod handle! ((event event-add-control))
-  (let ((control (event-add-control-control event)))
-    (setq *controls* (aset (event-add-control-id event)
-			   control
-			   *controls*))
-    (add-drawing! (control-drawing-id control)
-		  (make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-					  :rect (control-rect control)))))
+(defhandler handle-add-control! (event)
+  (when (event-add-control-p event)
+    (let ((control (event-add-control-control event)))
+      (setq *controls* (aset (event-add-control-id event)
+			     control
+			     *controls*))
+      (add-drawing! (control-drawing-id control)
+		    (make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+					    :rect (control-rect control))))))
 
 (defun point-in-rect? (v2 r)
   (and (<= (x r) (x v2) (1- (+ (x r) (w r))))
@@ -348,7 +353,7 @@ Removes events from the queue."
 updates based on timestep, and renders to the screen."
   (let ((events (reverse *events*)))
     (setq *events* ())
-    (mapcar 'handle! events))
+    (mapcar 'notify-handlers! events))
 
   ;; Handle input events.
   (for-each-input-event!
@@ -480,11 +485,11 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 
   (defhandler font-opened (event)
     (when (event-font-opened? event font-id)
-      (handle! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
-      (handle! (make-event-add-drawing :id text-drawing-id
-				       :drawing (make-drawing-full-texture
-						 :layer (1+ bottom-layer)
-						 :texture-id texture-id :pos pos)))))
+      (notify-handlers! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
+      (notify-handlers! (make-event-add-drawing :id text-drawing-id
+						:drawing (make-drawing-full-texture
+							  :layer (1+ bottom-layer)
+							  :texture-id texture-id :pos pos)))))
   
   (defhandler quit-button-clicked (event)
     (when (event-control-clicked? event control-id)
@@ -494,7 +499,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (when (event-texture-created? event texture-id)
       (let* ((texture (gethash texture-id *textures*))
 	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
-	(handle!
+	(notify-handlers!
 	 (make-event-add-control :id control-id :control
 				 (make-control :rect rect :hovered? nil :pressed? nil
 					       :drawing-id control-drawing-id)))))))
