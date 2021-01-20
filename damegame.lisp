@@ -79,6 +79,9 @@ Removes events from the queue."
   id
   path
   size)
+(defstruct event-font-opened
+  font-id)
+
 (defmethod handle! ((event event-open-font))
   (let* ((id  (event-open-font-id event))
 	 (existing-font (gethash id *fonts*)))
@@ -88,8 +91,11 @@ Removes events from the queue."
     ;; Open the font and add it to the *fonts* hash-table
     (setf (gethash id *fonts*)
 	  (open-font! (event-open-font-path event)
-		      (event-open-font-size event)))))
+		      (event-open-font-size event)))
+    (notify-handlers! (make-event-font-opened :font-id id))))
 
+(defstruct event-texture-created
+  texture-id)
 (defstruct event-create-text-texture
   id
   font-id
@@ -109,7 +115,8 @@ Removes events from the queue."
 	 (free-texture! existing-texture))
        ;; Create the texture and add it to the textures hash-table
        (setf (gethash id *textures*)
-	     (create-text-texture! font (event-create-text-texture-text event)))))))
+	     (create-text-texture! font (event-create-text-texture-text event)))
+       (notify-handlers! (make-event-texture-created :texture-id id))))))
 
 
 (defun draw-full-texture! (texture dx dy)
@@ -215,11 +222,13 @@ Removes events from the queue."
 (defvar *quit?* nil
   "When true the main-loop! will terminate.")
 
-(defvar *mouse-x* 0)
-(defvar *mouse-y* 0)
+(defvar *mouse-x* 0 "Mouse pixel x position measured from the left of the window.")
+(defvar *mouse-y* 0 "Mouse pixel y position measured from the top of the window.")
 
-(defvar *controls* ())
+(defvar *controls* ()
+  "An association list of control-id to control of all of the currently active ccontrols.")
 (defstruct control
+  "A control is a rectangle which recieves (currently mouse-only) inputs."
   rect
   drawing-id
   hovered?
@@ -268,10 +277,67 @@ Removes events from the queue."
 		  (make-drawing-fill-rect :layer 1 :color (color 255 0 0 255)
 					  :rect (control-rect control)))))
 
-(defun control-handle-mouse-up! (control)
-  (let ((click-fn (control-click-fn control)))
-    (when (and click-fn (control-pressed? control) (control-hovered? control))
-      (funcall click-fn control)))
+;; How do I organize event-handlers
+
+
+;; Option 1: I could have a list of...
+;; *event-handlers*
+;; '((event-control-clicked . ((control-id . (lambda () (setq *quit?* t)))
+
+;; Option 2: matcher-fns
+;; *event-handlers*
+;;   given an event; call a match function.
+#+nil
+(list
+ (cons
+  (lambda (event) (and (event-control-clicked-p event)))
+  (lambda (event) (setq *quit?* t)))
+ (cons
+  (lambda (event) (and (event-control-clicked-p event)))
+  (lambda (event) (setq *quit?* nil))))
+
+;; Advantages: most flexible and easy to implement.
+;; Redundant matchers might be called, can't sort or organize.
+;;   (unoptimized)
+
+;; Option 3: matcher structs
+;; like option 2 but structs describing the match are provided
+;; to aid in organization, sorting and optimizing
+
+
+;; option 4: just a table of event handlers
+;; (alist id1 fn1 id2 fn2)
+;; simplest to implement, just as flexible as Option 2.
+
+(defvar *event-handlers* (make-hash-table))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defvar *compiled-event-handlers* (make-hash-table)))
+
+(defstruct event-control-clicked
+  control-id)
+
+(defun clear-handlers! ()
+  (clrhash *event-handlers*))
+(defun notify-handlers! (event)
+  (maphash (fn (funcall %% event)) *compiled-event-handlers*)
+  (maphash (fn (funcall %% event)) *event-handlers*))
+(defun register-handler! (id fn)
+  (setf (gethash id *event-handlers*) fn))
+(defun remove-handler! (id)
+  (remhash id *event-handlers*))
+(defmacro defhandler (name (event) &body body)
+  `(setf (gethash ',name *compiled-event-handlers*)
+	 (lambda (,event)
+	   (declare (ignorable ,event))
+	   ,@body)))
+(defmacro undefhandler (name &rest rest)
+  (declare (ignore rest))
+  `(remhash ',name *compiled-event-handlers*))
+
+(defun control-handle-mouse-up! (control-id control)
+  (when (and (control-pressed? control) (control-hovered? control))
+    (notify-handlers! (make-event-control-clicked
+		       :control-id control-id)))
   (setf (control-pressed? control) nil)
   (add-drawing! (control-drawing-id control)
 		(make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
@@ -297,7 +363,7 @@ updates based on timestep, and renders to the screen."
 	    (mapcar (fn (control-handle-mouse-down! (cdr %))) *controls*)))
 	 (event-mouseup
 	  (when (eql :left (event-mouseup-button %))
-	    (mapcar (fn (control-handle-mouse-up! (cdr %))) *controls*))))))
+	    (mapcar (fn (control-handle-mouse-up! (car %) (cdr %))) *controls*))))))
 
   ;; Update based on time-step
 
@@ -359,8 +425,10 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (setq *quit?* nil)
 	 (clrhash *fonts*)
 	 (clrhash *textures*)
+	 (clrhash *event-handlers*)
 	 (setq *drawings* ())
 	 (setq *events* ())
+	 (setq *controls* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
@@ -368,31 +436,68 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (quit!)))
 
 
+;; Last time (1/19):
+;;  I made quit button by dumping global variables everywhere.
+;;  I watched for mouse hover/unhover press/release events and set it to up to quit when it was clicked.
+;;  I then abstracted out a table of "control"s, which can all be clicked, and replaced the global quit button
+;;    with references to these controls.
+;;  I quickly added a "click-fn" to the control, and moved the logic to quit the application into this.
+
+
+;; This time (1/20):
+;;  I want to replace the click-fn with a more robust notification system.
+;;    I want several observers to watch a single event. CHECK
+;;    I want to be able to register/and unregister event-watchers. CHECK
+;;    I want to be able to clear handlers that get added at runtime and still keep handlers that have been added at compile time.
+;;  I want to chain events together.
+;;    I want to be able to set up the example chain:
+;;      open font -> create quit text texture -> create the quit text drawing && create the quit text control
+
+
 ;; Some events for testing some drawings
+
+(defun event-font-opened? (event font-id)
+  (and (event-font-opened-p event)
+       (eql font-id (event-font-opened-font-id event))))
+(defun event-control-clicked? (event control-id)
+  (and (event-control-clicked-p event)
+       (eql control-id (event-control-clicked-control-id event))))
+(defun event-texture-created? (event texture-id)
+  (and (event-texture-created-p event)
+       (eql texture-id (event-texture-created-texture-id event))))
 
 #+nil
 (event! (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16))
 
-#+nil
-(mapcar
- 'event!
- (list
-  (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16)
-  (make-event-create-text-texture :id :quit-text :font-id :font :text "Quit")
-  (make-event-add-drawing :id :quit-drawing
-			  :drawing (make-drawing-full-texture :layer 2 :texture-id :quit-text :pos (v2 120 200)))))
+(let ((font-id :font)
+      (texture-id :quit-text)
+      (text-drawing-id :quit-text-drawing)
+      (control-id :quit-control)
+      (control-drawing-id :quit-control-drawing)
+      (text "Quit")
+      (bottom-layer 1)
+      (pos (v2 120 200)))
 
-#+nil
-(let* ((texture (gethash :quit-text *textures*))
-       (rect (rect 120 200 (texture-width texture) (texture-height texture))))
-  (event!
-   (make-event-add-control :id :quit-control :control
-			   (make-control :rect rect :hovered? nil :pressed? nil
-					 :drawing-id :quit-control-drawing
-					 :click-fn (fn (setq *quit?* t))))))
+  (defhandler font-opened (event)
+    (when (event-font-opened? event font-id)
+      (handle! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
+      (handle! (make-event-add-drawing :id text-drawing-id
+				       :drawing (make-drawing-full-texture
+						 :layer (1+ bottom-layer)
+						 :texture-id texture-id :pos pos)))))
+  
+  (defhandler quit-button-clicked (event)
+    (when (event-control-clicked? event control-id)
+      (setq *quit?* t)))
 
-
-
+  (defhandler quit-texture-created (event)
+    (when (event-texture-created? event texture-id)
+      (let* ((texture (gethash texture-id *textures*))
+	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
+	(handle!
+	 (make-event-add-control :id control-id :control
+				 (make-control :rect rect :hovered? nil :pressed? nil
+					       :drawing-id control-drawing-id)))))))
 
 
 #+nil
