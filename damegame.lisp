@@ -282,38 +282,6 @@ Removes events from the queue."
 		  (make-drawing-fill-rect :layer 1 :color (color 255 0 0 255)
 					  :rect (control-rect control)))))
 
-;; How do I organize event-handlers
-
-
-;; Option 1: I could have a list of...
-;; *event-handlers*
-;; '((event-control-clicked . ((control-id . (lambda () (setq *quit?* t)))
-
-;; Option 2: matcher-fns
-;; *event-handlers*
-;;   given an event; call a match function.
-#+nil
-(list
- (cons
-  (lambda (event) (and (event-control-clicked-p event)))
-  (lambda (event) (setq *quit?* t)))
- (cons
-  (lambda (event) (and (event-control-clicked-p event)))
-  (lambda (event) (setq *quit?* nil))))
-
-;; Advantages: most flexible and easy to implement.
-;; Redundant matchers might be called, can't sort or organize.
-;;   (unoptimized)
-
-;; Option 3: matcher structs
-;; like option 2 but structs describing the match are provided
-;; to aid in organization, sorting and optimizing
-
-
-;; option 4: just a table of event handlers
-;; (alist id1 fn1 id2 fn2)
-;; simplest to implement, just as flexible as Option 2.
-
 (defvar *event-handlers* (make-hash-table))
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *compiled-event-handlers* (make-hash-table)))
@@ -321,21 +289,24 @@ Removes events from the queue."
 (defstruct event-control-clicked
   control-id)
 
-(defun clear-handlers! ()
-  (clrhash *event-handlers*))
 (defun notify-handlers! (event)
+  "Call the compiled & runtime event handlers with the given event."
   (maphash (fn (funcall %% event)) *compiled-event-handlers*)
   (maphash (fn (funcall %% event)) *event-handlers*))
 (defun register-handler! (id fn)
+  "Add/replace the handler in *event-handlers*"
   (setf (gethash id *event-handlers*) fn))
 (defun remove-handler! (id)
+  "Remove the handler from *event-handlers*"
   (remhash id *event-handlers*))
 (defmacro defhandler (name (event) &body body)
+  "Add/replace the handler NAME in *compiled-event-handlers*"
   `(setf (gethash ',name *compiled-event-handlers*)
 	 (lambda (,event)
 	   (declare (ignorable ,event))
 	   ,@body)))
 (defmacro undefhandler (name &rest rest)
+  "Remove the handler NAME from *compiled-event-handlers*"
   (declare (ignore rest))
   `(remhash ',name *compiled-event-handlers*))
 
@@ -450,13 +421,14 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 
 
 ;; This time (1/20):
-;;  I want to replace the click-fn with a more robust notification system.
+;;  I want to replace the click-fn with a more robust notification system. CHECK.
 ;;    I want several observers to watch a single event. CHECK
 ;;    I want to be able to register/and unregister event-watchers. CHECK
-;;    I want to be able to clear handlers that get added at runtime and still keep handlers that have been added at compile time.
-;;  I want to chain events together.
+;;    I want to be able to clear handlers that get added at runtime and still keep handlers that have been added at compile time. CHECK
+;;  I want to chain events together. CHECK
 ;;    I want to be able to set up the example chain:
 ;;      open font -> create quit text texture -> create the quit text drawing && create the quit text control
+;;      CHECK.
 
 
 ;; Some events for testing some drawings
@@ -473,6 +445,112 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 
 #+nil
 (event! (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16))
+
+(defparameter *new-button-spec*
+  (make-button-spec
+   :control-id :new-button
+   :font-id :font
+   :texture-id (gensym)
+   :text-drawing-id (gensym)
+   :text "Wake up. Time to die."
+   :bottom-layer 2
+   :pos (v2 128 256)))
+#+nil
+(event! (make-event-create-button :button-spec *new-button-spec*))
+#+nil
+(event! (make-event-generic :fn (fn (destroy-button! *new-button-spec*))))
+
+
+(defhandler handle-new-button-clicked (event)
+  (when (event-control-clicked? event :new-button)
+    (print "I'm so happy for you.")))
+
+(defstruct event-create-button
+  button-spec)
+(defhandler handle-create-button! (event)
+  (when (event-create-button-p event)
+    (create-button! (event-create-button-button-spec event))))
+
+(defstruct button-spec
+  control-id
+  font-id
+  texture-id
+  text-drawing-id
+  text bottom-layer pos)
+(defun create-button! (button-spec)
+  (let ((font-id (button-spec-font-id button-spec))
+	(texture-id (button-spec-texture-id button-spec))
+	(control-id (button-spec-control-id button-spec))
+	(text-drawing-id (button-spec-text-drawing-id button-spec))
+	(control-drawing-id (gensym))
+	(pos (button-spec-pos button-spec))
+	(text (button-spec-text button-spec))
+	(bottom-layer (button-spec-bottom-layer button-spec)))
+    (let ((sym (gensym)))
+      (register-handler!
+       sym
+       (lambda (event)
+	 (when (event-texture-created? event texture-id)
+	   (let* ((texture (gethash texture-id *textures*))
+		  (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
+	     (notify-handlers!
+	      (make-event-add-control :id control-id :control
+				      (make-control :rect rect :hovered? nil :pressed? nil
+						    :drawing-id control-drawing-id)))
+	     (remove-handler! sym))))))
+
+    (let ((font (gethash font-id *fonts*)))
+      (if font
+	  (progn
+	    (notify-handlers! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
+	    (notify-handlers! (make-event-add-drawing :id text-drawing-id
+						      :drawing (make-drawing-full-texture
+								:layer (1+ bottom-layer)
+								:texture-id texture-id :pos pos))))
+	  (let ((sym (gensym)))
+	    (register-handler!
+	     sym
+	     (lambda(event)
+	       (when (event-font-opened? event font-id)
+		 (notify-handlers! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
+		 (notify-handlers! (make-event-add-drawing :id text-drawing-id
+							   :drawing (make-drawing-full-texture
+								     :layer (1+ bottom-layer)
+								     :texture-id texture-id :pos pos)))
+		 (remove-handler! sym)))))))))
+
+(defstruct event-destroy-text-texture
+  id)
+(defhandler handle-destroy-text-texture! (event)
+  (when (event-destroy-text-texture-p event)
+    (let* ((id (event-destroy-text-texture-id event))
+	   (texture (gethash id *textures*)))
+      (when texture
+	(free-texture! texture)
+	(remhash id *textures*)))))
+(defstruct event-remove-control
+  id)
+(defhandler handle-remove-control! (event)
+  (when (event-remove-control-p event)
+    (let* ((id (event-remove-control-id event))
+	   (control (aval id *controls*)))
+      (when control
+	(notify-handlers! (make-event-remove-drawing :id (control-drawing-id control)))
+	(setq *controls* (aremove *controls* id))))))
+
+(defstruct event-generic
+  fn)
+(defhandler handle-generic-event! (event)
+  (when (event-generic-p event)
+    (funcall (event-generic-fn event))))
+
+(defun destroy-button! (button-spec)
+  (let ((texture-id (button-spec-texture-id button-spec))
+	(control-id (button-spec-control-id button-spec))
+	(text-drawing-id (button-spec-text-drawing-id button-spec)))
+    (notify-handlers! (make-event-remove-drawing :id text-drawing-id))
+    (notify-handlers! (make-event-destroy-text-texture :id texture-id))
+    (notify-handlers! (make-event-remove-control :id control-id))))
 
 (let ((font-id :font)
       (texture-id :quit-text)
