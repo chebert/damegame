@@ -2,9 +2,6 @@
 
 (in-package #:damegame)
 
-;; TODO:
-;; GUI
-
 ;; From CBaggers' Swank.Live
 (defmacro continuable (&body body)
   "Helper macro that we can use to allow us to continue from an
@@ -75,50 +72,38 @@ Removes events from the queue."
 (defvar *fonts* (make-hash-table))
 (defvar *textures* (make-hash-table))
 
-(defstruct event-open-font
-  id
-  path
-  size)
 (defstruct event-font-opened
   font-id)
 
-(defhandler handle-open-font! (event)
-  (when (event-open-font-p event)
-    (let* ((id  (event-open-font-id event))
-	   (existing-font (gethash id *fonts*)))
-      ;; If another font with the same id is already open, close it first.
-      (when existing-font
-	(close-font! existing-font))
-      ;; Open the font and add it to the *fonts* hash-table
-      (setf (gethash id *fonts*)
-	    (open-font! (event-open-font-path event)
-			(event-open-font-size event)))
-      (notify-handlers! (make-event-font-opened :font-id id)))))
+(defun load-font! (font-id path size)
+  "Opens the font and stores it in *fonts*, closing any existing font."
+  (let* ((existing-font (gethash font-id *fonts*)))
+    ;; If another font with the same id is already open, close it first.
+    (when existing-font
+      (close-font! existing-font))
+    ;; Open the font and add it to the *fonts* hash-table
+    (setf (gethash font-id *fonts*) (open-font! path size))
+    (notify-handlers! (make-event-font-opened :font-id font-id))))
 
+;; TODO: rename thiis to event-texture-loaded for consistency
 (defstruct event-texture-created
   texture-id)
-(defstruct event-create-text-texture
-  id
-  font-id
-  text)
-(defhandler handle-create-text-texture! (event)
-  (when (event-create-text-texture-p event)
-    (let* ((id (event-create-text-texture-id event))
-	   (font-id (event-create-text-texture-font-id event))
-	   (font (gethash font-id *fonts*))
-	   (existing-texture (gethash id *textures*)))
-      (cond
-	((null font)
-	 ;; If the font doesn't exist, warn and don't do anyting else
-	 (warn "Unable to find font ~S when creating text-texture ~S" font-id event))
-	(t
-	 ;; If another texture with the same id already exists, free it
-	 (when existing-texture
-	   (free-texture! existing-texture))
-	 ;; Create the texture and add it to the textures hash-table
-	 (setf (gethash id *textures*)
-	       (create-text-texture! font (event-create-text-texture-text event)))
-	 (notify-handlers! (make-event-texture-created :texture-id id)))))))
+(defun load-text-texture! (id font-id text)
+  "Creates the text texture and stores it in *textures*, destroying any existing texture."
+  (let* ((font (gethash font-id *fonts*))
+	 (existing-texture (gethash id *textures*)))
+    (cond
+      ((null font)
+       ;; If the font doesn't exist, warn and don't do anyting else
+       (warn "Unable to find font ~S when creating text-texture ~S ~S" font-id id text))
+      (t
+       ;; If another texture with the same id already exists, free it
+       (when existing-texture
+	 (free-texture! existing-texture))
+       ;; Create the texture and add it to the textures hash-table
+       (setf (gethash id *textures*)
+	     (create-text-texture! font text))
+       (notify-handlers! (make-event-texture-created :texture-id id))))))
 
 (defun draw-full-texture! (texture dx dy)
   (let* ((w (texture-width texture))
@@ -133,6 +118,8 @@ Removes events from the queue."
 (defun h (r) (aref r 3))
 
 (defun alist (&rest plist)
+  "Create an association list ((id . value) (id2 . value2)...)
+From the plist (id value id2 value2 ...)"
   (nlet rec ((plist plist)
 	     (result ()))
     (if plist
@@ -142,19 +129,25 @@ Removes events from the queue."
 	  (rec rest (acons key value result)))
 	result)))
 (defun aval (key alist)
+  "Get the value from the alist assuming it is there. Returns nil if it isn't."
   (cdr (assoc key alist)))
 (defun aremove (alist &rest keys)
+  "Return a new alist with keys removed from alist."
   (remove-if (fn (member % keys))
 	     alist
 	     :key 'car))
 (defun aset (key value alist)
+  "Return a new alist with the value associated with key added or replaced."
   (acons key value (aremove alist key)))
 (defun akeys (alist)
+  "Return a list of all keys in alist."
   (mapcar 'car alist))
 (defun amerge (old new)
+  "Return a new alist with the keys of old and new, where conflicts favor the new alist."
   (nconc (apply 'aremove old (akeys new))
 	 new))
 (defun amap (fn alist)
+  "Apply fn to each key and value of alist returning a list of the results."
   (mapcar (fn (funcall fn (car %) (cdr %)))
 	  alist))
 
@@ -190,11 +183,21 @@ Removes events from the queue."
 		drawing)
 	  (aremove *drawings* drawing-id)))))
 
-(defun color (r g b a) (vector r g b a))
-(defun r (color) (aref color 0))
-(defun g (color) (aref color 1))
-(defun b (color) (aref color 2))
-(defun a (color) (aref color 3))
+(defun color (r g b a)
+  "Create an RGBA representation of a color"
+  (vector r g b a))
+(defun r (color)
+  "red component of color"
+  (aref color 0))
+(defun g (color)
+  "green component of color"
+  (aref color 1))
+(defun b (color)
+  "blue component of color"
+  (aref color 2))
+(defun a (color)
+  "alpha component of color"
+  (aref color 3))
 
 (defstruct (drawing-fill-rect (:include drawing))
   color
@@ -206,22 +209,9 @@ Removes events from the queue."
     (fill-rect! (x rect) (y rect) (w rect) (h rect))))
 
 (defun add-drawing! (id drawing)
+  "Adds drawing *drawings* and sorts *drawings* by layer."
   (setq *drawings* (aset id drawing *drawings*))
   (sort-drawings-by-layer!))
-
-(defstruct event-add-drawing
-  id
-  drawing)
-
-(defhandler handle-add-drawing! (event)
-  (when (event-add-drawing-p event)
-    (add-drawing! (event-add-drawing-id event) (event-add-drawing-drawing event))))
-
-
-(defstruct event-remove-drawing id)
-(defhandler handle-remove-drawing! (event)
-  (when (event-remove-drawing-p event)
-    (remove-drawing! (event-remove-drawing-id event))))
 
 (defvar *quit?* nil
   "When true the main-loop! will terminate.")
@@ -239,23 +229,21 @@ Removes events from the queue."
   pressed?
   click-fn)
 
-(defstruct event-add-control
-  id control)
-(defhandler handle-add-control! (event)
-  (when (event-add-control-p event)
-    (let ((control (event-add-control-control event)))
-      (setq *controls* (aset (event-add-control-id event)
-			     control
-			     *controls*))
-      (add-drawing! (control-drawing-id control)
-		    (make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-					    :rect (control-rect control))))))
+(defun add-control! (id control)
+  "Adds control to *controls* and adds a drawing of the control."
+  (setq *controls* (aset id control *controls*))
+  (add-drawing! (control-drawing-id control)
+		;; TODO: control drawing (based on layer, pressed? and hovered?
+		(make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+					:rect (control-rect control))))
 
 (defun point-in-rect? (v2 r)
+  "True if the given v2 point is inside of the rect top-left inclusive, bottom-right exclusive."
   (and (<= (x r) (x v2) (1- (+ (x r) (w r))))
        (<= (y r) (y v2) (1- (+ (y r) (h r))))))
 
 (defun control-handle-mouse-move! (control)
+  "Process the effects of a mouse-move event on control."
   (let* ((rect (control-rect control))
 	 (hovered? (control-hovered? control))
 	 (pressed? (control-pressed? control))
@@ -276,23 +264,26 @@ Removes events from the queue."
 					       :rect rect)))))))
 
 (defun control-handle-mouse-down! (control)
+  "Process the effects of a left-mouse-button press on control."
   (when (control-hovered? control)
     (setf (control-pressed? control) t)
     (add-drawing! (control-drawing-id control)
 		  (make-drawing-fill-rect :layer 1 :color (color 255 0 0 255)
 					  :rect (control-rect control)))))
 
-(defvar *event-handlers* (make-hash-table))
+(defvar *event-handlers* (make-hash-table)
+  "A hash-table of runtime-created event-handlers.")
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defvar *compiled-event-handlers* (make-hash-table)))
+  (defvar *compiled-event-handlers* (make-hash-table)
+    "A hash-table of compile-time created event-handlers."))
 
 (defstruct event-control-clicked
   control-id)
 
 (defun notify-handlers! (event)
   "Call the compiled & runtime event handlers with the given event."
-  (maphash (fn (funcall %% event)) *compiled-event-handlers*)
-  (maphash (fn (funcall %% event)) *event-handlers*))
+  (maphash (fn (funcall %% event %)) *compiled-event-handlers*)
+  (maphash (fn (funcall %% event %)) *event-handlers*))
 (defun register-handler! (id fn)
   "Add/replace the handler in *event-handlers*"
   (setf (gethash id *event-handlers*) fn))
@@ -301,16 +292,18 @@ Removes events from the queue."
   (remhash id *event-handlers*))
 (defmacro defhandler (name (event) &body body)
   "Add/replace the handler NAME in *compiled-event-handlers*"
-  `(setf (gethash ',name *compiled-event-handlers*)
-	 (lambda (,event)
-	   (declare (ignorable ,event))
-	   ,@body)))
+  (let ((handler-id (gensym)))
+    `(setf (gethash ',name *compiled-event-handlers*)
+	   (lambda (,event ,handler-id)
+	     (declare (ignorable ,event ,handler-id))
+	     ,@body))))
 (defmacro undefhandler (name &rest rest)
   "Remove the handler NAME from *compiled-event-handlers*"
   (declare (ignore rest))
   `(remhash ',name *compiled-event-handlers*))
 
 (defun control-handle-mouse-up! (control-id control)
+  "Process the effects on control of the left mouse button being released"
   (when (and (control-pressed? control) (control-hovered? control))
     (notify-handlers! (make-event-control-clicked
 		       :control-id control-id)))
@@ -411,65 +404,44 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (maphash (fn (free-texture! %%)) *textures*)
     (quit!)))
 
-
-;; Last time (1/19):
-;;  I made quit button by dumping global variables everywhere.
-;;  I watched for mouse hover/unhover press/release events and set it to up to quit when it was clicked.
-;;  I then abstracted out a table of "control"s, which can all be clicked, and replaced the global quit button
-;;    with references to these controls.
-;;  I quickly added a "click-fn" to the control, and moved the logic to quit the application into this.
-
-
-;; This time (1/20):
-;;  I want to replace the click-fn with a more robust notification system. CHECK.
-;;    I want several observers to watch a single event. CHECK
-;;    I want to be able to register/and unregister event-watchers. CHECK
-;;    I want to be able to clear handlers that get added at runtime and still keep handlers that have been added at compile time. CHECK
-;;  I want to chain events together. CHECK
-;;    I want to be able to set up the example chain:
-;;      open font -> create quit text texture -> create the quit text drawing && create the quit text control
-;;      CHECK.
-
-
-;; Some events for testing some drawings
-
 (defun event-font-opened? (event font-id)
+  "True if the event is an event-font-opened for the font-id"
   (and (event-font-opened-p event)
        (eql font-id (event-font-opened-font-id event))))
 (defun event-control-clicked? (event control-id)
+  "True if event is control-id's control being clicked."
   (and (event-control-clicked-p event)
        (eql control-id (event-control-clicked-control-id event))))
 (defun event-texture-created? (event texture-id)
+  "True if event is texture-id's texture being created."
   (and (event-texture-created-p event)
        (eql texture-id (event-texture-created-texture-id event))))
-
-#+nil
-(event! (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16))
-
-(defparameter *new-button-spec*
-  (make-button-spec
-   :control-id :new-button
-   :font-id :font
-   :texture-id (gensym)
-   :text-drawing-id (gensym)
-   :text "Wake up. Time to die."
-   :bottom-layer 2
-   :pos (v2 128 256)))
-#+nil
-(event! (make-event-create-button :button-spec *new-button-spec*))
-#+nil
-(event! (make-event-generic :fn (fn (destroy-button! *new-button-spec*))))
-
 
 (defhandler handle-new-button-clicked (event)
   (when (event-control-clicked? event :new-button)
     (print "I'm so happy for you.")))
 
-(defstruct event-create-button
-  button-spec)
-(defhandler handle-create-button! (event)
-  (when (event-create-button-p event)
-    (create-button! (event-create-button-button-spec event))))
+(defun create-text-texture-drawing! (drawing-id texture-id font-id text layer pos)
+  "Loads the text texture into *textures* and adds the drawing to *drawings*."
+  (load-text-texture! texture-id font-id text)
+  (add-drawing! drawing-id (make-drawing-full-texture
+			    :layer layer
+			    :texture-id texture-id :pos pos)))
+
+(defun register-one-off-handler! (test-fn handle-fn)
+  "Registers an event handler that will be removed once handled.
+Only calls handle-fn if test-fn returns a truthy value.
+Test-fn and handle-fn are both functions of event."
+  (register-handler!
+   (gensym)
+   (lambda (event handler-id)
+     (when (funcall test-fn event)
+       (funcall handle-fn event)
+       (remove-handler! handler-id)))))
+
+(defun texture-rect (pos texture)
+  "Returns a rect positioned at pos with the same dimensions as texture."
+  (rect (x pos) (y pos) (texture-width texture) (texture-height texture)))
 
 (defstruct button-spec
   control-id
@@ -478,65 +450,46 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   text-drawing-id
   text bottom-layer pos)
 (defun create-button! (button-spec)
-  (let ((font-id (button-spec-font-id button-spec))
-	(texture-id (button-spec-texture-id button-spec))
-	(control-id (button-spec-control-id button-spec))
+  "Creates a button from the button spec."
+  (let ((texture-id (button-spec-texture-id button-spec))
 	(text-drawing-id (button-spec-text-drawing-id button-spec))
-	(control-drawing-id (gensym))
 	(pos (button-spec-pos button-spec))
-	(text (button-spec-text button-spec))
-	(bottom-layer (button-spec-bottom-layer button-spec)))
-    (let ((sym (gensym)))
-      (register-handler!
-       sym
-       (lambda (event)
-	 (when (event-texture-created? event texture-id)
-	   (let* ((texture (gethash texture-id *textures*))
-		  (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
-	     (notify-handlers!
-	      (make-event-add-control :id control-id :control
-				      (make-control :rect rect :hovered? nil :pressed? nil
-						    :drawing-id control-drawing-id)))
-	     (remove-handler! sym))))))
+	(text (button-spec-text button-spec)))
+    (register-one-off-handler!
+     (fn (event-texture-created? % texture-id))
+     (fn (add-control!
+	  (button-spec-control-id button-spec)
+	  (make-control :rect (texture-rect pos (gethash texture-id *textures*))
+			:hovered? nil :pressed? nil
+			:drawing-id (gensym)))))
 
-    (let ((font (gethash font-id *fonts*)))
-      (if font
+    (let* ((font-id (button-spec-font-id button-spec))
+	   (create-fn (fn (create-text-texture-drawing! text-drawing-id texture-id font-id
+							text
+							(1+ (button-spec-bottom-layer button-spec))
+							pos))))
+      (if (gethash font-id *fonts*)
+	  (funcall create-fn)
+	  ;; If font isn't open, create a handler to wait for it
 	  (progn
-	    (notify-handlers! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
-	    (notify-handlers! (make-event-add-drawing :id text-drawing-id
-						      :drawing (make-drawing-full-texture
-								:layer (1+ bottom-layer)
-								:texture-id texture-id :pos pos))))
-	  (let ((sym (gensym)))
-	    (register-handler!
-	     sym
-	     (lambda(event)
-	       (when (event-font-opened? event font-id)
-		 (notify-handlers! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
-		 (notify-handlers! (make-event-add-drawing :id text-drawing-id
-							   :drawing (make-drawing-full-texture
-								     :layer (1+ bottom-layer)
-								     :texture-id texture-id :pos pos)))
-		 (remove-handler! sym)))))))))
+	    (warn "Trying to create button when the font is not loaded ~S" button-spec)
+	    (register-one-off-handler!
+	     (fn (event-font-opened? % font-id))
+	     create-fn))))))
 
-(defstruct event-destroy-text-texture
-  id)
-(defhandler handle-destroy-text-texture! (event)
-  (when (event-destroy-text-texture-p event)
-    (let* ((id (event-destroy-text-texture-id event))
-	   (texture (gethash id *textures*)))
-      (when texture
-	(free-texture! texture)
-	(remhash id *textures*)))))
-(defstruct event-remove-control
-  id)
-(defhandler handle-remove-control! (event)
-  (when (event-remove-control-p event)
-    (let* ((id (event-remove-control-id event))
-	   (control (aval id *controls*)))
-      (when control
-	(notify-handlers! (make-event-remove-drawing :id (control-drawing-id control)))
-	(setq *controls* (aremove *controls* id))))))
+(defun unload-texture! (id)
+  "Frees the texture and removes it from *textures*."
+  (let* ((texture (gethash id *textures*)))
+    (when texture
+      (free-texture! texture)
+      (remhash id *textures*))))
+
+(defun remove-control! (id)
+  "Removes the control from *controls* and removes its drawing from *drawings*."
+  (let* ((control (aval id *controls*)))
+    (when control
+      (remove-drawing! (control-drawing-id control))
+      (setq *controls* (aremove *controls* id)))))
 
 (defstruct event-generic
   fn)
@@ -545,12 +498,13 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (funcall (event-generic-fn event))))
 
 (defun destroy-button! (button-spec)
+  "Removes/unloads the button's control, textures, and drawings."
   (let ((texture-id (button-spec-texture-id button-spec))
 	(control-id (button-spec-control-id button-spec))
 	(text-drawing-id (button-spec-text-drawing-id button-spec)))
-    (notify-handlers! (make-event-remove-drawing :id text-drawing-id))
-    (notify-handlers! (make-event-destroy-text-texture :id texture-id))
-    (notify-handlers! (make-event-remove-control :id control-id))))
+    (remove-drawing! text-drawing-id)
+    (unload-texture! texture-id)
+    (remove-control! control-id)))
 
 (let ((font-id :font)
       (texture-id :quit-text)
@@ -563,11 +517,11 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 
   (defhandler font-opened (event)
     (when (event-font-opened? event font-id)
-      (notify-handlers! (make-event-create-text-texture :id texture-id :font-id font-id :text text))
-      (notify-handlers! (make-event-add-drawing :id text-drawing-id
-						:drawing (make-drawing-full-texture
-							  :layer (1+ bottom-layer)
-							  :texture-id texture-id :pos pos)))))
+      (load-text-texture! texture-id font-id text)
+      (add-drawing! text-drawing-id
+		    (make-drawing-full-texture
+		     :layer (1+ bottom-layer)
+		     :texture-id texture-id :pos pos))))
   
   (defhandler quit-button-clicked (event)
     (when (event-control-clicked? event control-id)
@@ -577,32 +531,25 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (when (event-texture-created? event texture-id)
       (let* ((texture (gethash texture-id *textures*))
 	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
-	(notify-handlers!
-	 (make-event-add-control :id control-id :control
-				 (make-control :rect rect :hovered? nil :pressed? nil
-					       :drawing-id control-drawing-id)))))))
+	(add-control! control-id
+		      (make-control :rect rect :hovered? nil :pressed? nil
+				    :drawing-id control-drawing-id))))))
 
-
-#+nil
-(mapcar
- 'event!
- (list
-  (make-event-create-text-texture :id :text :font-id :font :text "Hello, cruel world")
-  (make-event-add-drawing
-   :id :drawing
-   :drawing (make-drawing-full-texture :layer 2 :texture-id :text :pos (v2 40 40)))))
 
 
 #+nil
-(event!
- (make-event-add-drawing
-  :id :background
-  :drawing (make-drawing-fill-rect :layer 1 :color (color 0 0 0 0)
-				   :rect (let ((texture (gethash :text *textures*)))
-					   (rect 40 40
-						 (texture-width texture)
-						 (texture-height texture))))))
+(event! (make-event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))
 
+(defparameter *new-button-spec*
+  (make-button-spec
+   :control-id :new-button
+   :font-id :font
+   :texture-id (gensym)
+   :text-drawing-id (gensym)
+   :text "Wake up. Time to die."
+   :bottom-layer 2
+   :pos (v2 128 256)))
 #+nil
-(event!
- (make-event-remove-drawing :id :background))
+(event! (make-event-generic :fn (fn (create-button! *new-button-spec*))))
+#+nil
+(event! (make-event-generic :fn (fn (destroy-button! *new-button-spec*))))
