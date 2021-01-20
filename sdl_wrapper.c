@@ -293,7 +293,7 @@ DLL_EXPORT enum EventType NextEvent(SDL_Scancode *scancode, int *mouse_button, i
         *mouse_y = event.button.y;
         *mouse_button = event.button.button;
         *clicks = event.button.clicks;
-        return MOUSEDOWN;
+        return MOUSEUP;
       case  SDL_MOUSEWHEEL:
         *mouse_x = event.wheel.x;
         *mouse_y = event.wheel.y;

@@ -151,6 +151,8 @@ Removes events from the queue."
 	  alist))
 
 
+;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
+;; something like a binary tree may be better
 (defvar *drawings* ()
   "An association list of drawings.")
 
@@ -158,8 +160,10 @@ Removes events from the queue."
   layer)
 
 (defun sort-drawings-by-layer! ()
+  "Sort *drawings* by layer."
   (setq *drawings* (sort *drawings* #'< :key (fn (drawing-layer (cdr %))))))
 (defun remove-drawing! (drawing-id)
+  "Removes the associated drawing from *drawings*"
   (setq *drawings* (aremove *drawings* drawing-id))
   (sort-drawings-by-layer!))
 
@@ -193,13 +197,15 @@ Removes events from the queue."
     (set-draw-color! (r color) (g color) (b color) (a color))
     (fill-rect! (x rect) (y rect) (w rect) (h rect))))
 
+(defun add-drawing! (id drawing)
+  (setq *drawings* (aset id drawing *drawings*))
+  (sort-drawings-by-layer!))
+
 (defstruct event-add-drawing
   id
   drawing)
 (defmethod handle! ((event event-add-drawing))
-  (setq *drawings*
-	(aset (event-add-drawing-id event) (event-add-drawing-drawing event) *drawings*))
-  (sort-drawings-by-layer!))
+  (add-drawing! (event-add-drawing-id event) (event-add-drawing-drawing event)))
 
 
 (defstruct event-remove-drawing id)
@@ -209,16 +215,89 @@ Removes events from the queue."
 (defvar *quit?* nil
   "When true the main-loop! will terminate.")
 
+(defvar *mouse-x* 0)
+(defvar *mouse-y* 0)
+
+(defvar *controls* ())
+(defstruct control
+  rect
+  drawing-id
+  hovered?
+  pressed?
+  click-fn)
+
+(defstruct event-add-control
+  id control)
+(defmethod handle! ((event event-add-control))
+  (let ((control (event-add-control-control event)))
+    (setq *controls* (aset (event-add-control-id event)
+			   control
+			   *controls*))
+    (add-drawing! (control-drawing-id control)
+		  (make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+					  :rect (control-rect control)))))
+
+(defun point-in-rect? (v2 r)
+  (and (<= (x r) (x v2) (1- (+ (x r) (w r))))
+       (<= (y r) (y v2) (1- (+ (y r) (h r))))))
+
+(defun control-handle-mouse-move! (control)
+  (let* ((rect (control-rect control))
+	 (hovered? (control-hovered? control))
+	 (pressed? (control-pressed? control))
+	 (in-rect? (point-in-rect? (v2 *mouse-x* *mouse-y*) rect)))
+    (cond
+      ((and (not hovered?)
+	    in-rect?)
+       (setf (control-hovered? control) t)
+       (add-drawing! (control-drawing-id control)
+		     (make-drawing-fill-rect :layer 1 :color (color 255 0 255 255)
+					     :rect rect)))
+      ((and hovered?
+	    (not in-rect?))
+       (setf (control-hovered? control) nil)
+       (when (not pressed?)
+	 (add-drawing! (control-drawing-id control)
+		       (make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+					       :rect rect)))))))
+
+(defun control-handle-mouse-down! (control)
+  (when (control-hovered? control)
+    (setf (control-pressed? control) t)
+    (add-drawing! (control-drawing-id control)
+		  (make-drawing-fill-rect :layer 1 :color (color 255 0 0 255)
+					  :rect (control-rect control)))))
+
+(defun control-handle-mouse-up! (control)
+  (let ((click-fn (control-click-fn control)))
+    (when (and click-fn (control-pressed? control) (control-hovered? control))
+      (funcall click-fn control)))
+  (setf (control-pressed? control) nil)
+  (add-drawing! (control-drawing-id control)
+		(make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+					:rect (control-rect control))))
+
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
-  (mapcar 'handle! (reverse *events*))
-  (setq *events* ())
+  (let ((events (reverse *events*)))
+    (setq *events* ())
+    (mapcar 'handle! events))
 
   ;; Handle input events.
   (for-each-input-event!
    (fn (typecase %
-	 (event-quit (setq *quit?* t)))))
+	 (event-quit (setq *quit?* t))
+	 (event-mousemove
+	  (setq *mouse-x* (event-mousemove-x %)
+		*mouse-y* (event-mousemove-y %))
+	  (mapcar (fn (control-handle-mouse-move! (cdr %))) *controls*))
+	 (event-mousedown
+	  (when (eql :left (event-mousedown-button %))
+	    (mapcar (fn (control-handle-mouse-down! (cdr %))) *controls*)))
+	 (event-mouseup
+	  (when (eql :left (event-mouseup-button %))
+	    (mapcar (fn (control-handle-mouse-up! (cdr %))) *controls*))))))
 
   ;; Update based on time-step
 
@@ -289,15 +368,42 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (quit!)))
 
 
+;; Some events for testing some drawings
+
+#+nil
+(event! (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16))
+
 #+nil
 (mapcar
  'event!
  (list
   (make-event-open-font :id :font :path "DroidSansMono.ttf" :size 16)
+  (make-event-create-text-texture :id :quit-text :font-id :font :text "Quit")
+  (make-event-add-drawing :id :quit-drawing
+			  :drawing (make-drawing-full-texture :layer 2 :texture-id :quit-text :pos (v2 120 200)))))
+
+#+nil
+(let* ((texture (gethash :quit-text *textures*))
+       (rect (rect 120 200 (texture-width texture) (texture-height texture))))
+  (event!
+   (make-event-add-control :id :quit-control :control
+			   (make-control :rect rect :hovered? nil :pressed? nil
+					 :drawing-id :quit-control-drawing
+					 :click-fn (fn (setq *quit?* t))))))
+
+
+
+
+
+#+nil
+(mapcar
+ 'event!
+ (list
   (make-event-create-text-texture :id :text :font-id :font :text "Hello, cruel world")
   (make-event-add-drawing
    :id :drawing
    :drawing (make-drawing-full-texture :layer 2 :texture-id :text :pos (v2 40 40)))))
+
 
 #+nil
 (event!
