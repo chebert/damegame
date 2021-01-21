@@ -2,6 +2,38 @@
 
 (in-package #:damegame)
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun make-keyword (symbol)
+    (intern (symbol-name symbol) (find-package :keyword)))
+  (defun symbolicate (&rest symbols)
+    (intern (apply 'concatenate 'string (mapcar 'symbol-name symbols)))))
+
+
+(defmacro fn (&body body)
+  "Creates an anaphoric lambda with optional arguments % %% %%%."
+  `(lambda (&optional % %% %%%)
+     (declare (ignorable % %% %%%))
+     ,@body))
+
+(defmacro defcloss (name direct-superclasses &rest documentation-and-slot-names)
+  "Defcloss provides a similar interface to defstruct (with the addition of direct-superclasses)."
+  (let* ((first (first documentation-and-slot-names))
+	 (documentation (when (stringp first)
+			  first))
+	 (slot-names (if (stringp first)
+			 (rest documentation-and-slot-names)
+			 documentation-and-slot-names))
+	 (slot-keys (mapcar 'make-keyword slot-names))
+	 (slot-reader-names (mapcar (fn (symbolicate name '- %)) slot-names))
+	 (slot-forms (mapcar (fn (list % :initarg %% :reader %)) slot-reader-names slot-keys)))
+    `(progn
+       (defclass ,name ,direct-superclasses
+	 ,slot-forms
+	 ,@ (when documentation (list (list :documentation documentation))))
+       (defun ,(symbolicate name '-p) (instance)
+	 (typep instance ',name))
+       ',name)))
+
 ;; From CBaggers' Swank.Live
 (defmacro continuable (&body body)
   "Helper macro that we can use to allow us to continue from an
@@ -52,12 +84,6 @@
 	 (error "~S => ~S does not EQL ~S => ~S" ',a ,a-val ',b ,b-val))
        :check)))
 
-(defmacro fn (&body body)
-  "Creates an anaphoric lambda with optional arguments % %% %%%."
-  `(lambda (&optional % %% %%%)
-     (declare (ignorable % %% %%%))
-     ,@body))
-
 (defun for-each-input-event! (fn)
   "Iterate over each event in the sdl-event queue, applying fn to each event.
 Removes events from the queue."
@@ -72,7 +98,7 @@ Removes events from the queue."
 (defvar *fonts* (make-hash-table))
 (defvar *textures* (make-hash-table))
 
-(defstruct event-font-opened
+(defcloss event-font-opened ()
   font-id)
 
 (defun load-font! (font-id path size)
@@ -83,10 +109,10 @@ Removes events from the queue."
       (close-font! existing-font))
     ;; Open the font and add it to the *fonts* hash-table
     (setf (gethash font-id *fonts*) (open-font! path size))
-    (notify-handlers! (make-event-font-opened :font-id font-id))))
+    (notify-handlers! (make-instance
+		       'event-font-opened :font-id font-id))))
 
-;; TODO: rename thiis to event-texture-loaded for consistency
-(defstruct event-texture-created
+(defcloss event-texture-loaded ()
   texture-id)
 (defun load-text-texture! (id font-id text)
   "Creates the text texture and stores it in *textures*, destroying any existing texture."
@@ -103,7 +129,8 @@ Removes events from the queue."
        ;; Create the texture and add it to the textures hash-table
        (setf (gethash id *textures*)
 	     (create-text-texture! font text))
-       (notify-handlers! (make-event-texture-created :texture-id id))))))
+       (notify-handlers! (make-instance
+			  'event-texture-loaded :texture-id id))))))
 
 (defun draw-full-texture! (texture dx dy)
   (let* ((w (texture-width texture))
@@ -157,7 +184,7 @@ From the plist (id value id2 value2 ...)"
 (defvar *drawings* ()
   "An association list of drawings.")
 
-(defstruct drawing
+(defcloss drawing ()
   layer)
 
 (defun sort-drawings-by-layer! ()
@@ -168,7 +195,7 @@ From the plist (id value id2 value2 ...)"
   (setq *drawings* (aremove *drawings* drawing-id))
   (sort-drawings-by-layer!))
 
-(defstruct (drawing-full-texture (:include drawing))
+(defcloss drawing-full-texture (drawing)
   texture-id
   pos)
 (defmethod draw! (drawing-id (drawing drawing-full-texture))
@@ -199,7 +226,7 @@ From the plist (id value id2 value2 ...)"
   "alpha component of color"
   (aref color 3))
 
-(defstruct (drawing-fill-rect (:include drawing))
+(defcloss drawing-fill-rect (drawing)
   color
   rect)
 (defmethod draw! (drawing-id (drawing drawing-fill-rect))
@@ -220,22 +247,22 @@ From the plist (id value id2 value2 ...)"
 (defvar *mouse-y* 0 "Mouse pixel y position measured from the top of the window.")
 
 (defvar *controls* ()
-  "An association list of control-id to control of all of the currently active ccontrols.")
-(defstruct control
+  "An association list of control-id to control of all of the currently active controls.")
+
+(defcloss control ()
   "A control is a rectangle which recieves (currently mouse-only) inputs."
   rect
   drawing-id
   hovered?
-  pressed?
-  click-fn)
+  pressed?)
 
 (defun add-control! (id control)
   "Adds control to *controls* and adds a drawing of the control."
   (setq *controls* (aset id control *controls*))
   (add-drawing! (control-drawing-id control)
 		;; TODO: control drawing (based on layer, pressed? and hovered?
-		(make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-					:rect (control-rect control))))
+		(make-instance 'drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+						  :rect (control-rect control))))
 
 (defun point-in-rect? (v2 r)
   "True if the given v2 point is inside of the rect top-left inclusive, bottom-right exclusive."
@@ -251,25 +278,25 @@ From the plist (id value id2 value2 ...)"
     (cond
       ((and (not hovered?)
 	    in-rect?)
-       (setf (control-hovered? control) t)
+       (setf (slot-value control 'control-hovered?) t)
        (add-drawing! (control-drawing-id control)
-		     (make-drawing-fill-rect :layer 1 :color (color 255 0 255 255)
-					     :rect rect)))
+		     (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 255 255)
+						       :rect rect)))
       ((and hovered?
 	    (not in-rect?))
-       (setf (control-hovered? control) nil)
+       (setf (slot-value control 'control-hovered?) nil)
        (when (not pressed?)
 	 (add-drawing! (control-drawing-id control)
-		       (make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-					       :rect rect)))))))
+		       (make-instance 'drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+							 :rect rect)))))))
 
 (defun control-handle-mouse-down! (control)
   "Process the effects of a left-mouse-button press on control."
   (when (control-hovered? control)
-    (setf (control-pressed? control) t)
+    (setf (slot-value control 'control-pressed?) t)
     (add-drawing! (control-drawing-id control)
-		  (make-drawing-fill-rect :layer 1 :color (color 255 0 0 255)
-					  :rect (control-rect control)))))
+		  (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 0 255)
+						    :rect (control-rect control)))))
 
 (defvar *event-handlers* (make-hash-table)
   "A hash-table of runtime-created event-handlers.")
@@ -277,7 +304,7 @@ From the plist (id value id2 value2 ...)"
   (defvar *compiled-event-handlers* (make-hash-table)
     "A hash-table of compile-time created event-handlers."))
 
-(defstruct event-control-clicked
+(defcloss event-control-clicked ()
   control-id)
 
 (defun notify-handlers! (event)
@@ -305,12 +332,13 @@ From the plist (id value id2 value2 ...)"
 (defun control-handle-mouse-up! (control-id control)
   "Process the effects on control of the left mouse button being released"
   (when (and (control-pressed? control) (control-hovered? control))
-    (notify-handlers! (make-event-control-clicked
+    (notify-handlers! (make-instance
+		       'event-control-clicked
 		       :control-id control-id)))
-  (setf (control-pressed? control) nil)
+  (setf (slot-value control 'control-pressed?) nil)
   (add-drawing! (control-drawing-id control)
-		(make-drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-					:rect (control-rect control))))
+		(make-instance 'drawing-fill-rect :layer 1 :color (color 0 0 0 255)
+						  :rect (control-rect control))))
 
 (defun update! ()
   "Handles events, handles input events,
@@ -412,10 +440,10 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   "True if event is control-id's control being clicked."
   (and (event-control-clicked-p event)
        (eql control-id (event-control-clicked-control-id event))))
-(defun event-texture-created? (event texture-id)
+(defun event-texture-loaded? (event texture-id)
   "True if event is texture-id's texture being created."
-  (and (event-texture-created-p event)
-       (eql texture-id (event-texture-created-texture-id event))))
+  (and (event-texture-loaded-p event)
+       (eql texture-id (event-texture-loaded-texture-id event))))
 
 (defhandler handle-new-button-clicked (event)
   (when (event-control-clicked? event :new-button)
@@ -424,7 +452,8 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 (defun create-text-texture-drawing! (drawing-id texture-id font-id text layer pos)
   "Loads the text texture into *textures* and adds the drawing to *drawings*."
   (load-text-texture! texture-id font-id text)
-  (add-drawing! drawing-id (make-drawing-full-texture
+  (add-drawing! drawing-id (make-instance
+			    'drawing-fill-rect
 			    :layer layer
 			    :texture-id texture-id :pos pos)))
 
@@ -443,7 +472,7 @@ Test-fn and handle-fn are both functions of event."
   "Returns a rect positioned at pos with the same dimensions as texture."
   (rect (x pos) (y pos) (texture-width texture) (texture-height texture)))
 
-(defstruct button-spec
+(defcloss button-spec ()
   control-id
   font-id
   texture-id
@@ -456,12 +485,14 @@ Test-fn and handle-fn are both functions of event."
 	(pos (button-spec-pos button-spec))
 	(text (button-spec-text button-spec)))
     (register-one-off-handler!
-     (fn (event-texture-created? % texture-id))
+     (fn (event-texture-loaded? % texture-id))
      (fn (add-control!
 	  (button-spec-control-id button-spec)
-	  (make-control :rect (texture-rect pos (gethash texture-id *textures*))
-			:hovered? nil :pressed? nil
-			:drawing-id (gensym)))))
+	  (make-instance
+	   'control
+	   :rect (texture-rect pos (gethash texture-id *textures*))
+	   :hovered? nil :pressed? nil
+	   :drawing-id (gensym)))))
 
     (let* ((font-id (button-spec-font-id button-spec))
 	   (create-fn (fn (create-text-texture-drawing! text-drawing-id texture-id font-id
@@ -491,7 +522,7 @@ Test-fn and handle-fn are both functions of event."
       (remove-drawing! (control-drawing-id control))
       (setq *controls* (aremove *controls* id)))))
 
-(defstruct event-generic
+(defcloss event-generic ()
   fn)
 (defhandler handle-generic-event! (event)
   (when (event-generic-p event)
@@ -519,7 +550,8 @@ Test-fn and handle-fn are both functions of event."
     (when (event-font-opened? event font-id)
       (load-text-texture! texture-id font-id text)
       (add-drawing! text-drawing-id
-		    (make-drawing-full-texture
+		    (make-instance
+		     'drawing-full-texture
 		     :layer (1+ bottom-layer)
 		     :texture-id texture-id :pos pos))))
   
@@ -527,21 +559,24 @@ Test-fn and handle-fn are both functions of event."
     (when (event-control-clicked? event control-id)
       (setq *quit?* t)))
 
-  (defhandler quit-texture-created (event)
-    (when (event-texture-created? event texture-id)
+  (defhandler quit-texture-loaded (event)
+    (when (event-texture-loaded? event texture-id)
       (let* ((texture (gethash texture-id *textures*))
 	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
 	(add-control! control-id
-		      (make-control :rect rect :hovered? nil :pressed? nil
-				    :drawing-id control-drawing-id))))))
+		      (make-instance
+		       'control
+		       :rect rect :hovered? nil :pressed? nil
+		       :drawing-id control-drawing-id))))))
 
 
 
 #+nil
-(event! (make-event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))
+(event! (make-instance 'event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))
 
 (defparameter *new-button-spec*
-  (make-button-spec
+  (make-instance
+   'button-spec
    :control-id :new-button
    :font-id :font
    :texture-id (gensym)
@@ -550,6 +585,6 @@ Test-fn and handle-fn are both functions of event."
    :bottom-layer 2
    :pos (v2 128 256)))
 #+nil
-(event! (make-event-generic :fn (fn (create-button! *new-button-spec*))))
+(event! (make-instance 'event-generic :fn (fn (create-button! *new-button-spec*))))
 #+nil
-(event! (make-event-generic :fn (fn (destroy-button! *new-button-spec*))))
+(event! (make-instance 'event-generic :fn (fn (destroy-button! *new-button-spec*))))
