@@ -144,6 +144,13 @@ Removes events from the queue."
 (defun w (r) (aref r 2))
 (defun h (r) (aref r 3))
 
+(defun v+ (&rest vs)
+  (let ((result (v2 0 0)))
+    (mapc (fn (setq result (v2 (+ (x result) (x %))
+			       (+ (y result) (y %)))))
+	  vs)
+    result))
+
 (defun alist (&rest plist)
   "Create an association list ((id . value) (id2 . value2)...)
 From the plist (id value id2 value2 ...)"
@@ -365,7 +372,7 @@ updates based on timestep, and renders to the screen."
   ;; Update based on time-step
 
   ;; Render to the screen
-  (set-draw-color! 0 255 0 255)
+  (set-draw-color! 0 0 0 255)
   (clear!)
   (amap 'draw! *drawings*)
   (present!)
@@ -413,6 +420,8 @@ updates based on timestep, and renders to the screen."
 	   (delay! (frame-milliseconds-remaining last-update-milliseconds
 						 (elapsed-milliseconds)))))))
 
+(defcloss event-initialization-finished ())
+
 (defun main! ()
   "Entry point into the application. Recompiles the SDL-Wrapper, creates the window, 
 and starts the update loop, then afterwards closes SDL and cleans up the application."
@@ -427,6 +436,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (setq *events* ())
 	 (setq *controls* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
+	 (event! (make-instance 'event-initialization-finished))
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
@@ -569,10 +579,211 @@ Test-fn and handle-fn are both functions of event."
 		       :rect rect :hovered? nil :pressed? nil
 		       :drawing-id control-drawing-id))))))
 
+(defhandler handle-intialization-finished! (event)
+  (when (event-initialization-finished-p event)
+    (event! (make-instance 'event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))))
 
 
-#+nil
-(event! (make-instance 'event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))
+(defmacro user-event! (&body body)
+  `(event! (make-instance 'event-generic :fn (fn ,@body))))
+
+(defun texture-right-aligned (x texture-id &optional (spacing 0))
+  (- x (texture-width (gethash texture-id *textures*)) spacing))
+
+(defun right-aligned-texture-drawing (texture-id pos layer &optional (spacing 0))
+  (make-instance 'drawing-full-texture
+		 :pos (v2 (texture-right-aligned (x pos) texture-id spacing) (y pos))
+		 :texture-id texture-id
+		 :layer layer))
+
+(defun left-aligned-texture-drawing (texture-id pos layer &optional (spacing 0))
+  (make-instance 'drawing-full-texture
+		 :pos (v2 (+ (x pos) spacing) (y pos))
+		 :texture-id texture-id
+		 :layer layer))
+
+(defun add-state-drawings! (pos text-drawing-id state-drawing-id text-texture-id state-texture-id layer spacing)
+  (add-drawing! text-drawing-id (right-aligned-texture-drawing text-texture-id pos layer spacing))
+  (add-drawing! state-drawing-id (left-aligned-texture-drawing state-texture-id pos layer spacing)))
+
+(defun add-8-bit-register-drawings! (c1 c2 c3 y layer spacing
+				     hi-text-id hi-contents-id lo-text-id lo-contents-id
+				     combined-text-id combined-contents-id)
+  (add-state-drawings! (v2 c1 y) hi-text-id hi-contents-id hi-text-id hi-contents-id layer spacing)
+  (add-state-drawings! (v2 c2 y) lo-text-id lo-contents-id lo-text-id lo-contents-id layer spacing)
+  (add-state-drawings! (v2 c3 y) combined-text-id combined-contents-id combined-text-id combined-contents-id layer spacing))
+
+(defhandler load-cpu-visualization (event)
+  (when (event-font-opened? event :font)
+    (load-text-texture! :no :font "[No]")
+    (load-text-texture! :yes :font "[Yes]")
+    (load-text-texture! :zero :font "Zero?")
+    (load-text-texture! :subtraction :font "Subtraction?")
+    (load-text-texture! :half-carry :font "Half-carry?")
+    (load-text-texture! :carry :font "Carry?")
+
+    (load-text-texture! :a-register :font "A")
+    (load-text-texture! :f-register :font "F")
+    (load-text-texture! :af-register :font "AF")
+    (load-text-texture! :a-register-contents :font "0xDEAD")
+    (load-text-texture! :f-register-contents :font "0xBEEF")
+    (load-text-texture! :af-register-contents :font "0xDEADBEEF")
+
+    (load-text-texture! :b-register :font "B")
+    (load-text-texture! :c-register :font "C")
+    (load-text-texture! :bc-register :font "BC")
+    (load-text-texture! :b-register-contents :font "0xDEAD")
+    (load-text-texture! :c-register-contents :font "0xBEEF")
+    (load-text-texture! :bc-register-contents :font "0xDEADBEEF")
+
+    (load-text-texture! :d-register :font "D")
+    (load-text-texture! :e-register :font "E")
+    (load-text-texture! :de-register :font "DE")
+    (load-text-texture! :d-register-contents :font "0xDEAD")
+    (load-text-texture! :e-register-contents :font "0xBEEF")
+    (load-text-texture! :de-register-contents :font "0xDEADBEEF")
+
+
+    (load-text-texture! :h-register :font "H")
+    (load-text-texture! :l-register :font "L")
+    (load-text-texture! :hl-register :font "HL")
+    (load-text-texture! :h-register-contents :font "0xDEAD")
+    (load-text-texture! :l-register-contents :font "0xBEEF")
+    (load-text-texture! :hl-register-contents :font "0xDEADBEEF")
+
+    (load-text-texture! :stack-pointer :font "Stack Pointer:")
+    (load-text-texture! :stack-pointer-contents :font "0xDEADBEEF")
+
+    (load-text-texture! :program-counter :font "Program Counter:")
+    (load-text-texture! :program-counter-contents :font "0xDEADBEEF")
+
+    (let* ((bottom-layer 1)
+	   (left-column 380)
+	   (right-column 580)
+	   (spacing 5)
+	   (y-spacing 6)
+	   (y-offset (+ (texture-height (gethash :subtraction *textures*)) y-spacing))
+	   (y 100))
+      (add-state-drawings! (v2 left-column y) :zero :zero-state :zero :no bottom-layer spacing)
+      (add-state-drawings! (v2 right-column y) :subtraction :subtraction-state :subtraction :yes bottom-layer spacing)
+      
+      (incf y y-offset)
+      (add-state-drawings! (v2 left-column y) :half-carry :half-carry-state :half-carry :no bottom-layer spacing)
+      (add-state-drawings! (v2 right-column y) :carry :carry-state :carry :yes bottom-layer spacing)
+
+      (incf y 10)
+      (let ((c1 300)
+	    (c2 400)
+	    (c3 530))
+	(incf y y-offset)
+	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				      :a-register :a-register-contents
+				      :f-register :f-register-contents
+				      :af-register :af-register-contents)
+
+	(incf y y-offset)
+	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				      :b-register :b-register-contents
+				      :c-register :c-register-contents
+				      :bc-register :bc-register-contents)
+
+	(incf y y-offset)
+	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				      :d-register :d-register-contents
+				      :e-register :e-register-contents
+				      :de-register :de-register-contents)
+
+	(incf y y-offset)
+	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				      :h-register :h-register-contents
+				      :l-register :l-register-contents
+				      :hl-register :hl-register-contents))
+
+      (incf y 10)
+      (let ((column 490))
+	(incf y y-offset)
+	(add-state-drawings! (v2 column y)
+			     :stack-pointer :stack-pointer-contents
+			     :stack-pointer :stack-pointer-contents
+			     bottom-layer spacing)
+
+	(incf y y-offset)
+	(add-state-drawings! (v2 column y)
+			     :program-counter :program-counter-contents
+			     :program-counter :program-counter-contents
+			     bottom-layer spacing)))))
+
+(defun update-cpu-visualization! (cpu)
+  (load-text-texture! :a-register-contents :font (register8-text (cpu-a cpu)))
+  (load-text-texture! :f-register-contents :font (register8-text (cpu-f cpu)))
+  (load-text-texture! :af-register-contents :font (register16-text (cpu-af cpu)))
+  (load-text-texture! :b-register-contents :font (register8-text (cpu-b cpu)))
+  (load-text-texture! :c-register-contents :font (register8-text (cpu-c cpu)))
+  (load-text-texture! :bc-register-contents :font (register16-text (cpu-bc cpu)))
+  (load-text-texture! :d-register-contents :font (register8-text (cpu-d cpu)))
+  (load-text-texture! :e-register-contents :font (register8-text (cpu-e cpu)))
+  (load-text-texture! :de-register-contents :font (register16-text (cpu-de cpu)))
+  (load-text-texture! :h-register-contents :font (register8-text (cpu-h cpu)))
+  (load-text-texture! :l-register-contents :font (register8-text (cpu-l cpu)))
+  (load-text-texture! :hl-register-contents :font (register16-text (cpu-hl cpu)))
+  (load-text-texture! :stack-pointer-contents :font (register16-text (cpu-sp cpu)))
+  (load-text-texture! :program-counter-contents :font (register16-text (cpu-pc cpu)))
+
+  (let* ((bottom-layer 1)
+	 (left-column 380)
+	 (right-column 580)
+	 (spacing 5)
+	 (y-spacing 6)
+	 (y-offset (+ (texture-height (gethash :subtraction *textures*)) y-spacing))
+	 (y 100))
+    (add-state-drawings! (v2 left-column y) :zero :zero-state :zero :no bottom-layer spacing)
+    (add-state-drawings! (v2 right-column y) :subtraction :subtraction-state :subtraction :yes bottom-layer spacing)
+    
+    (incf y y-offset)
+    (add-state-drawings! (v2 left-column y) :half-carry :half-carry-state :half-carry :no bottom-layer spacing)
+    (add-state-drawings! (v2 right-column y) :carry :carry-state :carry :yes bottom-layer spacing)
+
+    (incf y 10)
+    (let ((c1 300)
+	  (c2 400)
+	  (c3 530))
+      (incf y y-offset)
+      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				    :a-register :a-register-contents
+				    :f-register :f-register-contents
+				    :af-register :af-register-contents)
+
+      (incf y y-offset)
+      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				    :b-register :b-register-contents
+				    :c-register :c-register-contents
+				    :bc-register :bc-register-contents)
+
+      (incf y y-offset)
+      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				    :d-register :d-register-contents
+				    :e-register :e-register-contents
+				    :de-register :de-register-contents)
+
+      (incf y y-offset)
+      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+				    :h-register :h-register-contents
+				    :l-register :l-register-contents
+				    :hl-register :hl-register-contents))
+
+    (incf y 10)
+    (let ((column 490))
+      (incf y y-offset)
+      (add-state-drawings! (v2 column y)
+			   :stack-pointer :stack-pointer-contents
+			   :stack-pointer :stack-pointer-contents
+			   bottom-layer spacing)
+
+      (incf y y-offset)
+      (add-state-drawings! (v2 column y)
+			   :program-counter :program-counter-contents
+			   :program-counter :program-counter-contents
+			   bottom-layer spacing))))
 
 (defparameter *new-button-spec*
   (make-instance
@@ -588,3 +799,25 @@ Test-fn and handle-fn are both functions of event."
 (event! (make-instance 'event-generic :fn (fn (create-button! *new-button-spec*))))
 #+nil
 (event! (make-instance 'event-generic :fn (fn (destroy-button! *new-button-spec*))))
+
+
+(defstruct cpu
+  a b c d e f h l sp pc flag)
+
+(defun register8-text (register)
+  (format nil "0x~2,'0x" register))
+(defun register16-text (register)
+  (format nil "0x~4,'0x" register))
+
+(defun combined-register (hi lo)
+  ;; TODO: determine if we use arithemtic shift or logical shift.
+  (+ (ash hi 8) lo))
+(defun cpu-af (cpu)
+  (combined-register (cpu-a cpu) (cpu-f cpu)))
+(defun cpu-bc (cpu)
+  (combined-register (cpu-b cpu) (cpu-c cpu)))
+(defun cpu-de (cpu)
+  (combined-register (cpu-d cpu) (cpu-e cpu)))
+(defun cpu-hl (cpu)
+  (combined-register (cpu-h cpu) (cpu-l cpu)))
+
