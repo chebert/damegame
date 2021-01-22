@@ -713,6 +713,9 @@ Test-fn and handle-fn are both functions of event."
 			     :program-counter :program-counter-contents
 			     bottom-layer spacing)))))
 
+(defun state-drawing-id (set?)
+  (if set? :yes :no))
+
 (defun update-cpu-visualization! (cpu)
   (load-text-texture! :a-register-contents :font (register8-text (cpu-a cpu)))
   (load-text-texture! :f-register-contents :font (register8-text (cpu-f cpu)))
@@ -736,54 +739,18 @@ Test-fn and handle-fn are both functions of event."
 	 (y-spacing 6)
 	 (y-offset (+ (texture-height (gethash :subtraction *textures*)) y-spacing))
 	 (y 100))
-    (add-state-drawings! (v2 left-column y) :zero :zero-state :zero :no bottom-layer spacing)
-    (add-state-drawings! (v2 right-column y) :subtraction :subtraction-state :subtraction :yes bottom-layer spacing)
+    (add-drawing! :zero-state (left-aligned-texture-drawing (state-drawing-id (cpu-zero? cpu)) (v2 left-column y) bottom-layer spacing))
+    (add-drawing! :subtraction-state (left-aligned-texture-drawing
+				      (state-drawing-id (cpu-subtraction? cpu))
+				      (v2 right-column y)
+				      bottom-layer spacing))
     
     (incf y y-offset)
-    (add-state-drawings! (v2 left-column y) :half-carry :half-carry-state :half-carry :no bottom-layer spacing)
-    (add-state-drawings! (v2 right-column y) :carry :carry-state :carry :yes bottom-layer spacing)
-
-    (incf y 10)
-    (let ((c1 300)
-	  (c2 400)
-	  (c3 530))
-      (incf y y-offset)
-      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
-				    :a-register :a-register-contents
-				    :f-register :f-register-contents
-				    :af-register :af-register-contents)
-
-      (incf y y-offset)
-      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
-				    :b-register :b-register-contents
-				    :c-register :c-register-contents
-				    :bc-register :bc-register-contents)
-
-      (incf y y-offset)
-      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
-				    :d-register :d-register-contents
-				    :e-register :e-register-contents
-				    :de-register :de-register-contents)
-
-      (incf y y-offset)
-      (add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
-				    :h-register :h-register-contents
-				    :l-register :l-register-contents
-				    :hl-register :hl-register-contents))
-
-    (incf y 10)
-    (let ((column 490))
-      (incf y y-offset)
-      (add-state-drawings! (v2 column y)
-			   :stack-pointer :stack-pointer-contents
-			   :stack-pointer :stack-pointer-contents
-			   bottom-layer spacing)
-
-      (incf y y-offset)
-      (add-state-drawings! (v2 column y)
-			   :program-counter :program-counter-contents
-			   :program-counter :program-counter-contents
-			   bottom-layer spacing))))
+    (add-drawing! :half-carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-half-carry? cpu))
+								  (v2 left-column y)
+								  bottom-layer spacing))
+    (add-drawing! :carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-carry? cpu))
+							     (v2 right-column y) bottom-layer spacing))))
 
 (defparameter *new-button-spec*
   (make-instance
@@ -821,3 +788,17 @@ Test-fn and handle-fn are both functions of event."
 (defun cpu-hl (cpu)
   (combined-register (cpu-h cpu) (cpu-l cpu)))
 
+(defun cpu-zero? (cpu)
+  (not (zerop (logand (cpu-flag cpu) #b1000))))
+(defun cpu-subtraction? (cpu)
+  (not (zerop (logand (cpu-flag cpu) #b0100))))
+(defun cpu-half-carry? (cpu)
+  (not (zerop (logand (cpu-flag cpu) #b0010))))
+(defun cpu-carry? (cpu)
+  (not (zerop (logand (cpu-flag cpu) #b0001))))
+
+#+nil
+(user-event!
+  (update-cpu-visualization!
+   (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8
+	     :sp 9 :pc 10 :flag #b1010)))
