@@ -84,7 +84,8 @@
   (let ((result (gensym)))
     `(let ((,result ,form))
        (unless ,result
-	 (error "(CHECK ~S) failed" ,form))
+	 (continuable
+	   (error "(CHECK ~S) failed" ,form)))
        :check)))
 
 (defmacro checkeql (a b)
@@ -94,7 +95,8 @@
     `(let ((,a-val ,a)
 	   (,b-val ,b))
        (unless (eql ,a-val ,b-val)
-	 (error "~S => ~S does not EQL ~S => ~S" ',a ,a-val ',b ,b-val))
+	 (continuable
+	   (error "~S => ~S does not EQL ~S => ~S" ',a ,a-val ',b ,b-val)))
        :check)))
 
 (defun for-each-input-event! (fn)
@@ -354,11 +356,11 @@ From the plist (id value id2 value2 ...)"
   (when (and (control-pressed? control) (control-hovered? control))
     (notify-handlers! (make-instance
 		       'event-control-clicked
-		       :control-id control-id)))
-  (setf (slot-value control 'control-pressed?) nil)
-  (add-drawing! (control-drawing-id control)
-		(make-instance 'drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-						  :rect (control-rect control))))
+		       :control-id control-id))
+    (setf (slot-value control 'control-pressed?) nil)
+    (add-drawing! (control-drawing-id control)
+		  (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 255 255)
+						    :rect (control-rect control)))))
 
 (defun update! ()
   "Handles events, handles input events,
@@ -626,7 +628,10 @@ Test-fn and handle-fn are both functions of event."
   (add-state-drawings! (v2 c2 y) lo-text-id lo-contents-id lo-text-id lo-contents-id layer spacing)
   (add-state-drawings! (v2 c3 y) combined-text-id combined-contents-id combined-text-id combined-contents-id layer spacing))
 
-(defparameter *cpu* (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8 :sp 9 :pc 10 :flag #b1010))
+(defstruct cpu
+  a b c d e f h l sp pc flag)
+
+(defvar *cpu* (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8 :sp 9 :pc 10 :flag #b1010))
 (defparameter *cpu-state-left-column* 380)
 (defparameter *cpu-state-right-column* 580)
 (defparameter *cpu-state-spacing* 5)
@@ -774,10 +779,7 @@ Test-fn and handle-fn are both functions of event."
 (event! (make-instance 'event-generic :fn (fn (destroy-button! *new-button-spec*))))
 
 
-(defstruct cpu
-  a b c d e f h l sp pc flag)
-
-(defparameter *number-base* :binary)
+(defparameter *number-base* :hexadecimal)
 
 (defun s8 (value)
   (if (> value 127)
@@ -842,6 +844,237 @@ Test-fn and handle-fn are both functions of event."
   (let ((*number-base* :unsigned))
     (update-cpu-visualization!
      (make-cpu :a 128 :b 255 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8
-	       :sp 9 :pc 10 :flag #b1010))))
+	       :sp 9 :pc #x100 :flag #b1010))))
 
+(defun read-rom-file! (filename)
+  (with-open-file (stream filename :direction :input :element-type 'unsigned-byte)
+    (let* ((length (file-length stream))
+	   (array (make-array (list length) :element-type 'unsigned-byte :initial-element 0)))
+      (loop for i below length
+	    do (setf (aref array i) (read-byte stream)))
+      array)))
+
+(defparameter *rom* (read-rom-file! "gb_bios.bin"))
+(defvar *memory* (make-array (list (1+ #xffff))
+			     :element-type 'unsigned-byte
+			     :initial-element 0))
+
+(defun reset-memory! ()
+  (setq *memory* (make-array (list (1+ #xffff))
+			     :element-type 'unsigned-byte
+			     :initial-element 0)))
+
+(defun read-rom-file-into-memory! (filename &optional (start-addr 0))
+  (with-open-file (stream filename :direction :input :element-type 'unsigned-byte)
+    (let* ((length (file-length stream)))
+      (loop for i below length
+	    do (setf (aref *memory* (+ i start-addr)) (read-byte stream))))))
+
+
+(defun hi-byte (u16)
+  (truncate (logand #xFF00 u16) 256))
+(defun lo-byte (u16)
+  (logand #xFF u16))
+
+(deftest test-hi-and-lo-byte
+  (let ((n #xfefa))
+    (checkeql n (combined-register (hi-byte n) (lo-byte n)))))
+
+(defun flag (zero subtraction half-carry carry)
+  (logior (* 8 zero)
+	  (* 4 subtraction)
+	  (* 2 half-carry)
+	  carry))
+
+(defun prinl (&rest args)
+  (print args))
+
+(defun half-carry? (old new)
+  (and
+   (not (zerop (logand #b1000 old)))
+   (zerop (logand #b1000 new))))
+
+(defun disassemble-instr (pc memory)
+  (let* ((instr (aref memory pc)))
+    (ecase instr
+      (#x0c (list :inc-c))
+      (#x0e (list :ld-c-d8 :d8 (register8-text (aref memory (1+ pc)))))
+      (#x20 (let ((s8 (s8 (aref memory (1+ pc)))))
+	      (list :jr-nz-s8 :s8 s8 :addr (register16-text (+ pc s8 2)))))
+      (#x21 (list :ld-hl-d16 :d16 (register16-text (combined-register (aref memory (+ 2 pc))
+								      (aref memory (1+ pc))))))
+      (#x31 (list :ld-sp-imm :imm (register16-text
+				   (combined-register (aref memory (+ pc 2)) (aref memory (1+ pc))))))
+      (#x32 (list :ld-hl-a))
+      (#x3e (list :ld-a-d8 :d8 (register8-text (aref memory (1+ pc)))))
+      (#xAF (list :xor-a))
+      (#xCB
+       (let* ((pc (1+ pc))
+	      (instr (aref memory pc)))
+	 (ecase instr
+	   (#x7c (list :bit-7-h)))))
+
+      (#xE2 (list :ld-@c-a)))))
+
+(defun execute! ()
+  (let* ((pc (cpu-pc *cpu*))
+	 (instr (aref *memory* pc)))
+    (ecase instr
+      (#x0c
+       ;; Inc C
+       ;; 1 cycles
+       (let* ((c (1+ (cpu-c *cpu*))))
+	 (setf (cpu-flag *cpu*)
+	       (flag (if (zerop c) 1 0)
+		     0
+		     (if (half-carry? (cpu-c *cpu*) c) 1 0)
+		     (if (cpu-carry? *cpu*) 1 0)))
+	 (setf (cpu-c *cpu*) c))
+       (incf (cpu-pc *cpu*) 1))
+      (#x0e
+       ;; Ld C, d8
+       ;; 2 cycles
+       (setf (cpu-c *cpu*) (aref *memory* (1+ pc)))
+       (incf (cpu-pc *cpu*) 2))
+      (#x20
+       ;; JR NZ, s8
+       (prinl 'jr-nz-s8 'zero? (cpu-zero? *cpu*) pc)
+       (if (cpu-zero? *cpu*)
+	   (let* ((s8 (s8 (aref *memory* (1+ pc)))))
+	     (prinl 'offset= s8 'next-pc= (+ pc s8 2))
+	     ;; 3 cycles
+	     (setf (cpu-pc *cpu*) (+ pc s8 2)))
+	   ;; 2 cycles
+	   (incf (cpu-pc *cpu*) 2)))
+      (#x21
+       ;; LD HL d16
+       ;; 3 cycles
+       (setf (cpu-l *cpu*) (aref *memory* (1+ pc))
+	     (cpu-h *cpu*) (aref *memory* (+ 2 pc)))
+       (prinl 'ld-hl-d16 :l (cpu-l *cpu*) :h (cpu-h *cpu*))
+       (incf (cpu-pc *cpu*) 3))
+      (#x31
+       ;; LD SP Immediate
+       ;; 3 cycles
+       (setf (cpu-sp *cpu*) (combined-register (aref *memory* (+ pc 2)) (aref *memory* (1+ pc))))
+       (prinl 'ld-sp-immediate :sp (cpu-sp *cpu*))
+       (incf (cpu-pc *cpu*) 3))
+      (#x32
+       ;; LD HL- A
+       ;; 2 cycles
+       (setf (aref *memory* (cpu-hl *cpu*)) (cpu-a *cpu*))
+       (let* ((hl (1- (cpu-hl *cpu*))))
+	 (prinl 'ld-hl-a 'hl-before (cpu-hl *cpu*) 'hl hl)	 
+	 (setf (cpu-h *cpu*) (hi-byte hl)
+	       (cpu-l *cpu*) (lo-byte hl)))
+       (incf (cpu-pc *cpu*) 1))
+      (#x3e
+       ;; LD a, d8
+       ;; 2 cycles
+       ;; see 0x0e
+       (setf (cpu-a *cpu*) (aref *memory* (1+ pc)))
+       (incf (cpu-pc *cpu*) 2))
+      (#xAF
+       ;; XOR A
+       ;; 1 cycles
+       (setf (cpu-a *cpu*) 0
+	     (cpu-flag *cpu*) #b1000)
+       (incf (cpu-pc *cpu*) 1))
+
+      (#xCB
+       (let* ((pc (1+ pc))
+	      (instr (aref *memory* pc)))
+	 (ecase instr
+	   (#x7c
+	    ;; Bit 7, H
+	    ;; 2 cycles
+	    (let* ((z (if (zerop (logand (cpu-h *cpu*) #x80))
+			  1
+			  0))
+		   (s 0)
+		   (h 1)
+		   (c (if (cpu-carry? *cpu*) 1 0)))
+	      (setf (cpu-flag *cpu*) (flag z s h c))
+	      (incf (cpu-pc *cpu*) 2))))))
+
+      (#xE2
+       ;; LD (C) a
+       ;; 2 cycles
+       (setf (aref *memory* (+ #xff00 (cpu-c *cpu*)))
+	     (cpu-a *cpu*))
+       (incf (cpu-pc *cpu*) 1)))))
 (run-tests!)
+
+(register8-text 12)
+
+(defun reset! ()
+  (setq *cpu* (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0 :flag 0))
+  (update-cpu-visualization! *cpu*)
+  (reset-memory!)
+  (read-rom-file-into-memory! "gb_bios.bin"))
+
+(defhandler handle-initialize-cpu-visualization (event)
+  (when (event-font-opened? event :font)
+    (load-text-texture! :disassembly :font "(Disassembly)")
+    (add-drawing! :disassembly (make-instance 'drawing-full-texture :pos (v2 20 480) :texture-id :disassembly :layer 1))
+
+    (load-text-texture! :disassembly-next :font "(Next Disassembly)")
+    (add-drawing! :disassembly-next (make-instance 'drawing-full-texture :pos (v2 20 500) :texture-id :disassembly-next :layer 1))
+
+    (reset!)))
+
+#+nil
+(user-event! (reset!))
+
+#+nil
+(user-event!
+  (let ((*number-base* :hexadecimal))
+    (update-cpu-visualization! *cpu*)))
+
+(let ((font-id :font)
+      (texture-id (gensym))
+      (text-drawing-id (gensym))
+      (control-id (gensym))
+      (control-drawing-id (gensym))
+      (text "Execute!")
+      (bottom-layer 1)
+      (pos (v2 20 520)))
+
+  (defhandler execute-font-opened (event)
+    (when (event-font-opened? event font-id)
+      (load-text-texture! texture-id font-id text)
+      (add-drawing! text-drawing-id
+		    (make-instance
+		     'drawing-full-texture
+		     :layer (1+ bottom-layer)
+		     :texture-id texture-id :pos pos))))
+  
+  (defhandler execute-button-clicked (event)
+    (when (event-control-clicked? event control-id)
+      (let ((prev (format nil "~a: ~S"
+			  (register16-text (cpu-pc *cpu*))
+			  (disassemble-instr (cpu-pc *cpu*) *memory*))))
+	(execute!)
+	(load-text-texture! :disassembly :font prev)
+	(load-text-texture! :disassembly-next
+			    :font
+			    (format nil "~a: ~S"
+				    (register16-text (cpu-pc *cpu*))
+				    (disassemble-instr (cpu-pc *cpu*) *memory*)))
+	(update-cpu-visualization! *cpu*))))
+
+  (defhandler execute-texture-loaded (event)
+    (when (event-texture-loaded? event texture-id)
+      (let* ((texture (gethash texture-id *textures*))
+	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
+	(add-control! control-id
+		      (make-instance
+		       'control
+		       :rect rect :hovered? nil :pressed? nil
+		       :drawing-id control-drawing-id))))))
+
+
+;; show me last instruction and next instruction
+;; disassemble the instruction to show it to me.
+;; show me what changed
+;; show me some memory (memory being accessed?)
