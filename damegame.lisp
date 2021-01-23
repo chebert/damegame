@@ -6,7 +6,17 @@
   (defun make-keyword (symbol)
     (intern (symbol-name symbol) (find-package :keyword)))
   (defun symbolicate (&rest symbols)
-    (intern (apply 'concatenate 'string (mapcar 'symbol-name symbols)))))
+    (intern (apply 'concatenate 'string (mapcar 'symbol-name symbols))))
+  (defvar *tests* (make-hash-table)))
+
+(defmacro deftest (name &body body)
+  `(progn
+     (defun ,name ()
+       ,@body)
+     (setf (gethash ',name *tests*) ',name)))
+(defmacro undeftest (name &rest unused)
+  (declare (ignore unused))
+  `(remhash ',name *tests*))
 
 
 (defmacro fn (&body body)
@@ -14,6 +24,9 @@
   `(lambda (&optional % %% %%%)
      (declare (ignorable % %% %%%))
      ,@body))
+
+(defun run-tests! ()
+  (maphash (fn (funcall %)) *tests*))
 
 (defmacro defcloss (name direct-superclasses &rest documentation-and-slot-names)
   "Defcloss provides a similar interface to defstruct (with the addition of direct-superclasses)."
@@ -613,6 +626,16 @@ Test-fn and handle-fn are both functions of event."
   (add-state-drawings! (v2 c2 y) lo-text-id lo-contents-id lo-text-id lo-contents-id layer spacing)
   (add-state-drawings! (v2 c3 y) combined-text-id combined-contents-id combined-text-id combined-contents-id layer spacing))
 
+(defparameter *cpu* (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8 :sp 9 :pc 10 :flag #b1010))
+(defparameter *cpu-state-left-column* 380)
+(defparameter *cpu-state-right-column* 580)
+(defparameter *cpu-state-spacing* 5)
+(defparameter *cpu-state-y* 100)
+(defparameter *cpu-state-layer* 1)
+
+(defun cpu-state-y-offset ()
+  (+ (texture-height (gethash :subtraction *textures*)) 6))
+
 (defhandler load-cpu-visualization (event)
   (when (event-font-opened? event :font)
     (load-text-texture! :no :font "[No]")
@@ -621,80 +644,60 @@ Test-fn and handle-fn are both functions of event."
     (load-text-texture! :subtraction :font "Subtraction?")
     (load-text-texture! :half-carry :font "Half-carry?")
     (load-text-texture! :carry :font "Carry?")
-
     (load-text-texture! :a-register :font "A")
     (load-text-texture! :f-register :font "F")
     (load-text-texture! :af-register :font "AF")
-    (load-text-texture! :a-register-contents :font "0xDEAD")
-    (load-text-texture! :f-register-contents :font "0xBEEF")
-    (load-text-texture! :af-register-contents :font "0xDEADBEEF")
-
     (load-text-texture! :b-register :font "B")
     (load-text-texture! :c-register :font "C")
     (load-text-texture! :bc-register :font "BC")
-    (load-text-texture! :b-register-contents :font "0xDEAD")
-    (load-text-texture! :c-register-contents :font "0xBEEF")
-    (load-text-texture! :bc-register-contents :font "0xDEADBEEF")
-
     (load-text-texture! :d-register :font "D")
     (load-text-texture! :e-register :font "E")
     (load-text-texture! :de-register :font "DE")
-    (load-text-texture! :d-register-contents :font "0xDEAD")
-    (load-text-texture! :e-register-contents :font "0xBEEF")
-    (load-text-texture! :de-register-contents :font "0xDEADBEEF")
-
-
     (load-text-texture! :h-register :font "H")
     (load-text-texture! :l-register :font "L")
     (load-text-texture! :hl-register :font "HL")
-    (load-text-texture! :h-register-contents :font "0xDEAD")
-    (load-text-texture! :l-register-contents :font "0xBEEF")
-    (load-text-texture! :hl-register-contents :font "0xDEADBEEF")
-
     (load-text-texture! :stack-pointer :font "Stack Pointer:")
-    (load-text-texture! :stack-pointer-contents :font "0xDEADBEEF")
-
     (load-text-texture! :program-counter :font "Program Counter:")
-    (load-text-texture! :program-counter-contents :font "0xDEADBEEF")
 
-    (let* ((bottom-layer 1)
-	   (left-column 380)
-	   (right-column 580)
-	   (spacing 5)
-	   (y-spacing 6)
-	   (y-offset (+ (texture-height (gethash :subtraction *textures*)) y-spacing))
-	   (y 100))
-      (add-state-drawings! (v2 left-column y) :zero :zero-state :zero :no bottom-layer spacing)
-      (add-state-drawings! (v2 right-column y) :subtraction :subtraction-state :subtraction :yes bottom-layer spacing)
+    (update-cpu-visualization! *cpu*)
+
+    (let* ((layer *cpu-state-layer*)
+	   (left-column *cpu-state-left-column*)
+	   (right-column *cpu-state-right-column*)
+	   (spacing *cpu-state-spacing*)
+	   (y-offset (cpu-state-y-offset))
+	   (y *cpu-state-y*))
+      (add-drawing! :zero (right-aligned-texture-drawing :zero (v2 left-column y) layer spacing))
+      (add-drawing! :subtraction (right-aligned-texture-drawing :subtraction (v2 right-column y) layer spacing))
       
       (incf y y-offset)
-      (add-state-drawings! (v2 left-column y) :half-carry :half-carry-state :half-carry :no bottom-layer spacing)
-      (add-state-drawings! (v2 right-column y) :carry :carry-state :carry :yes bottom-layer spacing)
+      (add-drawing! :half-carry (right-aligned-texture-drawing :half-carry (v2 left-column y) layer spacing))
+      (add-drawing! :carry (right-aligned-texture-drawing :carry (v2 right-column y) layer spacing))
 
       (incf y 10)
-      (let ((c1 300)
-	    (c2 400)
-	    (c3 530))
+      (let ((c1 280)
+	    (c2 415)
+	    (c3 560))
 	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
 				      :a-register :a-register-contents
 				      :f-register :f-register-contents
 				      :af-register :af-register-contents)
 
 	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
 				      :b-register :b-register-contents
 				      :c-register :c-register-contents
 				      :bc-register :bc-register-contents)
 
 	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
 				      :d-register :d-register-contents
 				      :e-register :e-register-contents
 				      :de-register :de-register-contents)
 
 	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y bottom-layer spacing
+	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
 				      :h-register :h-register-contents
 				      :l-register :l-register-contents
 				      :hl-register :hl-register-contents))
@@ -705,13 +708,13 @@ Test-fn and handle-fn are both functions of event."
 	(add-state-drawings! (v2 column y)
 			     :stack-pointer :stack-pointer-contents
 			     :stack-pointer :stack-pointer-contents
-			     bottom-layer spacing)
+			     layer spacing)
 
 	(incf y y-offset)
 	(add-state-drawings! (v2 column y)
 			     :program-counter :program-counter-contents
 			     :program-counter :program-counter-contents
-			     bottom-layer spacing)))))
+			     layer spacing)))))
 
 (defun state-drawing-id (set?)
   (if set? :yes :no))
@@ -729,28 +732,31 @@ Test-fn and handle-fn are both functions of event."
   (load-text-texture! :h-register-contents :font (register8-text (cpu-h cpu)))
   (load-text-texture! :l-register-contents :font (register8-text (cpu-l cpu)))
   (load-text-texture! :hl-register-contents :font (register16-text (cpu-hl cpu)))
-  (load-text-texture! :stack-pointer-contents :font (register16-text (cpu-sp cpu)))
-  (load-text-texture! :program-counter-contents :font (register16-text (cpu-pc cpu)))
+  (load-text-texture! :stack-pointer-contents :font
+		      (let ((*number-base* :hexadecimal))
+			(register16-text (cpu-sp cpu))))
+  (load-text-texture! :program-counter-contents :font
+		      (let ((*number-base* :hexadecimal))
+			(register16-text (cpu-pc cpu))))
 
-  (let* ((bottom-layer 1)
-	 (left-column 380)
-	 (right-column 580)
-	 (spacing 5)
-	 (y-spacing 6)
-	 (y-offset (+ (texture-height (gethash :subtraction *textures*)) y-spacing))
-	 (y 100))
-    (add-drawing! :zero-state (left-aligned-texture-drawing (state-drawing-id (cpu-zero? cpu)) (v2 left-column y) bottom-layer spacing))
+  (let* ((layer *cpu-state-layer*)
+	 (left-column *cpu-state-left-column*)
+	 (right-column *cpu-state-right-column*)
+	 (spacing *cpu-state-spacing*)
+	 (y-offset (cpu-state-y-offset))
+	 (y *cpu-state-y*))
+    (add-drawing! :zero-state (left-aligned-texture-drawing (state-drawing-id (cpu-zero? cpu)) (v2 left-column y) layer spacing))
     (add-drawing! :subtraction-state (left-aligned-texture-drawing
 				      (state-drawing-id (cpu-subtraction? cpu))
 				      (v2 right-column y)
-				      bottom-layer spacing))
+				      layer spacing))
     
     (incf y y-offset)
     (add-drawing! :half-carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-half-carry? cpu))
 								  (v2 left-column y)
-								  bottom-layer spacing))
+								  layer spacing))
     (add-drawing! :carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-carry? cpu))
-							     (v2 right-column y) bottom-layer spacing))))
+							     (v2 right-column y) layer spacing))))
 
 (defparameter *new-button-spec*
   (make-instance
@@ -771,10 +777,44 @@ Test-fn and handle-fn are both functions of event."
 (defstruct cpu
   a b c d e f h l sp pc flag)
 
+(defparameter *number-base* :binary)
+
+(defun s8 (value)
+  (if (> value 127)
+      (- value 256)
+      value))
+(defun s16 (value)
+  (if (>= value (expt 2 15))
+      (- value (expt 2 16))
+      value))
+
+(deftest test-s8
+  (checkeql (s8 #x7f) (1- (expt 2 7)))
+  (checkeql (s8 #x0) 0)
+  (checkeql (s8 #xff) -1))
+(deftest test-s16
+  (checkeql (s16 #x7fff) (1- (expt 2 15)))
+  (checkeql (s16 #x0) 0)
+  (checkeql (s16 #xffff) -1))
+
 (defun register8-text (register)
-  (format nil "0x~2,'0x" register))
+  (ecase *number-base*
+    (:hexadecimal
+     (format nil "0x~2,'0x" register))
+    (:signed
+     (format nil "~d" (s8 register)))
+    (:unsigned
+     (format nil "~d" register))
+    (:binary
+     (format nil "0b~8,'0b" register))))
 (defun register16-text (register)
-  (format nil "0x~4,'0x" register))
+  (ecase *number-base*
+    ((:hexadecimal :binary)
+     (format nil "0x~4,'0x" register))
+    (:signed
+     (format nil "~d" (s16 register)))
+    (:unsigned
+     (format nil "~d" register))))
 
 (defun combined-register (hi lo)
   ;; TODO: determine if we use arithemtic shift or logical shift.
@@ -799,6 +839,9 @@ Test-fn and handle-fn are both functions of event."
 
 #+nil
 (user-event!
-  (update-cpu-visualization!
-   (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8
-	     :sp 9 :pc 10 :flag #b1010)))
+  (let ((*number-base* :unsigned))
+    (update-cpu-visualization!
+     (make-cpu :a 128 :b 255 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8
+	       :sp 9 :pc 10 :flag #b1010))))
+
+(run-tests!)
