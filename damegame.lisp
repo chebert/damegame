@@ -152,7 +152,10 @@ Removes events from the queue."
 	 (h (texture-height texture)))
     (draw-texture! texture 0 0 w h dx dy w h)))
 
+(defparameter *grid-size* 20)
+
 (defun v2 (x y) (vector x y))
+(defun g2 (grid-x grid-y) (v2 (* grid-x *grid-size*) (* grid-y *grid-size*)))
 (defun rect (x y w h) (vector x y w h))
 (defun x (v) (aref v 0))
 (defun y (v) (aref v 1))
@@ -362,6 +365,8 @@ From the plist (id value id2 value2 ...)"
 		  (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 255 255)
 						    :rect (control-rect control)))))
 
+(defparameter *highlight-grid-pos?* t)
+
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
@@ -376,6 +381,8 @@ updates based on timestep, and renders to the screen."
 	 (event-mousemove
 	  (setq *mouse-x* (event-mousemove-x %)
 		*mouse-y* (event-mousemove-y %))
+	  (when (gethash :font *fonts*)
+	    (load-text-texture! :mouse-pos :font (mouse-pos-text)))
 	  (mapcar (fn (control-handle-mouse-move! (cdr %))) *controls*))
 	 (event-mousedown
 	  (when (eql :left (event-mousedown-button %))
@@ -389,6 +396,12 @@ updates based on timestep, and renders to the screen."
   ;; Render to the screen
   (set-draw-color! 0 0 0 255)
   (clear!)
+  (when *highlight-grid-pos?*
+    (set-draw-color! 255 0 255 255)
+    (fill-rect! (* *grid-size* (truncate *mouse-x* *grid-size*))
+		(* *grid-size* (truncate *mouse-y* *grid-size*))
+		*grid-size*
+		*grid-size*))
   (amap 'draw! *drawings*)
   (present!)
   
@@ -447,6 +460,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (clrhash *fonts*)
 	 (clrhash *textures*)
 	 (clrhash *event-handlers*)
+	 (clrhash *buttons*)
 	 (setq *drawings* ())
 	 (setq *events* ())
 	 (setq *controls* ())
@@ -499,7 +513,8 @@ Test-fn and handle-fn are both functions of event."
   texture-id
   text-drawing-id
   text bottom-layer pos)
-(defun create-button! (button-spec)
+(defvar *buttons* (make-hash-table))
+(defun create-button! (button-id button-spec)
   "Creates a button from the button spec."
   (let ((texture-id (button-spec-texture-id button-spec))
 	(text-drawing-id (button-spec-text-drawing-id button-spec))
@@ -507,13 +522,15 @@ Test-fn and handle-fn are both functions of event."
 	(text (button-spec-text button-spec)))
     (register-one-off-handler!
      (fn (event-texture-loaded? % texture-id))
-     (fn (add-control!
-	  (button-spec-control-id button-spec)
-	  (make-instance
-	   'control
-	   :rect (texture-rect pos (gethash texture-id *textures*))
-	   :hovered? nil :pressed? nil
-	   :drawing-id (gensym)))))
+     (fn
+       (add-control!
+	(button-spec-control-id button-spec)
+	(make-instance
+	 'control
+	 :rect (texture-rect pos (gethash texture-id *textures*))
+	 :hovered? nil :pressed? nil
+	 :drawing-id (gensym)))
+       (setf (gethash button-id *buttons*) button-spec)))
 
     (let* ((font-id (button-spec-font-id button-spec))
 	   (create-fn (fn (create-text-texture-drawing! text-drawing-id texture-id font-id
@@ -549,26 +566,30 @@ Test-fn and handle-fn are both functions of event."
   (when (event-generic-p event)
     (funcall (event-generic-fn event))))
 
-(defun destroy-button! (button-spec)
+(defun destroy-button! (button-id)
   "Removes/unloads the button's control, textures, and drawings."
-  (let ((texture-id (button-spec-texture-id button-spec))
-	(control-id (button-spec-control-id button-spec))
-	(text-drawing-id (button-spec-text-drawing-id button-spec)))
+  (let* ((button-spec (gethash button-id *buttons*))
+	 (texture-id (button-spec-texture-id button-spec))
+	 (control-id (button-spec-control-id button-spec))
+	 (text-drawing-id (button-spec-text-drawing-id button-spec)))
     (remove-drawing! text-drawing-id)
     (unload-texture! texture-id)
-    (remove-control! control-id)))
+    (remove-control! control-id)
+    (remhash button-id *buttons*)))
 
 (defmacro defbutton (name text pos layer font-id &body on-click)
   (let ((event (gensym)))
-    `(defhandler ,(symbolicate 'initialize- name '-button) (,event)
-       (when (event-font-opened? ,event ,font-id)
-	 (add-button! ,text ,pos ,layer ,font-id (fn ,@on-click))))))
+    `(progn
+       (defhandler ,(symbolicate 'initialize- name '-button) (,event)
+	 (when (event-font-opened? ,event ,font-id)
+	   (add-button! ',name ,text ,pos ,layer ,font-id (fn ,@on-click))))
+       (let ((button-spec (gethash ',name *buttons*)))
+	 (when button-spec
+	   (destroy-button! ',name)
+	   (add-button! ',name ,text ,pos ,layer ,font-id (fn ,@on-click)))))))
 (defmacro undefbutton (name &rest args)
   (declare (ignore args))
   `(undefhandler ,(symbolicate 'initialize- name '-button)))
-
-(defbutton quit "Quit" (v2 120 200) 1 :font
-  (setq *quit?* t))
 
 (defhandler handle-intialization-finished! (event)
   (when (event-initialization-finished-p event)
@@ -577,124 +598,122 @@ Test-fn and handle-fn are both functions of event."
 (defmacro user-event! (&body body)
   `(event! (make-instance 'event-generic :fn (fn ,@body))))
 
-(defun texture-right-aligned (x texture-id &optional (spacing 0))
-  (- x (texture-width (gethash texture-id *textures*)) spacing))
+(defun texture-right-aligned (x texture-id)
+  (- x (texture-width (gethash texture-id *textures*))))
 
-(defun right-aligned-texture-drawing (texture-id pos layer &optional (spacing 0))
+(defun right-aligned-texture-drawing (texture-id pos layer)
   (make-instance 'drawing-full-texture
-		 :pos (v2 (texture-right-aligned (x pos) texture-id spacing) (y pos))
+		 :pos (v2 (texture-right-aligned (x pos) texture-id) (y pos))
 		 :texture-id texture-id
 		 :layer layer))
 
-(defun left-aligned-texture-drawing (texture-id pos layer &optional (spacing 0))
+(defun left-aligned-texture-drawing (texture-id pos layer)
   (make-instance 'drawing-full-texture
-		 :pos (v2 (+ (x pos) spacing) (y pos))
+		 :pos pos
 		 :texture-id texture-id
 		 :layer layer))
 
-(defun add-state-drawings! (pos text-drawing-id state-drawing-id text-texture-id state-texture-id layer spacing)
-  (add-drawing! text-drawing-id (right-aligned-texture-drawing text-texture-id pos layer spacing))
-  (add-drawing! state-drawing-id (left-aligned-texture-drawing state-texture-id pos layer spacing)))
+(defun add-state-drawings! (pos text-drawing-id state-drawing-id text-texture-id state-texture-id layer)
+  (add-drawing! text-drawing-id (right-aligned-texture-drawing text-texture-id pos layer))
+  (add-drawing! state-drawing-id (left-aligned-texture-drawing state-texture-id pos layer)))
 
-(defun add-8-bit-register-drawings! (c1 c2 c3 y layer spacing
+(defun add-8-bit-register-drawings! (c1 c2 c3 y layer
 				     hi-text-id hi-contents-id lo-text-id lo-contents-id
 				     combined-text-id combined-contents-id)
-  (add-state-drawings! (v2 c1 y) hi-text-id hi-contents-id hi-text-id hi-contents-id layer spacing)
-  (add-state-drawings! (v2 c2 y) lo-text-id lo-contents-id lo-text-id lo-contents-id layer spacing)
-  (add-state-drawings! (v2 c3 y) combined-text-id combined-contents-id combined-text-id combined-contents-id layer spacing))
+  (add-state-drawings! (v2 c1 y) hi-text-id hi-contents-id hi-text-id hi-contents-id layer)
+  (add-state-drawings! (v2 c2 y) lo-text-id lo-contents-id lo-text-id lo-contents-id layer)
+  (add-state-drawings! (v2 c3 y) combined-text-id combined-contents-id combined-text-id combined-contents-id layer))
 
 (defstruct cpu
   a b c d e f h l sp pc flag)
 
-(defvar *cpu* (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8 :sp 9 :pc 10 :flag #b1010))
-(defparameter *cpu-state-left-column* 380)
-(defparameter *cpu-state-right-column* 580)
-(defparameter *cpu-state-spacing* 5)
-(defparameter *cpu-state-y* 100)
-(defparameter *cpu-state-layer* 1)
+(defun g1 (value) (* value *grid-size*))
 
-(defun cpu-state-y-offset ()
-  (+ (texture-height (gethash :subtraction *textures*)) 6))
+(defvar *cpu* (make-cpu :a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8 :sp 9 :pc 10 :flag #b1010))
+(defparameter *cpu-pos* (g2 15 7))
+(defun cpu-state-left-column ()
+  (+ (g1 6) (x *cpu-pos*)))
+(defun cpu-state-right-column ()
+  (+ (g1 16) (x *cpu-pos*)))
+(defparameter *cpu-state-layer* 1)
 
 (defhandler load-cpu-visualization (event)
   (when (event-font-opened? event :font)
     (load-text-texture! :no :font "[No]")
     (load-text-texture! :yes :font "[Yes]")
-    (load-text-texture! :zero :font "Zero?")
-    (load-text-texture! :subtraction :font "Subtraction?")
-    (load-text-texture! :half-carry :font "Half-carry?")
-    (load-text-texture! :carry :font "Carry?")
-    (load-text-texture! :a-register :font "A")
-    (load-text-texture! :f-register :font "F")
-    (load-text-texture! :af-register :font "AF")
-    (load-text-texture! :b-register :font "B")
-    (load-text-texture! :c-register :font "C")
-    (load-text-texture! :bc-register :font "BC")
-    (load-text-texture! :d-register :font "D")
-    (load-text-texture! :e-register :font "E")
-    (load-text-texture! :de-register :font "DE")
-    (load-text-texture! :h-register :font "H")
-    (load-text-texture! :l-register :font "L")
-    (load-text-texture! :hl-register :font "HL")
-    (load-text-texture! :stack-pointer :font "Stack Pointer:")
-    (load-text-texture! :program-counter :font "Program Counter:")
+    (load-text-texture! :zero :font "Zero? ")
+    (load-text-texture! :subtraction :font "Subtraction? ")
+    (load-text-texture! :half-carry :font "Half-carry? ")
+    (load-text-texture! :carry :font "Carry? ")
+    (load-text-texture! :a-register :font "A ")
+    (load-text-texture! :f-register :font "F ")
+    (load-text-texture! :af-register :font "AF ")
+    (load-text-texture! :b-register :font "B ")
+    (load-text-texture! :c-register :font "C ")
+    (load-text-texture! :bc-register :font "BC ")
+    (load-text-texture! :d-register :font "D ")
+    (load-text-texture! :e-register :font "E ")
+    (load-text-texture! :de-register :font "DE ")
+    (load-text-texture! :h-register :font "H ")
+    (load-text-texture! :l-register :font "L ")
+    (load-text-texture! :hl-register :font "HL ")
+    (load-text-texture! :stack-pointer :font "Stack Pointer: ")
+    (load-text-texture! :program-counter :font "Program Counter: ")
 
     (update-cpu-visualization! *cpu*)
 
     (let* ((layer *cpu-state-layer*)
-	   (left-column *cpu-state-left-column*)
-	   (right-column *cpu-state-right-column*)
-	   (spacing *cpu-state-spacing*)
-	   (y-offset (cpu-state-y-offset))
-	   (y *cpu-state-y*))
-      (add-drawing! :zero (right-aligned-texture-drawing :zero (v2 left-column y) layer spacing))
-      (add-drawing! :subtraction (right-aligned-texture-drawing :subtraction (v2 right-column y) layer spacing))
+	   (left-column (cpu-state-left-column))
+	   (right-column (cpu-state-right-column))
+	   (y (y *cpu-pos*)))
+      (add-drawing! :zero (right-aligned-texture-drawing :zero (v2 left-column y) layer))
+      (add-drawing! :subtraction (right-aligned-texture-drawing :subtraction (v2 right-column y) layer))
       
-      (incf y y-offset)
-      (add-drawing! :half-carry (right-aligned-texture-drawing :half-carry (v2 left-column y) layer spacing))
-      (add-drawing! :carry (right-aligned-texture-drawing :carry (v2 right-column y) layer spacing))
+      (incf y *grid-size*)
+      (add-drawing! :half-carry (right-aligned-texture-drawing :half-carry (v2 left-column y) layer))
+      (add-drawing! :carry (right-aligned-texture-drawing :carry (v2 right-column y) layer))
 
-      (incf y 10)
-      (let ((c1 280)
-	    (c2 415)
-	    (c3 560))
-	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
+      (incf y *grid-size*)
+      (let ((c1 (+ (g1 1) (x *cpu-pos*)))
+	    (c2 (+ (g1 8) (x *cpu-pos*)))
+	    (c3 (+ (g1 15) (x *cpu-pos*))))
+	(incf y *grid-size*)
+	(add-8-bit-register-drawings! c1 c2 c3 y layer
 				      :a-register :a-register-contents
 				      :f-register :f-register-contents
 				      :af-register :af-register-contents)
 
-	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
+	(incf y (g1 1))
+	(add-8-bit-register-drawings! c1 c2 c3 y layer
 				      :b-register :b-register-contents
 				      :c-register :c-register-contents
 				      :bc-register :bc-register-contents)
 
-	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
+	(incf y (g1 1))
+	(add-8-bit-register-drawings! c1 c2 c3 y layer
 				      :d-register :d-register-contents
 				      :e-register :e-register-contents
 				      :de-register :de-register-contents)
 
-	(incf y y-offset)
-	(add-8-bit-register-drawings! c1 c2 c3 y layer spacing
+	(incf y (g1 1))
+	(add-8-bit-register-drawings! c1 c2 c3 y layer
 				      :h-register :h-register-contents
 				      :l-register :l-register-contents
 				      :hl-register :hl-register-contents))
 
-      (incf y 10)
-      (let ((column 490))
-	(incf y y-offset)
+      (incf y *grid-size*)
+      (let ((column (+ (g1 11) (x *cpu-pos*))))
+	(incf y (g1 1))
 	(add-state-drawings! (v2 column y)
 			     :stack-pointer :stack-pointer-contents
 			     :stack-pointer :stack-pointer-contents
-			     layer spacing)
+			     layer)
 
-	(incf y y-offset)
+	(incf y (g1 1))
 	(add-state-drawings! (v2 column y)
 			     :program-counter :program-counter-contents
 			     :program-counter :program-counter-contents
-			     layer spacing)))))
+			     layer)))))
 
 (defun state-drawing-id (set?)
   (if set? :yes :no))
@@ -720,23 +739,21 @@ Test-fn and handle-fn are both functions of event."
 			(register16-text (cpu-pc cpu))))
 
   (let* ((layer *cpu-state-layer*)
-	 (left-column *cpu-state-left-column*)
-	 (right-column *cpu-state-right-column*)
-	 (spacing *cpu-state-spacing*)
-	 (y-offset (cpu-state-y-offset))
-	 (y *cpu-state-y*))
-    (add-drawing! :zero-state (left-aligned-texture-drawing (state-drawing-id (cpu-zero? cpu)) (v2 left-column y) layer spacing))
+	 (left-column (cpu-state-left-column))
+	 (right-column (cpu-state-right-column))
+	 (y (y *cpu-pos*)))
+    (add-drawing! :zero-state (left-aligned-texture-drawing (state-drawing-id (cpu-zero? cpu)) (v2 left-column y) layer))
     (add-drawing! :subtraction-state (left-aligned-texture-drawing
 				      (state-drawing-id (cpu-subtraction? cpu))
 				      (v2 right-column y)
-				      layer spacing))
+				      layer))
     
-    (incf y y-offset)
+    (incf y (g1 1))
     (add-drawing! :half-carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-half-carry? cpu))
 								  (v2 left-column y)
-								  layer spacing))
+								  layer))
     (add-drawing! :carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-carry? cpu))
-							     (v2 right-column y) layer spacing))))
+							     (v2 right-column y) layer))))
 
 (defparameter *number-base* :hexadecimal)
 
@@ -969,10 +986,10 @@ Test-fn and handle-fn are both functions of event."
 (defhandler handle-initialize-cpu-visualization (event)
   (when (event-font-opened? event :font)
     (load-text-texture! :disassembly :font "(Disassembly)")
-    (add-drawing! :disassembly (make-instance 'drawing-full-texture :pos (v2 20 480) :texture-id :disassembly :layer 1))
+    (add-drawing! :disassembly (make-instance 'drawing-full-texture :pos (g2 1 24) :texture-id :disassembly :layer 1))
 
     (load-text-texture! :disassembly-next :font "(Next Disassembly)")
-    (add-drawing! :disassembly-next (make-instance 'drawing-full-texture :pos (v2 20 500) :texture-id :disassembly-next :layer 1))
+    (add-drawing! :disassembly-next (make-instance 'drawing-full-texture :pos (g2 1 25) :texture-id :disassembly-next :layer 1))
 
     (reset!)))
 
@@ -983,6 +1000,22 @@ Test-fn and handle-fn are both functions of event."
 (user-event!
   (let ((*number-base* :signed))
     (update-cpu-visualization! *cpu*)))
+
+(defun add-mouse-pos-drawing! ()
+  (add-drawing! :mouse-pos (make-instance 'drawing-full-texture
+					  :pos (v2 0 0)
+					  :texture-id :mouse-pos
+					  :layer 1)))
+
+#+nil
+(user-event!
+  (if (aval :mouse-pos *drawings*)
+      (progn
+	(remove-drawing! :mouse-pos)
+	(setq *highlight-grid-pos?* nil))
+      (progn
+	(add-mouse-pos-drawing!)
+	(setq *highlight-grid-pos?* t))))
 
 (defun disassembly-text (pc memory)
   (format nil "~a: ~S"
@@ -999,9 +1032,10 @@ Test-fn and handle-fn are both functions of event."
     (update-cpu-visualization! *cpu*)))
 
 ;; TODO: add a remove-button!
-(defun add-button! (text pos layer font-id click-fn)
+(defun add-button! (button-id text pos layer font-id click-fn)
   (let* ((control-id (gensym)))
-    (create-button! (make-instance 'button-spec :pos pos
+    (create-button! button-id
+		    (make-instance 'button-spec :pos pos
 						:bottom-layer layer
 						:text text
 						:text-drawing-id (gensym)
@@ -1012,11 +1046,26 @@ Test-fn and handle-fn are both functions of event."
 		       (fn (when (event-control-clicked? % control-id)
 			     (funcall click-fn))))))
 
-(defbutton execute "Execute!" (v2 20 520) 1 :font
+(defbutton execute "Execute!" (g2 1 26) 1 :font
   (handle-execute-button-clicked!))
 
-(defbutton reset "Reset" (v2 20 540) 1 :font
+(defbutton reset "Reset" (g2 1 27) 1 :font
   (reset!))
+
+(defbutton quit "Quit" (g2 36 27) 1 :font
+  (setq *quit?* t))
+
+(defun mouse-pos-text ()
+  (format nil "<~3,' d, ~3,' d><G~2,' d, G~2,' d>"
+	  *mouse-x*
+	  *mouse-y*
+	  (truncate *mouse-x* *grid-size*)
+	  (truncate *mouse-y* *grid-size*)))
+
+(defhandler initialize-mouse-cursor-pos-text (event)
+  (when (event-font-opened? event :font)
+    (load-text-texture! :mouse-pos :font (mouse-pos-text))
+    (add-mouse-pos-drawing!)))
 
 ;; show me last instruction and next instruction
 ;; disassemble the instruction to show it to me.
