@@ -558,9 +558,17 @@ Test-fn and handle-fn are both functions of event."
     (unload-texture! texture-id)
     (remove-control! control-id)))
 
-(defhandler initialize-quit-button (event)
-  (when (event-font-opened? event :font)
-    (add-button! "Quit" (v2 120 200) 1 :font (fn (setq *quit?* t)))))
+(defmacro defbutton (name text pos layer font-id &body on-click)
+  (let ((event (gensym)))
+    `(defhandler ,(symbolicate 'initialize- name '-button) (,event)
+       (when (event-font-opened? ,event ,font-id)
+	 (add-button! ,text ,pos ,layer ,font-id (fn ,@on-click))))))
+(defmacro undefbutton (name &rest args)
+  (declare (ignore args))
+  `(undefhandler ,(symbolicate 'initialize- name '-button)))
+
+(defbutton quit "Quit" (v2 120 200) 1 :font
+  (setq *quit?* t))
 
 (defhandler handle-intialization-finished! (event)
   (when (event-initialization-finished-p event)
@@ -1004,13 +1012,11 @@ Test-fn and handle-fn are both functions of event."
 		       (fn (when (event-control-clicked? % control-id)
 			     (funcall click-fn))))))
 
-(defhandler initialize-execute-button (event)
-  (when (event-font-opened? event :font)
-    (add-button! "Execute!" (v2 20 520) 1 :font 'handle-execute-button-clicked!)))
+(defbutton execute "Execute!" (v2 20 520) 1 :font
+  (handle-execute-button-clicked!))
 
-(defhandler initialize-reset-button (event)
-  (when (event-font-opened? event :font)
-    (add-button! "Reset" (v2 20 540) 1 :font 'reset!)))
+(defbutton reset "Reset" (v2 20 540) 1 :font
+  (reset!))
 
 ;; show me last instruction and next instruction
 ;; disassemble the instruction to show it to me.
