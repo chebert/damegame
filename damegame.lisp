@@ -148,9 +148,10 @@ Removes events from the queue."
 			  'event-texture-loaded :texture-id id))))))
 
 (defun draw-full-texture! (texture dx dy)
-  (let* ((w (texture-width texture))
-	 (h (texture-height texture)))
-    (draw-texture! texture 0 0 w h dx dy w h)))
+  (when texture
+    (let* ((w (texture-width texture))
+	   (h (texture-height texture)))
+      (draw-texture! texture 0 0 w h dx dy w h))))
 
 (defparameter *grid-size* 20)
 
@@ -210,7 +211,8 @@ From the plist (id value id2 value2 ...)"
   "An association list of drawings.")
 
 (defcloss drawing ()
-  layer)
+  layer
+  fn)
 
 (defun sort-drawings-by-layer! ()
   "Sort *drawings* by layer."
@@ -219,21 +221,6 @@ From the plist (id value id2 value2 ...)"
   "Removes the associated drawing from *drawings*"
   (setq *drawings* (aremove *drawings* drawing-id))
   (sort-drawings-by-layer!))
-
-(defcloss drawing-full-texture (drawing)
-  texture-id
-  pos)
-(defmethod draw! (drawing-id (drawing drawing-full-texture))
-  (let* ((pos (drawing-full-texture-pos drawing))
-	 (texture-id (drawing-full-texture-texture-id drawing))
-	 (texture (gethash texture-id *textures*)))
-    (if texture
-	(draw-full-texture! texture (x pos) (y pos))
-	(progn
-	  (warn "Unable to find texture ~S when drawing ~S. Removing drawing from *DRAWINGS*"
-		texture-id
-		drawing)
-	  (aremove *drawings* drawing-id)))))
 
 (defun color (r g b a)
   "Create an RGBA representation of a color"
@@ -250,15 +237,6 @@ From the plist (id value id2 value2 ...)"
 (defun a (color)
   "alpha component of color"
   (aref color 3))
-
-(defcloss drawing-fill-rect (drawing)
-  color
-  rect)
-(defmethod draw! (drawing-id (drawing drawing-fill-rect))
-  (let* ((color (drawing-fill-rect-color drawing))
-	 (rect (drawing-fill-rect-rect drawing)))
-    (set-draw-color! (r color) (g color) (b color) (a color))
-    (fill-rect! (x rect) (y rect) (w rect) (h rect))))
 
 (defun add-drawing! (id drawing)
   "Adds drawing *drawings* and sorts *drawings* by layer."
@@ -281,13 +259,18 @@ From the plist (id value id2 value2 ...)"
   hovered?
   pressed?)
 
+(defun fill-rect-drawing (layer color rect)
+  (make-instance 'drawing :layer layer
+			  :fn (fn
+				(set-draw-color! (r color) (g color) (b color) (a color))
+				(fill-rect! (x rect) (y rect) (w rect) (h rect)))))
+
 (defun add-control! (id control)
   "Adds control to *controls* and adds a drawing of the control."
   (setq *controls* (aset id control *controls*))
   (add-drawing! (control-drawing-id control)
 		;; TODO: control drawing (based on layer, pressed? and hovered?
-		(make-instance 'drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-						  :rect (control-rect control))))
+		(fill-rect-drawing 1 (color 0 0 0 255) (control-rect control))))
 
 (defun point-in-rect? (v2 r)
   "True if the given v2 point is inside of the rect top-left inclusive, bottom-right exclusive."
@@ -305,23 +288,20 @@ From the plist (id value id2 value2 ...)"
 	    in-rect?)
        (setf (slot-value control 'control-hovered?) t)
        (add-drawing! (control-drawing-id control)
-		     (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 255 255)
-						       :rect rect)))
+		     (fill-rect-drawing 1 (color 255 0 255 255) rect)))
       ((and hovered?
 	    (not in-rect?))
        (setf (slot-value control 'control-hovered?) nil)
        (when (not pressed?)
 	 (add-drawing! (control-drawing-id control)
-		       (make-instance 'drawing-fill-rect :layer 1 :color (color 0 0 0 255)
-							 :rect rect)))))))
+		       (fill-rect-drawing 1 (color 0 0 0 255) rect)))))))
 
 (defun control-handle-mouse-down! (control)
   "Process the effects of a left-mouse-button press on control."
   (when (control-hovered? control)
     (setf (slot-value control 'control-pressed?) t)
     (add-drawing! (control-drawing-id control)
-		  (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 0 255)
-						    :rect (control-rect control)))))
+		  (fill-rect-drawing 1 (color 255 0 0 255) (control-rect control)))))
 
 (defvar *event-handlers* (make-hash-table)
   "A hash-table of runtime-created event-handlers.")
@@ -362,8 +342,7 @@ From the plist (id value id2 value2 ...)"
 		       :control-id control-id))
     (setf (slot-value control 'control-pressed?) nil)
     (add-drawing! (control-drawing-id control)
-		  (make-instance 'drawing-fill-rect :layer 1 :color (color 255 0 255 255)
-						    :rect (control-rect control)))))
+		  (fill-rect-drawing 1 (color 255 0 255 255) (control-rect control)))))
 
 (defparameter *highlight-grid-pos?* t)
 
@@ -381,8 +360,7 @@ updates based on timestep, and renders to the screen."
 	 (event-mousemove
 	  (setq *mouse-x* (event-mousemove-x %)
 		*mouse-y* (event-mousemove-y %))
-	  (when (gethash :font *fonts*)
-	    (load-text-texture! :mouse-pos :font (mouse-pos-text)))
+	  (load-text-texture! :mouse-pos :font (mouse-pos-text))
 	  (mapcar (fn (control-handle-mouse-move! (cdr %))) *controls*))
 	 (event-mousedown
 	  (when (eql :left (event-mousedown-button %))
@@ -402,7 +380,7 @@ updates based on timestep, and renders to the screen."
 		(* *grid-size* (truncate *mouse-y* *grid-size*))
 		*grid-size*
 		*grid-size*))
-  (amap 'draw! *drawings*)
+  (amap (fn (funcall (drawing-fn %%))) *drawings*)
   (present!)
   
   (update-swank!))
@@ -484,13 +462,15 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   (and (event-texture-loaded-p event)
        (eql texture-id (event-texture-loaded-texture-id event))))
 
+(defun full-texture-drawing (layer texture-id pos)
+  (make-instance 'drawing
+		 :layer layer
+		 :fn (fn (draw-full-texture! (gethash texture-id *textures*) (x pos) (y pos)))))
+
 (defun create-text-texture-drawing! (drawing-id texture-id font-id text layer pos)
   "Loads the text texture into *textures* and adds the drawing to *drawings*."
   (load-text-texture! texture-id font-id text)
-  (add-drawing! drawing-id (make-instance
-			    'drawing-full-texture
-			    :layer layer
-			    :texture-id texture-id :pos pos)))
+  (add-drawing! drawing-id (full-texture-drawing layer texture-id pos)))
 
 (defun register-one-off-handler! (test-fn handle-fn)
   "Registers an event handler that will be removed once handled.
@@ -602,16 +582,12 @@ Test-fn and handle-fn are both functions of event."
   (- x (texture-width (gethash texture-id *textures*))))
 
 (defun right-aligned-texture-drawing (texture-id pos layer)
-  (make-instance 'drawing-full-texture
-		 :pos (v2 (texture-right-aligned (x pos) texture-id) (y pos))
-		 :texture-id texture-id
-		 :layer layer))
+  (full-texture-drawing layer
+			texture-id
+			(v2 (texture-right-aligned (x pos) texture-id) (y pos))))
 
 (defun left-aligned-texture-drawing (texture-id pos layer)
-  (make-instance 'drawing-full-texture
-		 :pos pos
-		 :texture-id texture-id
-		 :layer layer))
+  (full-texture-drawing layer texture-id pos))
 
 (defun add-state-drawings! (pos text-drawing-id state-drawing-id text-texture-id state-texture-id layer)
   (add-drawing! text-drawing-id (right-aligned-texture-drawing text-texture-id pos layer))
@@ -986,10 +962,10 @@ Test-fn and handle-fn are both functions of event."
 (defhandler handle-initialize-cpu-visualization (event)
   (when (event-font-opened? event :font)
     (load-text-texture! :disassembly :font "(Disassembly)")
-    (add-drawing! :disassembly (make-instance 'drawing-full-texture :pos (g2 1 24) :texture-id :disassembly :layer 1))
+    (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 1 24)))
 
     (load-text-texture! :disassembly-next :font "(Next Disassembly)")
-    (add-drawing! :disassembly-next (make-instance 'drawing-full-texture :pos (g2 1 25) :texture-id :disassembly-next :layer 1))
+    (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 1 25)))
 
     (reset!)))
 
@@ -1002,10 +978,7 @@ Test-fn and handle-fn are both functions of event."
     (update-cpu-visualization! *cpu*)))
 
 (defun add-mouse-pos-drawing! ()
-  (add-drawing! :mouse-pos (make-instance 'drawing-full-texture
-					  :pos (v2 0 0)
-					  :texture-id :mouse-pos
-					  :layer 1)))
+  (add-drawing! :mouse-pos (full-texture-drawing 1 :mouse-pos (v2 0 0))))
 
 #+nil
 (user-event!
@@ -1067,7 +1040,5 @@ Test-fn and handle-fn are both functions of event."
     (load-text-texture! :mouse-pos :font (mouse-pos-text))
     (add-mouse-pos-drawing!)))
 
-;; show me last instruction and next instruction
-;; disassemble the instruction to show it to me.
 ;; show me what changed
 ;; show me some memory (memory being accessed?)
