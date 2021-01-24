@@ -470,15 +470,11 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   (and (event-texture-loaded-p event)
        (eql texture-id (event-texture-loaded-texture-id event))))
 
-(defhandler handle-new-button-clicked (event)
-  (when (event-control-clicked? event :new-button)
-    (print "I'm so happy for you.")))
-
 (defun create-text-texture-drawing! (drawing-id texture-id font-id text layer pos)
   "Loads the text texture into *textures* and adds the drawing to *drawings*."
   (load-text-texture! texture-id font-id text)
   (add-drawing! drawing-id (make-instance
-			    'drawing-fill-rect
+			    'drawing-full-texture
 			    :layer layer
 			    :texture-id texture-id :pos pos)))
 
@@ -562,42 +558,13 @@ Test-fn and handle-fn are both functions of event."
     (unload-texture! texture-id)
     (remove-control! control-id)))
 
-(let ((font-id :font)
-      (texture-id :quit-text)
-      (text-drawing-id :quit-text-drawing)
-      (control-id :quit-control)
-      (control-drawing-id :quit-control-drawing)
-      (text "Quit")
-      (bottom-layer 1)
-      (pos (v2 120 200)))
-
-  (defhandler font-opened (event)
-    (when (event-font-opened? event font-id)
-      (load-text-texture! texture-id font-id text)
-      (add-drawing! text-drawing-id
-		    (make-instance
-		     'drawing-full-texture
-		     :layer (1+ bottom-layer)
-		     :texture-id texture-id :pos pos))))
-  
-  (defhandler quit-button-clicked (event)
-    (when (event-control-clicked? event control-id)
-      (setq *quit?* t)))
-
-  (defhandler quit-texture-loaded (event)
-    (when (event-texture-loaded? event texture-id)
-      (let* ((texture (gethash texture-id *textures*))
-	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
-	(add-control! control-id
-		      (make-instance
-		       'control
-		       :rect rect :hovered? nil :pressed? nil
-		       :drawing-id control-drawing-id))))))
+(defhandler initialize-quit-button (event)
+  (when (event-font-opened? event :font)
+    (add-button! "Quit" (v2 120 200) 1 :font (fn (setq *quit?* t)))))
 
 (defhandler handle-intialization-finished! (event)
   (when (event-initialization-finished-p event)
     (event! (make-instance 'event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))))
-
 
 (defmacro user-event! (&body body)
   `(event! (make-instance 'event-generic :fn (fn ,@body))))
@@ -763,22 +730,6 @@ Test-fn and handle-fn are both functions of event."
     (add-drawing! :carry-state (left-aligned-texture-drawing (state-drawing-id (cpu-carry? cpu))
 							     (v2 right-column y) layer spacing))))
 
-(defparameter *new-button-spec*
-  (make-instance
-   'button-spec
-   :control-id :new-button
-   :font-id :font
-   :texture-id (gensym)
-   :text-drawing-id (gensym)
-   :text "Wake up. Time to die."
-   :bottom-layer 2
-   :pos (v2 128 256)))
-#+nil
-(event! (make-instance 'event-generic :fn (fn (create-button! *new-button-spec*))))
-#+nil
-(event! (make-instance 'event-generic :fn (fn (destroy-button! *new-button-spec*))))
-
-
 (defparameter *number-base* :hexadecimal)
 
 (defun s8 (value)
@@ -886,13 +837,8 @@ Test-fn and handle-fn are both functions of event."
 	  (* 2 half-carry)
 	  carry))
 
-(defun prinl (&rest args)
-  (print args))
-
-(defun half-carry? (old new)
-  (and
-   (not (zerop (logand #b1000 old)))
-   (zerop (logand #b1000 new))))
+(defun half-carry? (a b)
+  (not (zerop (logand #x10 (+ (logand #xf a) (logand #xf b))))))
 
 (defun disassemble-instr (pc memory)
   (let* ((instr (aref memory pc)))
@@ -927,7 +873,7 @@ Test-fn and handle-fn are both functions of event."
 	 (setf (cpu-flag *cpu*)
 	       (flag (if (zerop c) 1 0)
 		     0
-		     (if (half-carry? (cpu-c *cpu*) c) 1 0)
+		     (if (half-carry? (cpu-c *cpu*) 1) 1 0)
 		     (if (cpu-carry? *cpu*) 1 0)))
 	 (setf (cpu-c *cpu*) c))
        (incf (cpu-pc *cpu*) 1))
@@ -938,10 +884,8 @@ Test-fn and handle-fn are both functions of event."
        (incf (cpu-pc *cpu*) 2))
       (#x20
        ;; JR NZ, s8
-       (prinl 'jr-nz-s8 'zero? (cpu-zero? *cpu*) pc)
        (if (cpu-zero? *cpu*)
 	   (let* ((s8 (s8 (aref *memory* (1+ pc)))))
-	     (prinl 'offset= s8 'next-pc= (+ pc s8 2))
 	     ;; 3 cycles
 	     (setf (cpu-pc *cpu*) (+ pc s8 2)))
 	   ;; 2 cycles
@@ -951,20 +895,17 @@ Test-fn and handle-fn are both functions of event."
        ;; 3 cycles
        (setf (cpu-l *cpu*) (aref *memory* (1+ pc))
 	     (cpu-h *cpu*) (aref *memory* (+ 2 pc)))
-       (prinl 'ld-hl-d16 :l (cpu-l *cpu*) :h (cpu-h *cpu*))
        (incf (cpu-pc *cpu*) 3))
       (#x31
        ;; LD SP Immediate
        ;; 3 cycles
        (setf (cpu-sp *cpu*) (combined-register (aref *memory* (+ pc 2)) (aref *memory* (1+ pc))))
-       (prinl 'ld-sp-immediate :sp (cpu-sp *cpu*))
        (incf (cpu-pc *cpu*) 3))
       (#x32
        ;; LD HL- A
        ;; 2 cycles
        (setf (aref *memory* (cpu-hl *cpu*)) (cpu-a *cpu*))
        (let* ((hl (1- (cpu-hl *cpu*))))
-	 (prinl 'ld-hl-a 'hl-before (cpu-hl *cpu*) 'hl hl)	 
 	 (setf (cpu-h *cpu*) (hi-byte hl)
 	       (cpu-l *cpu*) (lo-byte hl)))
        (incf (cpu-pc *cpu*) 1))
@@ -1011,7 +952,11 @@ Test-fn and handle-fn are both functions of event."
   (setq *cpu* (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0 :flag 0))
   (update-cpu-visualization! *cpu*)
   (reset-memory!)
-  (read-rom-file-into-memory! "gb_bios.bin"))
+  (read-rom-file-into-memory! "gb_bios.bin")
+  (load-text-texture! :disassembly :font "(Disassembly)")
+  (load-text-texture! :disassembly-next
+		      :font
+		      (disassembly-text (cpu-pc *cpu*) *memory*)))
 
 (defhandler handle-initialize-cpu-visualization (event)
   (when (event-font-opened? event :font)
@@ -1028,51 +973,44 @@ Test-fn and handle-fn are both functions of event."
 
 #+nil
 (user-event!
-  (let ((*number-base* :hexadecimal))
+  (let ((*number-base* :signed))
     (update-cpu-visualization! *cpu*)))
 
-(let ((font-id :font)
-      (texture-id (gensym))
-      (text-drawing-id (gensym))
-      (control-id (gensym))
-      (control-drawing-id (gensym))
-      (text "Execute!")
-      (bottom-layer 1)
-      (pos (v2 20 520)))
+(defun disassembly-text (pc memory)
+  (format nil "~a: ~S"
+	  (register16-text pc)
+	  (disassemble-instr pc memory)))
 
-  (defhandler execute-font-opened (event)
-    (when (event-font-opened? event font-id)
-      (load-text-texture! texture-id font-id text)
-      (add-drawing! text-drawing-id
-		    (make-instance
-		     'drawing-full-texture
-		     :layer (1+ bottom-layer)
-		     :texture-id texture-id :pos pos))))
-  
-  (defhandler execute-button-clicked (event)
-    (when (event-control-clicked? event control-id)
-      (let ((prev (format nil "~a: ~S"
-			  (register16-text (cpu-pc *cpu*))
-			  (disassemble-instr (cpu-pc *cpu*) *memory*))))
-	(execute!)
-	(load-text-texture! :disassembly :font prev)
-	(load-text-texture! :disassembly-next
-			    :font
-			    (format nil "~a: ~S"
-				    (register16-text (cpu-pc *cpu*))
-				    (disassemble-instr (cpu-pc *cpu*) *memory*)))
-	(update-cpu-visualization! *cpu*))))
+(defun handle-execute-button-clicked! ()
+  (let ((prev (disassembly-text (cpu-pc *cpu*) *memory*)))
+    (execute!)
+    (load-text-texture! :disassembly :font prev)
+    (load-text-texture! :disassembly-next
+			:font
+			(disassembly-text (cpu-pc *cpu*) *memory*))
+    (update-cpu-visualization! *cpu*)))
 
-  (defhandler execute-texture-loaded (event)
-    (when (event-texture-loaded? event texture-id)
-      (let* ((texture (gethash texture-id *textures*))
-	     (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
-	(add-control! control-id
-		      (make-instance
-		       'control
-		       :rect rect :hovered? nil :pressed? nil
-		       :drawing-id control-drawing-id))))))
+;; TODO: add a remove-button!
+(defun add-button! (text pos layer font-id click-fn)
+  (let* ((control-id (gensym)))
+    (create-button! (make-instance 'button-spec :pos pos
+						:bottom-layer layer
+						:text text
+						:text-drawing-id (gensym)
+						:texture-id (gensym)
+						:font-id font-id
+						:control-id control-id))
+    (register-handler! (gensym)
+		       (fn (when (event-control-clicked? % control-id)
+			     (funcall click-fn))))))
 
+(defhandler initialize-execute-button (event)
+  (when (event-font-opened? event :font)
+    (add-button! "Execute!" (v2 20 520) 1 :font 'handle-execute-button-clicked!)))
+
+(defhandler initialize-reset-button (event)
+  (when (event-font-opened? event :font)
+    (add-button! "Reset" (v2 20 540) 1 :font 'reset!)))
 
 ;; show me last instruction and next instruction
 ;; disassemble the instruction to show it to me.
