@@ -344,8 +344,6 @@ From the plist (id value id2 value2 ...)"
     (add-drawing! (control-drawing-id control)
 		  (fill-rect-drawing 1 (color 255 0 255 255) (control-rect control)))))
 
-(defparameter *highlight-grid-pos?* t)
-
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
@@ -374,12 +372,6 @@ updates based on timestep, and renders to the screen."
   ;; Render to the screen
   (set-draw-color! 0 0 0 255)
   (clear!)
-  (when *highlight-grid-pos?*
-    (set-draw-color! 255 0 255 255)
-    (fill-rect! (* *grid-size* (truncate *mouse-x* *grid-size*))
-		(* *grid-size* (truncate *mouse-y* *grid-size*))
-		*grid-size*
-		*grid-size*))
   (amap (fn (funcall (drawing-fn %%))) *drawings*)
   (present!)
   
@@ -978,17 +970,24 @@ Test-fn and handle-fn are both functions of event."
     (update-cpu-visualization! *cpu*)))
 
 (defun add-mouse-pos-drawing! ()
-  (add-drawing! :mouse-pos (full-texture-drawing 1 :mouse-pos (v2 0 0))))
+  (add-drawing! :mouse-pos (full-texture-drawing 1 :mouse-pos (v2 0 0)))
+  (add-drawing! :mouse-grid-highlight
+		(make-instance 'drawing
+			       :layer 0
+			       :fn (fn
+				     (set-draw-color! 255 0 255 255)
+				     (fill-rect! (g1 (truncate *mouse-x* *grid-size*))
+						 (g1 (truncate *mouse-y* *grid-size*))
+						 (g1 1)
+						 (g1 1))))))
 
 #+nil
 (user-event!
   (if (aval :mouse-pos *drawings*)
       (progn
 	(remove-drawing! :mouse-pos)
-	(setq *highlight-grid-pos?* nil))
-      (progn
-	(add-mouse-pos-drawing!)
-	(setq *highlight-grid-pos?* t))))
+	(remove-drawing! :mouse-grid-highlight))
+      (add-mouse-pos-drawing!)))
 
 (defun disassembly-text (pc memory)
   (format nil "~a: ~S"
