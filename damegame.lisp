@@ -7,7 +7,12 @@
     (intern (symbol-name symbol) (find-package :keyword)))
   (defun symbolicate (&rest symbols)
     (intern (apply 'concatenate 'string (mapcar 'symbol-name symbols))))
-  (defvar *tests* (make-hash-table)))
+  (defvar *tests* (make-hash-table))
+  
+  (defvar *commands* ()))
+
+(defmacro command! (&body body)
+  `(push (fn ,@body) *commands*))
 
 (defmacro deftest (name &body body)
   `(progn
@@ -252,59 +257,17 @@ From the plist (id value id2 value2 ...)"
 (defvar *mouse-x* 0 "Mouse pixel x position measured from the left of the window.")
 (defvar *mouse-y* 0 "Mouse pixel y position measured from the top of the window.")
 
-(defvar *controls* ()
-  "An association list of control-id to control of all of the currently active controls.")
-
-(defcloss control ()
-  "A control is a rectangle which recieves (currently mouse-only) inputs."
-  rect
-  drawing-id
-  hovered?
-  pressed?)
-
 (defun fill-rect-drawing (layer color rect)
   (drawing layer
 	   (fn
 	     (set-draw-color! (r color) (g color) (b color) (a color))
 	     (fill-rect! (x rect) (y rect) (w rect) (h rect)))))
 
-(defun add-control! (id control)
-  "Adds control to *controls* and adds a drawing of the control."
-  (setq *controls* (aset id control *controls*))
-  (add-drawing! (control-drawing-id control)
-		;; TODO: control drawing (based on layer, pressed? and hovered?
-		(fill-rect-drawing 1 (color 0 0 0 255) (control-rect control))))
 
 (defun point-in-rect? (v2 r)
   "True if the given v2 point is inside of the rect top-left inclusive, bottom-right exclusive."
   (and (<= (x r) (x v2) (1- (+ (x r) (w r))))
        (<= (y r) (y v2) (1- (+ (y r) (h r))))))
-
-(defun control-handle-mouse-move! (control)
-  "Process the effects of a mouse-move event on control."
-  (let* ((rect (control-rect control))
-	 (hovered? (control-hovered? control))
-	 (pressed? (control-pressed? control))
-	 (in-rect? (point-in-rect? (v2 *mouse-x* *mouse-y*) rect)))
-    (cond
-      ((and (not hovered?)
-	    in-rect?)
-       (setf (slot-value control 'control-hovered?) t)
-       (add-drawing! (control-drawing-id control)
-		     (fill-rect-drawing 1 (color 255 0 255 255) rect)))
-      ((and hovered?
-	    (not in-rect?))
-       (setf (slot-value control 'control-hovered?) nil)
-       (when (not pressed?)
-	 (add-drawing! (control-drawing-id control)
-		       (fill-rect-drawing 1 (color 0 0 0 255) rect)))))))
-
-(defun control-handle-mouse-down! (control)
-  "Process the effects of a left-mouse-button press on control."
-  (when (control-hovered? control)
-    (setf (slot-value control 'control-pressed?) t)
-    (add-drawing! (control-drawing-id control)
-		  (fill-rect-drawing 1 (color 255 0 0 255) (control-rect control)))))
 
 (defvar *event-handlers* (make-hash-table)
   "A hash-table of runtime-created event-handlers.")
@@ -312,8 +275,8 @@ From the plist (id value id2 value2 ...)"
   (defvar *compiled-event-handlers* (make-hash-table)
     "A hash-table of compile-time created event-handlers."))
 
-(defcloss event-control-clicked ()
-  control-id)
+(defcloss event-button-clicked ()
+  button-id)
 
 (defun notify-handlers! (event)
   "Call the compiled & runtime event handlers with the given event."
@@ -337,16 +300,6 @@ From the plist (id value id2 value2 ...)"
   (declare (ignore rest))
   `(remhash ',name *compiled-event-handlers*))
 
-(defun control-handle-mouse-up! (control-id control)
-  "Process the effects on control of the left mouse button being released"
-  (when (and (control-pressed? control) (control-hovered? control))
-    (notify-handlers! (make-instance
-		       'event-control-clicked
-		       :control-id control-id))
-    (setf (slot-value control 'control-pressed?) nil)
-    (add-drawing! (control-drawing-id control)
-		  (fill-rect-drawing 1 (color 255 0 255 255) (control-rect control)))))
-
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
@@ -365,13 +318,13 @@ updates based on timestep, and renders to the screen."
 	  (setq *mouse-x* (event-mousemove-x %)
 		*mouse-y* (event-mousemove-y %))
 	  (load-text-texture! :mouse-pos :font (mouse-pos-text))
-	  (mapcar (fn (control-handle-mouse-move! (cdr %))) *controls*))
+	  (amap (fn (button-handle-mouse-move! %)) *buttons*))
 	 (event-mousedown
 	  (when (eql :left (event-mousedown-button %))
-	    (mapcar (fn (control-handle-mouse-down! (cdr %))) *controls*)))
+	    (amap (fn (button-handle-mouse-down! %)) *buttons*)))
 	 (event-mouseup
 	  (when (eql :left (event-mouseup-button %))
-	    (mapcar (fn (control-handle-mouse-up! (car %) (cdr %))) *controls*))))))
+	    (amap (fn (button-handle-mouse-up! %)) *buttons*))))))
 
   ;; Update based on time-step
 
@@ -436,10 +389,8 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (clrhash *fonts*)
 	 (clrhash *textures*)
 	 (clrhash *event-handlers*)
-	 (clrhash *buttons*)
 	 (setq *drawings* ())
 	 (setq *events* ())
-	 (setq *controls* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (event! (make-instance 'event-initialization-finished))
 	 (main-loop!))
@@ -451,10 +402,10 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   "True if the event is an event-font-opened for the font-id"
   (and (event-font-opened-p event)
        (eql font-id (event-font-opened-font-id event))))
-(defun event-control-clicked? (event control-id)
-  "True if event is control-id's control being clicked."
-  (and (event-control-clicked-p event)
-       (eql control-id (event-control-clicked-control-id event))))
+(defun event-button-clicked? (event button-id)
+  "True if event is button-id's button being clicked."
+  (and (event-button-clicked-p event)
+       (eql button-id (event-button-clicked-button-id event))))
 (defun event-texture-loaded? (event texture-id)
   "True if event is texture-id's texture being created."
   (and (event-texture-loaded-p event)
@@ -491,45 +442,112 @@ Test-fn and handle-fn are both functions of event."
   "Returns a rect positioned at pos with the same dimensions as texture."
   (rect (x pos) (y pos) (texture-width texture) (texture-height texture)))
 
-(defcloss button-spec ()
-  control-id
-  font-id
-  texture-id
-  text-drawing-id
-  text bottom-layer pos)
+;; Creation: text, layer, pos, font-id,
+(defun button (text layer pos font-id)
+  (alist :text text
+	 :layer layer
+	 :pos pos
+	 :font-id font-id))
 
-(defvar *buttons* (make-hash-table))
-(defun create-button! (button-id button-spec)
-  "Creates a button from the button spec."
-  (let ((texture-id (button-spec-texture-id button-spec))
-	(text-drawing-id (button-spec-text-drawing-id button-spec))
-	(pos (button-spec-pos button-spec))
-	(text (button-spec-text button-spec)))
-    (register-one-off-handler!
-     (fn (event-texture-loaded? % texture-id))
-     (fn
-       (add-control!
-	(button-spec-control-id button-spec)
-	(make-instance
-	 'control
-	 :rect (texture-rect pos (gethash texture-id *textures*))
-	 :hovered? nil :pressed? nil
-	 :drawing-id (gensym)))
-       (setf (gethash button-id *buttons*) button-spec)))
+(defvar *buttons* ())
+(defun get-button (button-id)
+  (aval button-id *buttons*))
+(defun set-button! (button-id button)
+  (setq *buttons* (aset button-id button *buttons*)))
 
-    (let* ((font-id (button-spec-font-id button-spec))
-	   (create-fn (fn (create-text-texture-drawing! text-drawing-id texture-id font-id
-							text
-							(1+ (button-spec-bottom-layer button-spec))
-							pos))))
-      (if (gethash font-id *fonts*)
-	  (funcall create-fn)
-	  ;; If font isn't open, create a handler to wait for it
-	  (progn
-	    (warn "Trying to create button when the font is not loaded ~S" button-spec)
-	    (register-one-off-handler!
-	     (fn (event-font-opened? % font-id))
-	     create-fn))))))
+;; Initialization: rect, loads texture-id, create drawing-id
+(defun initialize-button! (button-id)
+  (let* ((button (get-button button-id))
+	 (texture-id (gensym))
+	 (font-id (aval :font-id button))
+	 (text (aval :text button))
+	 (pos (aval :pos button))
+	 (drawing-id (gensym))
+	 (layer (aval :layer button)))
+    (load-text-texture! texture-id font-id text)
+    (let* ((texture (gethash texture-id *textures*))
+	   (rect (rect (x pos) (y pos) (texture-width texture) (texture-height texture))))
+      (set-button! button-id (amerge button (alist :rect rect
+						   :texture-id texture-id
+						   :drawing-id drawing-id)))
+      (add-drawing! drawing-id
+		    (drawing layer (fn (draw-button! button-id)))))))
+
+(defun remove-button! (button-id)
+  (let* ((button (get-button button-id))
+	 (texture-id (aval :texture-id button))
+	 (drawing-id (aval :drawing-id button)))
+    (unload-texture! texture-id)
+    (remove-drawing! drawing-id)
+    (setq *buttons* (aremove *buttons* button-id))))
+
+(defun button-color (button)
+  (cond
+    ((aval :pressed? button) (red))
+    ((aval :hovered? button) (grey 128))
+    (t (grey 60))))
+
+(defhandler handle-intialize-buttons (event)
+  (when (event-font-opened? event :font)
+    (amap (fn (initialize-button! %)) *buttons*)))
+
+;;; Lifetime of a button
+;; Draw: rect, texture-id, pos, (hovered?, pressed?)
+(defun draw-button! (button-id)
+  (let* ((button (get-button button-id))
+	 (texture-id (aval :texture-id button))
+	 (pos (aval :pos button))
+	 (rect (aval :rect button)))
+    (set-color! (button-color button))
+    (fill-rect! (x rect) (y rect) (w rect) (h rect))
+
+    (draw-full-texture-id! texture-id pos)))
+
+;; Watch for mouse-motion, mouse-down, and mouse-up
+(defun button-handle-mouse-move! (button-id)
+  "Process the effects of a mouse-move event on the button associated with button-id."
+  (let* ((button (get-button button-id))
+	 (rect (aval :rect button))
+	 (hovered? (aval :hovered? button))
+	 (in-rect? (point-in-rect? (v2 *mouse-x* *mouse-y*) rect))
+	 (next-hovered?
+	   (cond
+	     ((and (not hovered?) in-rect?) t)
+	     ((and hovered? (not in-rect?)) nil)
+	     (t hovered?))))
+    (set-button! button-id (aset :hovered? next-hovered? button))))
+
+(defun button-handle-mouse-down! (button-id)
+  "Process the effects of a left-mouse-button press on the button associated with button-id."
+  (let* ((button (get-button button-id)))
+    (when (aval :hovered? button)
+      (set-button! button-id (aset :pressed? t button)))))
+(defun button-handle-mouse-up! (button-id)
+  "Process the effects on the button associated button-id of the left mouse button being released"
+  (let* ((button (get-button button-id)))
+    (when (and (aval :pressed? button) (aval :hovered? button))
+      (notify-handlers! (make-instance 'event-button-clicked :button-id button-id)))
+    ;; set pressed? to nil
+    (set-button! button-id (aset :pressed? nil button))))
+
+(defmacro defbutton (name button &body on-click)
+  (let ((event (gensym))
+	(button-name (gensym)))
+    `(let* ((,button-name ,button))
+       (defhandler ,(symbolicate 'handle- name '-clicked!) (,event)
+	 (when (event-button-clicked? ,event ',name)
+	   ,@on-click))
+       (command!
+	 (set-button! ',name ,button-name)
+	 (when (gethash (aval :font-id ,button-name) *fonts*)
+	   (initialize-button! ',name)))
+       ',name)))
+(defmacro undefbutton (name &rest args)
+  (declare (ignore args))
+  `(progn
+     (undefhandler ,(symbolicate 'handle- name '-clicked!))
+     (command! (remove-button! ',name))))
+
 
 (defun unload-texture! (id)
   "Frees the texture and removes it from *textures*."
@@ -538,46 +556,9 @@ Test-fn and handle-fn are both functions of event."
       (free-texture! texture)
       (remhash id *textures*))))
 
-(defun remove-control! (id)
-  "Removes the control from *controls* and removes its drawing from *drawings*."
-  (let* ((control (aval id *controls*)))
-    (when control
-      (remove-drawing! (control-drawing-id control))
-      (setq *controls* (aremove *controls* id)))))
-
-(defun destroy-button! (button-id)
-  "Removes/unloads the button's control, textures, and drawings."
-  (let* ((button-spec (gethash button-id *buttons*))
-	 (texture-id (button-spec-texture-id button-spec))
-	 (control-id (button-spec-control-id button-spec))
-	 (text-drawing-id (button-spec-text-drawing-id button-spec)))
-    (remove-drawing! text-drawing-id)
-    (unload-texture! texture-id)
-    (remove-control! control-id)
-    (remhash button-id *buttons*)))
-
-(defmacro defbutton (name text pos layer font-id &body on-click)
-  (let ((event (gensym)))
-    `(progn
-       (defhandler ,(symbolicate 'initialize- name '-button) (,event)
-	 (when (event-font-opened? ,event ,font-id)
-	   (add-button! ',name ,text ,pos ,layer ,font-id (fn ,@on-click))))
-       (let ((button-spec (gethash ',name *buttons*)))
-	 (when button-spec
-	   (destroy-button! ',name)
-	   (add-button! ',name ,text ,pos ,layer ,font-id (fn ,@on-click)))))))
-(defmacro undefbutton (name &rest args)
-  (declare (ignore args))
-  `(undefhandler ,(symbolicate 'initialize- name '-button)))
-
 (defhandler handle-intialization-finished! (event)
   (when (event-initialization-finished-p event)
     (load-font! :font "DroidSansMono.ttf" 16)))
-
-(defvar *commands* ())
-
-(defmacro command! (&body body)
-  `(push (fn ,@body) *commands*))
 
 (defun texture-right-aligned (x texture-id)
   (- x (texture-width (gethash texture-id *textures*))))
@@ -1287,25 +1268,10 @@ Test-fn and handle-fn are both functions of event."
       (setq *cpu-visualization* (aset :colors (cpu-visualization-colors prev-instr-data instr-data) *cpu-visualization*))
       (initialize-description! (aval :description instr-data)))))
 
-;; TODO: add a remove-button!
-(defun add-button! (button-id text pos layer font-id click-fn)
-  (let* ((control-id (gensym)))
-    (create-button! button-id
-		    (make-instance 'button-spec :pos pos
-						:bottom-layer layer
-						:text text
-						:text-drawing-id (gensym)
-						:texture-id (gensym)
-						:font-id font-id
-						:control-id control-id))
-    (register-handler! (gensym)
-		       (fn (when (event-control-clicked? % control-id)
-			     (funcall click-fn))))))
-
-(defbutton execute "Execute!" (g2 30 30) 1 :font
+(defbutton execute (button "Execute!" 1 (g2 30 30) :font)
   (handle-execute-button-clicked!))
 
-(defbutton reset "Reset" (g2 35 30) 1 :font
+(defbutton reset (button "Reset" 1  (g2 35 30) :font)
   (reset!))
 
 (defun mouse-pos-text ()
@@ -1327,5 +1293,5 @@ Test-fn and handle-fn are both functions of event."
 ;; a way to hide/show drawings would be nice
 ;; central definition for instructions (compile into an execute)
 ;; show me description of instruction (optionally?)
-;; Join buttons and controls
+
 ;; keep initializing things over and over again.
