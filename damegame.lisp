@@ -350,6 +350,9 @@ From the plist (id value id2 value2 ...)"
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
+  (mapcar 'funcall *commands*)
+  (setq *commands* ())
+
   (let ((events (reverse *events*)))
     (setq *events* ())
     (mapcar 'notify-handlers! events))
@@ -542,12 +545,6 @@ Test-fn and handle-fn are both functions of event."
       (remove-drawing! (control-drawing-id control))
       (setq *controls* (aremove *controls* id)))))
 
-(defcloss event-generic ()
-  fn)
-(defhandler handle-generic-event! (event)
-  (when (event-generic-p event)
-    (funcall (event-generic-fn event))))
-
 (defun destroy-button! (button-id)
   "Removes/unloads the button's control, textures, and drawings."
   (let* ((button-spec (gethash button-id *buttons*))
@@ -575,10 +572,12 @@ Test-fn and handle-fn are both functions of event."
 
 (defhandler handle-intialization-finished! (event)
   (when (event-initialization-finished-p event)
-    (event! (make-instance 'event-generic :fn (fn (load-font! :font "DroidSansMono.ttf" 16))))))
+    (load-font! :font "DroidSansMono.ttf" 16)))
 
-(defmacro user-event! (&body body)
-  `(event! (make-instance 'event-generic :fn (fn ,@body))))
+(defvar *commands* ())
+
+(defmacro command! (&body body)
+  `(push (fn ,@body) *commands*))
 
 (defun texture-right-aligned (x texture-id)
   (- x (texture-width (gethash texture-id *textures*))))
@@ -857,7 +856,7 @@ Test-fn and handle-fn are both functions of event."
   (not (zerop (logand (cpu-flag cpu) #b0001))))
 
 #+nil
-(user-event!
+(command!
   (let ((*number-base* :unsigned))
     (update-cpu-visualization!
      (make-cpu :a 128 :b 255 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8
@@ -1126,7 +1125,7 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
     (reset!)))
 
 #+nil
-(user-event! (reset!))
+(command! (reset!))
 
 (defun add-mouse-pos-drawing! ()
   (add-drawing! :mouse-pos (full-texture-drawing 1 :mouse-pos (v2 0 0)))
@@ -1141,7 +1140,7 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
 			       (g1 1))))))
 
 #+nil
-(user-event!
+(command!
   (if (aval :mouse-pos *drawings*)
       (progn
 	(remove-drawing! :mouse-pos)
@@ -1220,7 +1219,6 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
 ;; show me some memory (memory being accessed?)
 ;; show description of the next instruction to execute.
 ;; a way to hide/show drawings would be nice
-;; events (observable) vs. commands (just do 'em)
 ;; central definition for instructions (compile into an execute)
 ;; show me description of instruction (optionally?)
 ;; Join buttons and controls
