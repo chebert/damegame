@@ -958,76 +958,76 @@ Test-fn and handle-fn are both functions of event."
     (#x0c (alist :name :inc-c
 		 :registers '(:c)
 		 :flags '(:zero :subtraction :half-carry)
-		 :description '("Increment the contents of register C by 1.")
+		 :description "Increment the contents of register C by 1."
 		 :cycles (fn 1)))
     (#x0e (alist :name :ld-c-d8
 		 :registers '(:c)
 		 :flags '()
-		 :description '("Load the 8-bit immediate operand d8 into register C.")
+		 :description "Load the 8-bit immediate operand d8 into register C."
 		 :cycles (fn 2)))
     (#x20 (alist :name :jr-nz-s8
 		 :registers '(:pc)
 		 :flags '()
-		 :description '("If the Z flag is 0, jump s8 steps from the current"
-				"address stored in the program counter (PC)."
-				"If not, the instruction following the current JP"
-				"instruction is executed (as usual).")
+		 :description "If the Z flag is 0, jump s8 steps from the current
+address stored in the program counter (PC).
+If not, the instruction following the current JP
+instruction is executed (as usual)."
 		 :cycles (fn (if (cpu-zero? %)
 				 3
 				 2))))
     (#x21 (alist :name :ld-hl-d16
 		 :registers '(:hl :h :l)
 		 :flags '()
-		 :description '("Load the 2 bytes of immediate data into register pair HL."
-				""
-				"The first byte of immediate data is the lower byte"
-				"and the second byte of immediate data is the higher byte")
+		 :description "Load the 2 bytes of immediate data into register pair HL.
+
+The first byte of immediate data is the lower byte
+and the second byte of immediate data is the higher byte"
 		 :cycles (fn 3)))
     (#x31 (alist :name :ld-sp-imm
 		 :registers '(:sp)
 		 :flags '()
-		 :description '("Load the 2 bytes of immediate data into register pair SP."
-				""
-				"The first byte of immediate data is the lower byte"
-				"and the second byte of immediate data is the higher byte")
+		 :description "Load the 2 bytes of immediate data into register pair SP.
+
+The first byte of immediate data is the lower byte
+and the second byte of immediate data is the higher byte"
 		 :cycles (fn 3)))
     (#x32 (alist :name :ld-hl-a
 		 :registers '(:a :h :l :hl)
 		 :flags '()
-		 :description '("Store the contents of register A into the memory"
-				"location specified by register pair HL,"
-				"and simultaneously decrement the contents of HL.")
+		 :description "Store the contents of register A into the memory
+location specified by register pair HL,
+and simultaneously decrement the contents of HL."
 		 :cycles (fn 2)))
     (#x3e (alist :name :ld-a-d8
 		 :registers '(:a)
 		 :flags '()
-		 :description '("Load the 8-bit immediate operand d8 into register A.")
+		 :description "Load the 8-bit immediate operand d8 into register A."
 		 :cycles (fn 2)))
     (#xAF (alist :name :xor-a
 		 :registers '(:a)
 		 :flags '(:zero :subtraction :half-carry :carry)
-		 :description '("Take the logical exclusive-OR for each bit of the"
-				"contents of register A and the contents of register A,"
-				"and store the results in register A.")
+		 :description "Take the logical exclusive-OR for each bit of the
+contents of register A and the contents of register A,
+and store the results in register A."
 		 :cycles (fn 1)))
     (#xCB
      (ecase b2
        (#x7c (alist :name :bit-7-h
 		    :registers '()
 		    :flags '(:zero :subtraction :half-carry)
-		    :description '("Copy the complement of the contents of bit 7 in"
-				   "register H to the Z flag.")
+		    :description "Copy the complement of the contents of bit 7 in
+register H to the Z flag."
 		    :cycles (fn 2)))))
 
     (#xE2 (alist :name :ld-@c-a
 		 :registers '()
 		 :flags '()
-		 :description '("Store the contents of register A in the port register,"
-				"or mode register at the address"
-				"in the range 0xFF00-0xFFFF specified by register C."
-				"- 0xFF00-0xFF7F: Port/Mode, control, & sound registers"
-				"- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)"
-				"- 0xFFFF: Interrupt Enable Register")
+		 :description "Store the contents of register A in the port register,
+or mode register at the address
+in the range 0xFF00-0xFFFF specified by register C.
+- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
+- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
+- 0xFFFF: Interrupt Enable Register"
 		 :cycles (fn 2)))))
 
 (defun next-instr-data (pc memory)
@@ -1149,7 +1149,7 @@ Test-fn and handle-fn are both functions of event."
 (defvar *cpu-visualization* (cpu-visualization "Current" (fn *cpu-visualization-pos*) (fn *cpu*)))
 (defvar *cpu-visualization-previous* (cpu-visualization "Previous" (fn *cpu-visualization-previous-pos*) (fn *cpu-previous*)))
 
-(defvar *instruction-description-ids* (list (gensym) (gensym) (gensym) (gensym) (gensym) (gensym)))
+(defvar *instruction-description-ids* (loop for i below 8 collecting (gensym)))
 
 (defun reset! ()
   (setq *cpu* (cpu-initial))
@@ -1176,23 +1176,27 @@ Test-fn and handle-fn are both functions of event."
 				  *cpu-visualization*))
   (setq *cpu-visualization-previous* (aset :colors () *cpu-visualization-previous*)))
 
-(defun initialize-description! (description)
-  (loop for id in *instruction-description-ids*
-	do (remove-drawing! id))
-  (let ((pos (g2 1 30)))
-    (loop for id in *instruction-description-ids*
-	  for i from 0
-	  for line in description do
-	    (load-text-texture! id :font line)
-	    (add-drawing! id (full-texture-drawing 1 id (v+ pos (g2 0 i)))))
+(defun split-lines (text)
+  (uiop:split-string text :separator '(#\newline)))
 
-    (add-drawing! :instruction-description-box
-		  (drawing 1 (fn
-			       (set-color! (white))
-			       (draw-rect! (truncate (g1 .5))
-					   (truncate (g1 29.5))
-					   (g1 29)
-					   (g1 (1+ (length description)))))))))
+(defun initialize-description! (description)
+  (let* ((lines (split-lines description)))
+    (loop for id in *instruction-description-ids*
+	  do (remove-drawing! id))
+    (let ((pos (g2 1 30)))
+      (loop for id in *instruction-description-ids*
+	    for i from 0
+	    for line in lines do
+	      (load-text-texture! id :font line)
+	      (add-drawing! id (full-texture-drawing 1 id (v+ pos (g2 0 i)))))
+
+      (add-drawing! :instruction-description-box
+		    (drawing 1 (fn
+				 (set-color! (white))
+				 (draw-rect! (truncate (g1 .5))
+					     (truncate (g1 29.5))
+					     (g1 29)
+					     (g1 (1+ (length lines))))))))))
 
 (defhandler handle-initialize-cpu-visualization (event)
   (when (event-font-opened? event :font)
@@ -1271,7 +1275,7 @@ Test-fn and handle-fn are both functions of event."
 (defbutton execute (button "Execute!" 1 (g2 30 30) :font)
   (handle-execute-button-clicked!))
 
-(defbutton reset (button "Reset" 1  (g2 35 30) :font)
+(defbutton reset (button "Reset" 1  (g2 30 31) :font)
   (reset!))
 
 (defun mouse-pos-text ()
