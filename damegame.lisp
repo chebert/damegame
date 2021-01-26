@@ -619,6 +619,73 @@ Test-fn and handle-fn are both functions of event."
     (when texture
       (texture-color-mod! texture (r color) (g color) (b color)))))
 
+
+(defun memory-visualization (title pos start-addr-ref)
+  (let ((ids (make-array (list *memory-visualization-byte-count*))))
+    (loop for i below (length ids)
+	  do (setf (aref ids i) (gensym)))
+    (alist :pos pos
+	   :start-addr-ref start-addr-ref
+	   :texture-ids ids
+	   :title title
+	   :title-texture-id (gensym))))
+(defparameter *memory-visualization-byte-count* 24)
+
+(defun draw-memory-visualization! (cpu memory-visualization)
+  (let* ((ids (aval :texture-ids memory-visualization))
+	 (pos (aval :pos memory-visualization))
+	 (start-addr (funcall (aval :start-addr-ref memory-visualization))))
+    (draw-full-texture-id! (aval :title-texture-id memory-visualization) pos)
+    (loop for i below (length ids)
+	  do
+	     (let ((addr (+ i start-addr))
+		   (texture-id (aref ids i)))
+	       (set-texture-color! texture-id 
+				   (cond
+				     ((= addr (cpu-pc cpu)) (green))
+				     ((= addr (cpu-sp cpu)) (blue))
+				     ((= addr (cpu-hl cpu)) (yellow))
+				     (t (white))))
+	       (draw-full-texture-id! texture-id (v+ pos (g2 0 (1+ i))))))))
+(defun update-memory-visualization! (memory memory-visualization)
+  (let* ((ids (aval :texture-ids memory-visualization))
+	 (start-addr (funcall (aval :start-addr-ref memory-visualization))))
+    (loop for i below (length ids)
+	  do (load-text-texture! (aref ids i)
+				 :font
+				 (format nil "~A: ~A"
+					 (register16-text (+ i start-addr))
+					 (register8-text (aref memory (+ i start-addr))))))))
+
+(defun start-addr (focus-addr)
+  (min (max (- focus-addr (/ *memory-visualization-byte-count* 2)) 0) (- #xffff *memory-visualization-byte-count*)))
+
+(defvar *pc-memory-visualization*)
+(defvar *sp-memory-visualization*)
+(defvar *hl-memory-visualization*)
+(defhandler handle-initialize-memory-visualization (event)
+  (when (event-font-opened? event :font)
+    (setq *pc-memory-visualization* (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc *cpu*)))))
+    (update-memory-visualization! *memory* *pc-memory-visualization*)
+    (add-drawing! :memory-pc (drawing 1 (fn (draw-memory-visualization! *cpu* *pc-memory-visualization*))))
+    (load-text-texture! (aval :title-texture-id *pc-memory-visualization*)
+			:font
+			(aval :title *pc-memory-visualization*))
+
+    (setq *sp-memory-visualization* (memory-visualization "Stack" (g2 9 3) (fn (start-addr (cpu-sp *cpu*)))))
+    (update-memory-visualization! *memory* *sp-memory-visualization*)
+    (add-drawing! :memory-sp (drawing 1 (fn (draw-memory-visualization! *cpu* *sp-memory-visualization*))))
+    (load-text-texture! (aval :title-texture-id *sp-memory-visualization*)
+			:font
+			(aval :title *sp-memory-visualization*))
+
+    (setq *hl-memory-visualization* (memory-visualization "HL" (g2 (+ 9 8) 3) (fn (start-addr (cpu-hl *cpu*)))))
+    (update-memory-visualization! *memory* *hl-memory-visualization*)
+    (add-drawing! :memory-hl (drawing 1 (fn (draw-memory-visualization! *cpu* *hl-memory-visualization*))))
+    (load-text-texture! (aval :title-texture-id *hl-memory-visualization*)
+			:font
+			(aval :title *hl-memory-visualization*))))
+
 (defun draw-cpu-visualization! (cpu-visualization)
   (let* ((cpu-pos (funcall (aval :pos-fn cpu-visualization))))
     (set-color! (white))
@@ -906,75 +973,80 @@ Test-fn and handle-fn are both functions of event."
   (not (zerop (logand #x10 (+ (logand #xf a) (logand #xf b))))))
 
 (defun instr-data (b1 &optional b2)
-  (ecase b1
+  (case b1
     (#x0c (alist :name :inc-c
 		 :registers '(:c)
 		 :flags '(:zero :subtraction :half-carry)
-		 :description "Increment the contents of register C by 1."
+		 :description '("Increment the contents of register C by 1.")
 		 :cycles (fn 1)))
     (#x0e (alist :name :ld-c-d8
 		 :registers '(:c)
 		 :flags '()
-		 :description "Load the 8-bit immediate operand d8 into register C."
+		 :description '("Load the 8-bit immediate operand d8 into register C.")
 		 :cycles (fn 2)))
     (#x20 (alist :name :jr-nz-s8
 		 :registers '(:pc)
 		 :flags '()
-		 :description "If the Z flag is 0, jump s8 steps from the current address stored in the program counter (PC).
-If not, the instruction following the current JP instruction is executed (as usual)."
+		 :description '("If the Z flag is 0, jump s8 steps from the current"
+				"address stored in the program counter (PC)."
+				"If not, the instruction following the current JP"
+				"instruction is executed (as usual).")
 		 :cycles (fn (if (cpu-zero? %)
 				 3
 				 2))))
     (#x21 (alist :name :ld-hl-d16
 		 :registers '(:hl :h :l)
 		 :flags '()
-		 :description "Load the 2 bytes of immediate data into register pair HL.
-
-The first byte of immediate data is the lower byte (i.e., bits 0-7), 
-and the second byte of immediate data is the higher byte (i.e., bits 8-15)."
+		 :description '("Load the 2 bytes of immediate data into register pair HL."
+				""
+				"The first byte of immediate data is the lower byte"
+				"and the second byte of immediate data is the higher byte")
 		 :cycles (fn 3)))
     (#x31 (alist :name :ld-sp-imm
 		 :registers '(:sp)
 		 :flags '()
-		 :description "Load the 2 bytes of immediate data into register pair SP.
-
-The first byte of immediate data is the lower byte (i.e., bits 0-7), 
-and the second byte of immediate data is the higher byte (i.e., bits 8-15)."
+		 :description '("Load the 2 bytes of immediate data into register pair SP."
+				""
+				"The first byte of immediate data is the lower byte"
+				"and the second byte of immediate data is the higher byte")
 		 :cycles (fn 3)))
     (#x32 (alist :name :ld-hl-a
 		 :registers '(:a :h :l :hl)
 		 :flags '()
-		 :description "Store the contents of register A into the memory location specified by register pair HL,
-and simultaneously decrement the contents of HL."
+		 :description '("Store the contents of register A into the memory"
+				"location specified by register pair HL,"
+				"and simultaneously decrement the contents of HL.")
 		 :cycles (fn 2)))
     (#x3e (alist :name :ld-a-d8
 		 :registers '(:a)
 		 :flags '()
-		 :description "Load the 8-bit immediate operand d8 into register A."
+		 :description '("Load the 8-bit immediate operand d8 into register A.")
 		 :cycles (fn 2)))
     (#xAF (alist :name :xor-a
 		 :registers '(:a)
 		 :flags '(:zero :subtraction :half-carry :carry)
-		 :description "Take the logical exclusive-OR for each bit of the contents of register A and the contents of register A, 
-and store the results in register A."
+		 :description '("Take the logical exclusive-OR for each bit of the"
+				"contents of register A and the contents of register A,"
+				"and store the results in register A.")
 		 :cycles (fn 1)))
     (#xCB
      (ecase b2
        (#x7c (alist :name :bit-7-h
 		    :registers '()
 		    :flags '(:zero :subtraction :half-carry)
-		    :description "Copy the complement of the contents of bit 7 in register H to the Z flag."
+		    :description '("Copy the complement of the contents of bit 7 in"
+				   "register H to the Z flag.")
 		    :cycles (fn 2)))))
 
     (#xE2 (alist :name :ld-@c-a
 		 :registers '()
 		 :flags '()
-		 :description "Store the contents of register A in the internal RAM, port register, 
-or mode register at the address in the range 0xFF00-0xFFFF specified by register C.
-
- - 0xFF00-0xFF7F: Port/Mode registers, control register, sound register
- - 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
- - 0xFFFF: Interrupt Enable Register"
+		 :description '("Store the contents of register A in the port register,"
+				"or mode register at the address"
+				"in the range 0xFF00-0xFFFF specified by register C."
+				"- 0xFF00-0xFF7F: Port/Mode, control, & sound registers"
+				"- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)"
+				"- 0xFFFF: Interrupt Enable Register")
 		 :cycles (fn 2)))))
 
 (defun next-instr-data (pc memory)
@@ -982,7 +1054,7 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
 
 (defun disassemble-instr (pc memory)
   (let* ((instr (aref memory pc)))
-    (ecase instr
+    (case instr
       (#x0c (list :inc-c))
       (#x0e (list :ld-c-d8 (list :d8 (register8-text (aref memory (1+ pc))))))
       (#x20 (let ((s8 (s8 (aref memory (1+ pc)))))
@@ -996,11 +1068,13 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
       (#xAF (list :xor-a))
       (#xCB
        (let* ((pc (1+ pc))
-	      (instr (aref memory pc)))
-	 (ecase instr
-	   (#x7c (list :bit-7-h)))))
+	      (instr2 (aref memory pc)))
+	 (case instr2
+	   (#x7c (list :bit-7-h))
+	   (t (list :unknown (register16-text (combined-register instr2 instr)))))))
 
-      (#xE2 (list :ld-@c-a)))))
+      (#xE2 (list :ld-@c-a))
+      (t (list :unknown (let ((*number-base* :hexadecimal)) (register8-text instr)))))))
 
 (defun execute! ()
   (let* ((pc (cpu-pc *cpu*))
@@ -1094,6 +1168,8 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
 (defvar *cpu-visualization* (cpu-visualization "Current" (fn *cpu-visualization-pos*) (fn *cpu*)))
 (defvar *cpu-visualization-previous* (cpu-visualization "Previous" (fn *cpu-visualization-previous-pos*) (fn *cpu-previous*)))
 
+(defvar *instruction-description-ids* (list (gensym) (gensym) (gensym) (gensym) (gensym) (gensym)))
+
 (defun reset! ()
   (setq *cpu* (cpu-initial))
   (setq *cpu-previous* (cpu-initial))
@@ -1103,26 +1179,49 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
   (load-text-texture! :disassembly-next
 		      :font
 		      (disassembly-text (cpu-pc *cpu*) *memory*))
+
+  (initialize-description! (aval :description (next-instr-data (cpu-pc *cpu*) *memory*)))
+  
+  (update-memory-visualization! *memory* *pc-memory-visualization*)
+  (update-memory-visualization! *memory* *sp-memory-visualization*)
+  (update-memory-visualization! *memory* *hl-memory-visualization*)
   (update-cpu-visualization! *cpu-visualization*)
   (update-cpu-visualization! *cpu-visualization-previous*)
 
   (setq *cpu-visualization* (aset :colors
-				  (print
-				   (cpu-visualization-colors
-				    ()
-				    (next-instr-data (cpu-pc (funcall (aval :cpu-fn *cpu-visualization*))) *memory*)))
+				  (cpu-visualization-colors
+				   ()
+				   (next-instr-data (cpu-pc (funcall (aval :cpu-fn *cpu-visualization*))) *memory*))
 				  *cpu-visualization*))
   (setq *cpu-visualization-previous* (aset :colors () *cpu-visualization-previous*)))
+
+(defun initialize-description! (description)
+  (loop for id in *instruction-description-ids*
+	do (remove-drawing! id))
+  (let ((pos (g2 1 30)))
+    (loop for id in *instruction-description-ids*
+	  for i from 0
+	  for line in description do
+	    (load-text-texture! id :font line)
+	    (add-drawing! id (full-texture-drawing 1 id (v+ pos (g2 0 i)))))
+
+    (add-drawing! :instruction-description-box
+		  (drawing 1 (fn
+			       (set-color! (white))
+			       (draw-rect! (truncate (g1 .5))
+					   (truncate (g1 29.5))
+					   (g1 29)
+					   (g1 (1+ (length description)))))))))
 
 (defhandler handle-initialize-cpu-visualization (event)
   (when (event-font-opened? event :font)
     (load-text-texture! :disassembly :font "(Disassembly)")
     (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 30 13)))
 
+    (initialize-description! (aval :description (next-instr-data (cpu-pc *cpu*) *memory*)))
+    
     (load-text-texture! :disassembly-next :font "(Next Disassembly)")
-    (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 30 29)))
-
-    (reset!)))
+    (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 30 29)))))
 
 #+nil
 (command! (reset!))
@@ -1177,11 +1276,16 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
     (load-text-texture! :disassembly-next
 			:font
 			(disassembly-text (cpu-pc *cpu*) *memory*))
+
+    (update-memory-visualization! *memory* *pc-memory-visualization*)
+    (update-memory-visualization! *memory* *sp-memory-visualization*)
+    (update-memory-visualization! *memory* *hl-memory-visualization*)
     (update-cpu-visualization! *cpu-visualization*)
     (update-cpu-visualization! *cpu-visualization-previous*)
 
     (let* ((instr-data (next-instr-data (cpu-pc *cpu*) *memory*)))
-      (setq *cpu-visualization* (aset :colors (cpu-visualization-colors prev-instr-data instr-data) *cpu-visualization*)))))
+      (setq *cpu-visualization* (aset :colors (cpu-visualization-colors prev-instr-data instr-data) *cpu-visualization*))
+      (initialize-description! (aval :description instr-data)))))
 
 ;; TODO: add a remove-button!
 (defun add-button! (button-id text pos layer font-id click-fn)
@@ -1216,9 +1320,12 @@ or mode register at the address in the range 0xFF00-0xFFFF specified by register
     (load-text-texture! :mouse-pos :font (mouse-pos-text))
     (add-mouse-pos-drawing!)))
 
-;; show me some memory (memory being accessed?)
-;; show description of the next instruction to execute.
+;; indicate the following in memory:
+;;   PC, SP, HL, (others?)
+;;   if memory was just changed show what it was changed from & to
+
 ;; a way to hide/show drawings would be nice
 ;; central definition for instructions (compile into an execute)
 ;; show me description of instruction (optionally?)
 ;; Join buttons and controls
+;; keep initializing things over and over again.
