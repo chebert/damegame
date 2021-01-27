@@ -601,7 +601,7 @@ Test-fn and handle-fn are both functions of event."
       (texture-color-mod! texture (r color) (g color) (b color)))))
 
 
-(defun memory-visualization (title pos start-addr-ref)
+(defun memory-visualization (title pos start-addr-ref byte-text-fn)
   (let ((ids (make-array (list *memory-visualization-byte-count*))))
     (loop for i below (length ids)
 	  do (setf (aref ids i) (gensym)))
@@ -609,7 +609,8 @@ Test-fn and handle-fn are both functions of event."
 	   :start-addr-ref start-addr-ref
 	   :texture-ids ids
 	   :title title
-	   :title-texture-id (gensym))))
+	   :title-texture-id (gensym)
+	   :byte-text-fn byte-text-fn)))
 (defparameter *memory-visualization-byte-count* 24)
 
 (defun draw-memory-visualization! (cpu memory-visualization)
@@ -630,13 +631,14 @@ Test-fn and handle-fn are both functions of event."
 	       (draw-full-texture-id! texture-id (v+ pos (g2 0 (1+ i))))))))
 (defun update-memory-visualization! (memory memory-visualization)
   (let* ((ids (aval :texture-ids memory-visualization))
+	 (byte-text-fn (aval :byte-text-fn memory-visualization))
 	 (start-addr (funcall (aval :start-addr-ref memory-visualization))))
     (loop for i below (length ids)
 	  do (load-text-texture! (aref ids i)
 				 :font
 				 (format nil "~A: ~A"
-					 (register16-text (+ i start-addr))
-					 (register8-text (aref memory (+ i start-addr))))))))
+					 (hex16-text (+ i start-addr))
+					 (funcall byte-text-fn (aref memory (+ i start-addr))))))))
 
 (defun start-addr (focus-addr)
   (min (max (- focus-addr (/ *memory-visualization-byte-count* 2)) 0) (- #xffff *memory-visualization-byte-count*)))
@@ -646,21 +648,24 @@ Test-fn and handle-fn are both functions of event."
 (defvar *hl-memory-visualization*)
 (defhandler handle-initialize-memory-visualization (event)
   (when (event-font-opened? event :font)
-    (setq *pc-memory-visualization* (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc *cpu*)))))
+    (setq *pc-memory-visualization* (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc *cpu*)))
+							  'hex8-text))
     (update-memory-visualization! *memory* *pc-memory-visualization*)
     (add-drawing! :memory-pc (drawing 1 (fn (draw-memory-visualization! *cpu* *pc-memory-visualization*))))
     (load-text-texture! (aval :title-texture-id *pc-memory-visualization*)
 			:font
 			(aval :title *pc-memory-visualization*))
 
-    (setq *sp-memory-visualization* (memory-visualization "Stack" (g2 9 3) (fn (start-addr (cpu-sp *cpu*)))))
+    (setq *sp-memory-visualization* (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp *cpu*)))
+							  'register8-text))
     (update-memory-visualization! *memory* *sp-memory-visualization*)
     (add-drawing! :memory-sp (drawing 1 (fn (draw-memory-visualization! *cpu* *sp-memory-visualization*))))
     (load-text-texture! (aval :title-texture-id *sp-memory-visualization*)
 			:font
 			(aval :title *sp-memory-visualization*))
 
-    (setq *hl-memory-visualization* (memory-visualization "HL" (g2 (+ 9 8) 3) (fn (start-addr (cpu-hl *cpu*)))))
+    (setq *hl-memory-visualization* (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl *cpu*)))
+							  'register8-text))
     (update-memory-visualization! *memory* *hl-memory-visualization*)
     (add-drawing! :memory-hl (drawing 1 (fn (draw-memory-visualization! *cpu* *hl-memory-visualization*))))
     (load-text-texture! (aval :title-texture-id *hl-memory-visualization*)
@@ -863,10 +868,14 @@ Test-fn and handle-fn are both functions of event."
   (checkeql (s16 #x0) 0)
   (checkeql (s16 #xffff) -1))
 
+(defun hex8-text (num)
+  (format nil "0x~2,'0x" num))
+(defun hex16-text (num)
+  (format nil "0x~4,'0x" num))
 (defun register8-text (register)
   (ecase *number-base*
     (:hexadecimal
-     (format nil "0x~2,'0x" register))
+     (hex8-text register))
     (:signed
      (format nil "~d" (s8 register)))
     (:unsigned
@@ -876,7 +885,7 @@ Test-fn and handle-fn are both functions of event."
 (defun register16-text (register)
   (ecase *number-base*
     ((:hexadecimal :binary)
-     (format nil "0x~4,'0x" register))
+     (hex16-text register))
     (:signed
      (format nil "~d" (s16 register)))
     (:unsigned
@@ -1143,8 +1152,8 @@ in the range 0xFF00-0xFFFF specified by register C.
 
 (register8-text 12)
 
-(defparameter *cpu-visualization-pos* (g2 30 18))
-(defparameter *cpu-visualization-previous-pos* (g2 30 2))
+(defparameter *cpu-visualization-pos* (g2 32 18))
+(defparameter *cpu-visualization-previous-pos* (g2 32 2))
 
 (defvar *cpu-visualization* (cpu-visualization "Current" (fn *cpu-visualization-pos*) (fn *cpu*)))
 (defvar *cpu-visualization-previous* (cpu-visualization "Previous" (fn *cpu-visualization-previous-pos*) (fn *cpu-previous*)))
@@ -1201,12 +1210,12 @@ in the range 0xFF00-0xFFFF specified by register C.
 (defhandler handle-initialize-cpu-visualization (event)
   (when (event-font-opened? event :font)
     (load-text-texture! :disassembly :font "(Disassembly)")
-    (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 30 13)))
+    (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
 
     (initialize-description! (aval :description (next-instr-data (cpu-pc *cpu*) *memory*)))
     
     (load-text-texture! :disassembly-next :font "(Next Disassembly)")
-    (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 30 29)))))
+    (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29)))))
 
 #+nil
 (command! (reset!))
@@ -1250,6 +1259,13 @@ in the range 0xFF00-0xFFFF specified by register C.
      (mapcar (fn (cons % (green))) just-next)
      (mapcar (fn (cons % (yellow))) both))))
 
+(defun update-visualizations! ()
+  (update-memory-visualization! *memory* *pc-memory-visualization*)
+  (update-memory-visualization! *memory* *sp-memory-visualization*)
+  (update-memory-visualization! *memory* *hl-memory-visualization*)
+  (update-cpu-visualization! *cpu-visualization*)
+  (update-cpu-visualization! *cpu-visualization-previous*))
+
 (defun handle-execute-button-clicked! ()
   (let ((prev (disassembly-text (cpu-pc *cpu*) *memory*))
 	(prev-instr-data (next-instr-data (cpu-pc *cpu*) *memory*)))
@@ -1262,21 +1278,30 @@ in the range 0xFF00-0xFFFF specified by register C.
 			:font
 			(disassembly-text (cpu-pc *cpu*) *memory*))
 
-    (update-memory-visualization! *memory* *pc-memory-visualization*)
-    (update-memory-visualization! *memory* *sp-memory-visualization*)
-    (update-memory-visualization! *memory* *hl-memory-visualization*)
-    (update-cpu-visualization! *cpu-visualization*)
-    (update-cpu-visualization! *cpu-visualization-previous*)
+    (update-visualizations!)
 
     (let* ((instr-data (next-instr-data (cpu-pc *cpu*) *memory*)))
       (setq *cpu-visualization* (aset :colors (cpu-visualization-colors prev-instr-data instr-data) *cpu-visualization*))
       (initialize-description! (aval :description instr-data)))))
 
-(defbutton execute (button "Execute!" 1 (g2 30 30) :font)
+(defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
 
-(defbutton reset (button "Reset" 1  (g2 30 31) :font)
+(defbutton reset (button "Reset" 1  (g2 32 31) :font)
   (reset!))
+
+(defbutton hex (button "Hex" 1 (g2 32 33) :font)
+  (setq *number-base* :hexadecimal)
+  (update-visualizations!))
+(defbutton bin (button "Bin" 1 (g2 34 33) :font)
+  (setq *number-base* :binary)
+  (update-visualizations!))
+(defbutton signed (button "10s" 1 (g2 32 34) :font)
+  (setq *number-base* :signed)
+  (update-visualizations!))
+(defbutton unsigned (button "10u" 1 (g2 34 34) :font)
+  (setq *number-base* :unsigned)
+  (update-visualizations!))
 
 (defun mouse-pos-text ()
   (format nil "<~3,' d, ~3,' d><G~2,' d, G~2,' d>"
@@ -1294,8 +1319,11 @@ in the range 0xFF00-0xFFFF specified by register C.
 ;;   PC, SP, HL, (others?)
 ;;   if memory was just changed show what it was changed from & to
 
+;; focus: the memory address that was last modified
+
 ;; a way to hide/show drawings would be nice
 ;; central definition for instructions (compile into an execute)
 ;; show me description of instruction (optionally?)
 
 ;; keep initializing things over and over again.
+;; pc memory list should always be in hex
