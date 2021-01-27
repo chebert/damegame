@@ -12,7 +12,9 @@
   (defvar *commands* ()))
 
 (defmacro command! (&body body)
-  `(push (fn ,@body) *commands*))
+  `(if *quit?*
+       (progn ,@body)
+       (push (fn ,@body) *commands*)))
 
 (defmacro deftest (name &body body)
   `(progn
@@ -396,6 +398,9 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
+    (clrhash *fonts*)
+    (clrhash *textures*)
+    (clrhash *event-handlers*)
     (quit!)))
 
 (defun event-font-opened? (event font-id)
@@ -577,8 +582,12 @@ Test-fn and handle-fn are both functions of event."
 (defun cpu-initial ()
   (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0 :flag 0))
 
-(defvar *cpu* (cpu-initial))
-(defvar *cpu-previous* (cpu-initial))
+(defvar *cpus* (alist :current (cpu-initial)))
+(defun cpu-current ()
+  (aval :current *cpus*))
+(defun cpu-previous ()
+  (aval :penultimate *cpus*))
+
 (defun cpu-state-left-column (cpu-pos)
   (+ (g1 6) (x cpu-pos)))
 (defun cpu-state-right-column (cpu-pos)
@@ -613,8 +622,9 @@ Test-fn and handle-fn are both functions of event."
 	   :byte-text-fn byte-text-fn)))
 (defparameter *memory-visualization-byte-count* 24)
 
-(defun draw-memory-visualization! (cpu memory-visualization)
-  (let* ((ids (aval :texture-ids memory-visualization))
+(defun draw-memory-visualization! (cpu memory-visualization-id)
+  (let* ((memory-visualization (get-memory-visualization memory-visualization-id))
+	 (ids (aval :texture-ids memory-visualization))
 	 (pos (aval :pos memory-visualization))
 	 (start-addr (funcall (aval :start-addr-ref memory-visualization))))
     (draw-full-texture-id! (aval :title-texture-id memory-visualization) pos)
@@ -643,37 +653,76 @@ Test-fn and handle-fn are both functions of event."
 (defun start-addr (focus-addr)
   (min (max (- focus-addr (/ *memory-visualization-byte-count* 2)) 0) (- #xffff *memory-visualization-byte-count*)))
 
-(defvar *pc-memory-visualization*)
-(defvar *sp-memory-visualization*)
-(defvar *hl-memory-visualization*)
+(defvar *memory-visualizations* ())
+(defun get-memory-visualization (id)
+  (aval id *memory-visualizations*))
+(defun set-memory-visualization! (id value)
+  (setq *memory-visualizations* (aset id value *memory-visualizations*)))
+
+(defun remove-memory-visualization! (id)
+  (let* ((vis (get-memory-visualization id)))
+    (when vis
+      (let* ((drawing-id (aval :drawing-id vis)))
+	(remove-drawing! drawing-id)
+	(setq *memory-visualizations* (aremove *memory-visualizations* id))))))
+
+(defmacro defmemory-visualization (name memory-visualization)
+  `(progn
+     (command!
+       (set-memory-visualization! ',name ,memory-visualization)
+       (when (gethash :font *fonts*)
+	 (initialize-memory-visualization! ',name (get-memory-visualization ',name))))
+     ',name))
+(defmacro undefmemory-visualization (name &rest args)
+  (declare (ignore args))
+  `(command! (remove-memory-visualization! ',name)))
+
+(defun initialize-memory-visualization! (id memory-visualization)
+  (let* ((drawing-id (gensym)))
+    (set-memory-visualization! id (aset :drawing-id drawing-id memory-visualization))
+    (update-memory-visualization! *memory* memory-visualization)
+    (add-drawing! drawing-id (drawing 1 (fn (draw-memory-visualization! (cpu-current) id))))
+    (load-text-texture! (aval :title-texture-id memory-visualization) :font
+			(aval :title memory-visualization))))
+
+(defmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
+						  'hex8-text))
+(defmemory-visualization stack (memory-visualization "Stack" (g2 8 3) (fn (start-addr (cpu-sp (cpu-current))))
+						     'register8-text))
+(defmemory-visualization hl (memory-visualization "HL" (g2 19 3) (fn (start-addr (cpu-hl (cpu-current))))
+						  'register8-text))
+
 (defhandler handle-initialize-memory-visualization (event)
   (when (event-font-opened? event :font)
-    (setq *pc-memory-visualization* (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc *cpu*)))
-							  'hex8-text))
-    (update-memory-visualization! *memory* *pc-memory-visualization*)
-    (add-drawing! :memory-pc (drawing 1 (fn (draw-memory-visualization! *cpu* *pc-memory-visualization*))))
-    (load-text-texture! (aval :title-texture-id *pc-memory-visualization*)
-			:font
-			(aval :title *pc-memory-visualization*))
+    (amap 'initialize-memory-visualization! *memory-visualizations*)))
 
-    (setq *sp-memory-visualization* (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp *cpu*)))
-							  'register8-text))
-    (update-memory-visualization! *memory* *sp-memory-visualization*)
-    (add-drawing! :memory-sp (drawing 1 (fn (draw-memory-visualization! *cpu* *sp-memory-visualization*))))
-    (load-text-texture! (aval :title-texture-id *sp-memory-visualization*)
-			:font
-			(aval :title *sp-memory-visualization*))
 
-    (setq *hl-memory-visualization* (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl *cpu*)))
-							  'register8-text))
-    (update-memory-visualization! *memory* *hl-memory-visualization*)
-    (add-drawing! :memory-hl (drawing 1 (fn (draw-memory-visualization! *cpu* *hl-memory-visualization*))))
-    (load-text-texture! (aval :title-texture-id *hl-memory-visualization*)
-			:font
-			(aval :title *hl-memory-visualization*))))
+(defvar *cpu-visualizations* ())
+(defun get-cpu-visualization (id)
+  (aval id *cpu-visualizations*))
+(defun set-cpu-visualization! (id value)
+  (setq *cpu-visualizations* (aset id value *cpu-visualizations*)))
 
-(defun draw-cpu-visualization! (cpu-visualization)
-  (let* ((cpu-pos (funcall (aval :pos-fn cpu-visualization))))
+(defmacro defcpu-visualization (name cpu-visualization)
+  `(progn
+     (command!
+       (set-cpu-visualization! ',name ,cpu-visualization)
+       (when (gethash :font *fonts*)
+	 (initialize-cpu-visualization! ',name (get-cpu-visualization ',name))))
+     ',name))
+(defmacro undefcpu-visualization (name &rest args)
+  (declare (ignore args))
+  `(command! (remove-cpu-visualization! ',name)))
+
+(defun remove-cpu-visualization! (id)
+  (let* ((vis (get-cpu-visualization id)))
+    (when vis
+      ;; TODO
+      )))
+
+(defun draw-cpu-visualization! (id)
+  (let* ((cpu-visualization (get-cpu-visualization id))
+	 (cpu-pos (aval :pos cpu-visualization)))
     (set-color! (white))
     (draw-rect! (- (x cpu-pos) (/ *grid-size* 2))
 		(- (y cpu-pos) (/ *grid-size* 2))
@@ -766,15 +815,18 @@ Test-fn and handle-fn are both functions of event."
 	(set-texture-color! (aval :pc cpu-visualization) (aval :pc cpu-colors (white)))
 	(draw-full-texture-id! (aval :pc cpu-visualization) (v2 column y))))))
 
-(defun initialize-cpu-visualization! (drawing-id cpu-visualization-fn)
-  (let ((vis (funcall cpu-visualization-fn)))
-    (load-text-texture! (aval :title-texture-id vis)
-			:font
-			(aval :title vis))
-    (update-cpu-visualization! vis))
-  (add-drawing! drawing-id
-		(drawing *cpu-state-layer*
-			 (fn (draw-cpu-visualization! (funcall cpu-visualization-fn))))))
+(defun initialize-cpu-visualization! (id vis)
+  (let ((drawing-id (gensym)))
+    (set-cpu-visualization! id (aset :drawing-id drawing-id vis))
+    (load-text-texture! (aval :title-texture-id vis) :font (aval :title vis))
+    (update-cpu-visualization! vis)
+    (add-drawing! drawing-id (drawing *cpu-state-layer* (fn (draw-cpu-visualization! id))))))
+
+(defcpu-visualization current (cpu-visualization "Current" (g2 32 18) 'cpu-current))
+(defcpu-visualization previous (cpu-visualization "Previous" (g2 32 2) (fn (let ((prev (cpu-previous)))
+									     (if prev
+										 prev
+										 (cpu-initial))))))
 
 (defhandler load-cpu-visualization (event)
   (when (event-font-opened? event :font)
@@ -799,18 +851,17 @@ Test-fn and handle-fn are both functions of event."
     (load-text-texture! :stack-pointer :font "Stack Pointer: ")
     (load-text-texture! :program-counter :font "Program Counter: ")
 
-    (initialize-cpu-visualization! :cpu-visualization (fn *cpu-visualization*))
-    (initialize-cpu-visualization! :cpu-visualization-previous (fn *cpu-visualization-previous*))))
+    (amap 'initialize-cpu-visualization! *cpu-visualizations*)))
 
 (defun flag-state-texture-id (set?)
   (if set? :yes :no))
 
-(defun cpu-visualization (title pos-fn cpu-fn)
+(defun cpu-visualization (title pos cpu-fn)
   (alist
    :title title
    :cpu-fn cpu-fn
    :title-texture-id (gensym)
-   :pos-fn pos-fn
+   :pos pos
    :pc (gensym)
    :sp (gensym)
    :hl (gensym)
@@ -1066,65 +1117,65 @@ in the range 0xFF00-0xFFFF specified by register C.
       (#xE2 (list :ld-@c-a))
       (t (list :unknown (let ((*number-base* :hexadecimal)) (register8-text instr)))))))
 
-(defun execute! ()
-  (let* ((pc (cpu-pc *cpu*))
+(defun execute! (cpu)
+  (let* ((pc (cpu-pc cpu))
 	 (instr (aref *memory* pc)))
     (ecase instr
       (#x0c
        ;; Inc C
        ;; 1 cycles
-       (let* ((c (1+ (cpu-c *cpu*))))
-	 (setf (cpu-flag *cpu*)
+       (let* ((c (1+ (cpu-c cpu))))
+	 (setf (cpu-flag cpu)
 	       (flag (if (zerop c) 1 0)
 		     0
-		     (if (half-carry? (cpu-c *cpu*) 1) 1 0)
-		     (if (cpu-carry? *cpu*) 1 0)))
-	 (setf (cpu-c *cpu*) c))
-       (incf (cpu-pc *cpu*) 1))
+		     (if (half-carry? (cpu-c cpu) 1) 1 0)
+		     (if (cpu-carry? cpu) 1 0)))
+	 (setf (cpu-c cpu) c))
+       (incf (cpu-pc cpu) 1))
       (#x0e
        ;; Ld C, d8
        ;; 2 cycles
-       (setf (cpu-c *cpu*) (aref *memory* (1+ pc)))
-       (incf (cpu-pc *cpu*) 2))
+       (setf (cpu-c cpu) (aref *memory* (1+ pc)))
+       (incf (cpu-pc cpu) 2))
       (#x20
        ;; JR NZ, s8
-       (if (cpu-zero? *cpu*)
+       (if (cpu-zero? cpu)
 	   (let* ((s8 (s8 (aref *memory* (1+ pc)))))
 	     ;; 3 cycles
-	     (setf (cpu-pc *cpu*) (+ pc s8 2)))
+	     (setf (cpu-pc cpu) (+ pc s8 2)))
 	   ;; 2 cycles
-	   (incf (cpu-pc *cpu*) 2)))
+	   (incf (cpu-pc cpu) 2)))
       (#x21
        ;; LD HL d16
        ;; 3 cycles
-       (setf (cpu-l *cpu*) (aref *memory* (1+ pc))
-	     (cpu-h *cpu*) (aref *memory* (+ 2 pc)))
-       (incf (cpu-pc *cpu*) 3))
+       (setf (cpu-l cpu) (aref *memory* (1+ pc))
+	     (cpu-h cpu) (aref *memory* (+ 2 pc)))
+       (incf (cpu-pc cpu) 3))
       (#x31
        ;; LD SP Immediate
        ;; 3 cycles
-       (setf (cpu-sp *cpu*) (combined-register (aref *memory* (+ pc 2)) (aref *memory* (1+ pc))))
-       (incf (cpu-pc *cpu*) 3))
+       (setf (cpu-sp cpu) (combined-register (aref *memory* (+ pc 2)) (aref *memory* (1+ pc))))
+       (incf (cpu-pc cpu) 3))
       (#x32
        ;; LD HL- A
        ;; 2 cycles
-       (setf (aref *memory* (cpu-hl *cpu*)) (cpu-a *cpu*))
-       (let* ((hl (1- (cpu-hl *cpu*))))
-	 (setf (cpu-h *cpu*) (hi-byte hl)
-	       (cpu-l *cpu*) (lo-byte hl)))
-       (incf (cpu-pc *cpu*) 1))
+       (setf (aref *memory* (cpu-hl cpu)) (cpu-a cpu))
+       (let* ((hl (1- (cpu-hl cpu))))
+	 (setf (cpu-h cpu) (hi-byte hl)
+	       (cpu-l cpu) (lo-byte hl)))
+       (incf (cpu-pc cpu) 1))
       (#x3e
        ;; LD a, d8
        ;; 2 cycles
        ;; see 0x0e
-       (setf (cpu-a *cpu*) (aref *memory* (1+ pc)))
-       (incf (cpu-pc *cpu*) 2))
+       (setf (cpu-a cpu) (aref *memory* (1+ pc)))
+       (incf (cpu-pc cpu) 2))
       (#xAF
        ;; XOR A
        ;; 1 cycles
-       (setf (cpu-a *cpu*) 0
-	     (cpu-flag *cpu*) #b1000)
-       (incf (cpu-pc *cpu*) 1))
+       (setf (cpu-a cpu) 0
+	     (cpu-flag cpu) #b1000)
+       (incf (cpu-pc cpu) 1))
 
       (#xCB
        (let* ((pc (1+ pc))
@@ -1133,57 +1184,41 @@ in the range 0xFF00-0xFFFF specified by register C.
 	   (#x7c
 	    ;; Bit 7, H
 	    ;; 2 cycles
-	    (let* ((z (if (zerop (logand (cpu-h *cpu*) #x80))
+	    (let* ((z (if (zerop (logand (cpu-h cpu) #x80))
 			  1
 			  0))
 		   (s 0)
 		   (h 1)
-		   (c (if (cpu-carry? *cpu*) 1 0)))
-	      (setf (cpu-flag *cpu*) (flag z s h c))
-	      (incf (cpu-pc *cpu*) 2))))))
+		   (c (if (cpu-carry? cpu) 1 0)))
+	      (setf (cpu-flag cpu) (flag z s h c))
+	      (incf (cpu-pc cpu) 2))))))
 
       (#xE2
        ;; LD (C) a
        ;; 2 cycles
-       (setf (aref *memory* (+ #xff00 (cpu-c *cpu*)))
-	     (cpu-a *cpu*))
-       (incf (cpu-pc *cpu*) 1)))))
+       (setf (aref *memory* (+ #xff00 (cpu-c cpu)))
+	     (cpu-a cpu))
+       (incf (cpu-pc cpu) 1)))))
 (run-tests!)
 
 (register8-text 12)
 
-(defparameter *cpu-visualization-pos* (g2 32 18))
-(defparameter *cpu-visualization-previous-pos* (g2 32 2))
-
-(defvar *cpu-visualization* (cpu-visualization "Current" (fn *cpu-visualization-pos*) (fn *cpu*)))
-(defvar *cpu-visualization-previous* (cpu-visualization "Previous" (fn *cpu-visualization-previous-pos*) (fn *cpu-previous*)))
-
 (defvar *instruction-description-ids* (loop for i below 8 collecting (gensym)))
 
 (defun reset! ()
-  (setq *cpu* (cpu-initial))
-  (setq *cpu-previous* (cpu-initial))
+  (setq *cpus* (alist :current (cpu-initial)))
   (reset-memory!)
   (read-rom-file-into-memory! "gb_bios.bin")
-  (load-text-texture! :disassembly :font "(Disassembly)")
-  (load-text-texture! :disassembly-next
-		      :font
-		      (disassembly-text (cpu-pc *cpu*) *memory*))
 
-  (initialize-description! (aval :description (next-instr-data (cpu-pc *cpu*) *memory*)))
-  
-  (update-memory-visualization! *memory* *pc-memory-visualization*)
-  (update-memory-visualization! *memory* *sp-memory-visualization*)
-  (update-memory-visualization! *memory* *hl-memory-visualization*)
-  (update-cpu-visualization! *cpu-visualization*)
-  (update-cpu-visualization! *cpu-visualization-previous*)
+  (setq *cpu-visualization* (aset :colors () *cpu-visualization*))
+  (update-visualizations! nil))
 
-  (setq *cpu-visualization* (aset :colors
-				  (cpu-visualization-colors
-				   ()
-				   (next-instr-data (cpu-pc (funcall (aval :cpu-fn *cpu-visualization*))) *memory*))
-				  *cpu-visualization*))
-  (setq *cpu-visualization-previous* (aset :colors () *cpu-visualization-previous*)))
+(defun handle-execute-button-clicked! ()
+  (setq *cpus* (alist :penultimate (copy-cpu (cpu-current))
+		      :antepenultimate (aval :penultimate *cpus*)
+		      :current (cpu-current)))
+  (execute! (cpu-current))
+  (update-visualizations!))
 
 (defun split-lines (text)
   (uiop:split-string text :separator '(#\newline)))
@@ -1212,7 +1247,7 @@ in the range 0xFF00-0xFFFF specified by register C.
     (load-text-texture! :disassembly :font "(Disassembly)")
     (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
 
-    (initialize-description! (aval :description (next-instr-data (cpu-pc *cpu*) *memory*)))
+    (initialize-description! (aval :description (next-instr-data (cpu-pc (cpu-current)) *memory*)))
     
     (load-text-texture! :disassembly-next :font "(Next Disassembly)")
     (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29)))))
@@ -1259,29 +1294,25 @@ in the range 0xFF00-0xFFFF specified by register C.
      (mapcar (fn (cons % (green))) just-next)
      (mapcar (fn (cons % (yellow))) both))))
 
-(defun update-visualizations! ()
-  (update-memory-visualization! *memory* *pc-memory-visualization*)
-  (update-memory-visualization! *memory* *sp-memory-visualization*)
-  (update-memory-visualization! *memory* *hl-memory-visualization*)
-  (update-cpu-visualization! *cpu-visualization*)
-  (update-cpu-visualization! *cpu-visualization-previous*))
-
-(defun handle-execute-button-clicked! ()
-  (let ((prev (disassembly-text (cpu-pc *cpu*) *memory*))
-	(prev-instr-data (next-instr-data (cpu-pc *cpu*) *memory*)))
-    (setq *cpu-previous* (copy-cpu *cpu*))
-    (setq *cpu-visualization-previous* (aset :colors (aval :colors *cpu-visualization*) *cpu-visualization-previous*))
+(defun update-visualizations! (&optional (cpu-previous (cpu-previous)))
+  (let* ((prev-disassembly-text (if cpu-previous
+				    (disassembly-text (cpu-pc cpu-previous) *memory*)
+				    "(Disassembly)"))
+	 (prev-instr-data (when cpu-previous
+			    (next-instr-data (cpu-pc cpu-previous) *memory*))))
     
-    (execute!)
-    (load-text-texture! :disassembly :font prev)
-    (load-text-texture! :disassembly-next
-			:font
-			(disassembly-text (cpu-pc *cpu*) *memory*))
-
-    (update-visualizations!)
-
-    (let* ((instr-data (next-instr-data (cpu-pc *cpu*) *memory*)))
-      (setq *cpu-visualization* (aset :colors (cpu-visualization-colors prev-instr-data instr-data) *cpu-visualization*))
+    (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
+    (amap (fn (update-cpu-visualization! %%)) *cpu-visualizations*)
+    
+    (set-cpu-visualization! 'previous (aset :colors (aval :colors (get-cpu-visualization 'current))
+					    (get-cpu-visualization 'previous)))
+    (load-text-texture! :disassembly :font (if prev-disassembly-text
+					       prev-disassembly-text
+					       "(Disassembly)"))
+    (load-text-texture! :disassembly-next :font (disassembly-text (cpu-pc (cpu-current)) *memory*))
+    (let* ((instr-data (next-instr-data (cpu-pc (cpu-current)) *memory*)))
+      (set-cpu-visualization! 'current (aset :colors (cpu-visualization-colors prev-instr-data instr-data)
+					     (get-cpu-visualization 'current)))
       (initialize-description! (aval :description instr-data)))))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
@@ -1321,9 +1352,8 @@ in the range 0xFF00-0xFFFF specified by register C.
 
 ;; focus: the memory address that was last modified
 
-;; a way to hide/show drawings would be nice
-;; central definition for instructions (compile into an execute)
-;; show me description of instruction (optionally?)
-
 ;; keep initializing things over and over again.
-;; pc memory list should always be in hex
+;; central definition for instructions (compile into an execute)
+
+;; make colors a function of the previous cpu state and the current cpu state
+;; add previous-cpu into cpu-visualization
