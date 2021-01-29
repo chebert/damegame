@@ -1019,6 +1019,7 @@ Test-fn and handle-fn are both functions of event."
 (defun half-carry? (a b)
   (not (zerop (logand #x10 (+ (logand #xf a) (logand #xf b))))))
 
+#+nil
 (defun instr-data (b1 &optional b2)
   (case b1
     (#x0c (alist :name :inc-c
@@ -1099,30 +1100,21 @@ in the range 0xFF00-0xFFFF specified by register C.
 (defun next-instr-data (pc memory)
   (instr-data (aref memory pc) (aref memory (1+ pc))))
 
-(defun disassemble-instr (pc memory)
-  (let* ((instr (aref memory pc)))
-    (case instr
-      (#x0c (list :inc-c))
-      (#x0e (list :ld-c-d8 (list :d8 (register8-text (aref memory (1+ pc))))))
-      (#x20 (let ((s8 (s8 (aref memory (1+ pc)))))
-	      (list :jr-nz-s8 (list :s8 s8) (list :addr (register16-text (+ pc s8 2))))))
-      (#x21 (list :ld-hl-d16 (list :d16 (register16-text (combined-register (aref memory (+ 2 pc))
-									    (aref memory (1+ pc)))))))
-      (#x31 (list :ld-sp-imm (list :imm (register16-text
-					 (combined-register (aref memory (+ pc 2)) (aref memory (1+ pc)))))))
-      (#x32 (list :ld-hl-a))
-      (#x3e (list :ld-a-d8 (list :d8) (register8-text (aref memory (1+ pc)))))
-      (#xAF (list :xor-a))
-      (#xCB
-       (let* ((pc (1+ pc))
-	      (instr2 (aref memory pc)))
-	 (case instr2
-	   (#x7c (list :bit-7-h))
-	   (t (list :unknown (register16-text (combined-register instr2 instr)))))))
+(defun disassemble-instr (cpu memory)
+  (let* ((pc (cpu-pc cpu))
+	 (byte (aref memory pc)))
+    (if (eql byte #xcb)
+	(let* ((byte2 (aref memory (1+ pc)))
+	       (instr (aval byte2 *long-instrs*)))
+	  (if instr
+	      (funcall (aval :disassemble-instr instr) cpu memory)
+	      (list :unknown (register16-text (combined-register byte2 byte)))))
+	(let* ((instr (aval byte *instrs*)))
+	  (if instr
+	      (funcall (aval :disassemble-instr instr) cpu memory)
+	      (list :unknown (hex8-text instr)))))))
 
-      (#xE2 (list :ld-@c-a))
-      (t (list :unknown (let ((*number-base* :hexadecimal)) (register8-text instr)))))))
-
+#+nil
 (defun execute! (cpu)
   (let* ((pc (cpu-pc cpu))
 	 (instr (aref *memory* pc)))
@@ -1220,7 +1212,7 @@ in the range 0xFF00-0xFFFF specified by register C.
 
 (defun handle-execute-button-clicked! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
-  (execute! (cpu-current))
+  (execute! (cpu-current) *memory*)
   (update-visualizations!))
 
 (defun split-lines (text)
@@ -1278,10 +1270,10 @@ in the range 0xFF00-0xFFFF specified by register C.
 	(remove-drawing! :mouse-grid-highlight))
       (add-mouse-pos-drawing!)))
 
-(defun disassembly-text (pc memory)
+(defun disassembly-text (cpu memory)
   (format nil "~a: ~A"
-	  (register16-text pc)
-	  (disassemble-instr pc memory)))
+	  (register16-text (cpu-pc cpu))
+	  (disassemble-instr cpu memory)))
 
 (defun cpu-visualization-colors (cpu-visualization)
   (let* ((cpu (funcall (aval :cpu-fn cpu-visualization)))
@@ -1305,7 +1297,7 @@ in the range 0xFF00-0xFFFF specified by register C.
 
 (defun update-visualizations! (&optional (cpu-previous (cpu-previous)))
   (let* ((prev-disassembly-text (if cpu-previous
-				    (disassembly-text (cpu-pc cpu-previous) *memory*)
+				    (disassembly-text cpu-previous *memory*)
 				    "(Disassembly)")))
     
     (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
@@ -1314,7 +1306,7 @@ in the range 0xFF00-0xFFFF specified by register C.
     (load-text-texture! :disassembly :font (if prev-disassembly-text
 					       prev-disassembly-text
 					       "(Disassembly)"))
-    (load-text-texture! :disassembly-next :font (disassembly-text (cpu-pc (cpu-current)) *memory*))
+    (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
     (let* ((instr-data (next-instr-data (cpu-pc (cpu-current)) *memory*)))
       (initialize-description! (aval :description instr-data)))))
 
@@ -1358,65 +1350,282 @@ in the range 0xFF00-0xFFFF specified by register C.
 ;; central definition for instructions (compile into an execute)
 
 
-#+nil
-(alist :name :inc-c
-       :registers '(:c)
-       :flags '(:zero :subtraction :half-carry)
-       :description "Increment the contents of register C by 1."
-       :cycles (fn 1))
-#+nil
-(list :inc-c)
-#+nil
-(let* ((c (1+ (cpu-c cpu))))
-  (setf (cpu-flag cpu)
-	(flag (if (zerop c) 1 0)
-	      0
-	      (if (half-carry? (cpu-c cpu) 1) 1 0)
-	      (if (cpu-carry? cpu) 1 0)))
-  (setf (cpu-c cpu) c))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defvar *instrs* ())
+  (defvar *long-instrs* ()))
 
-(defmacro definstr (byte (&key name register flags description)
-		    (cpu memory)
-		    (&key cycles)
-		    (&key disassembly)
-		    (&key execute))
-  `(alist
-    :byte ,byte
-    :instr-data
-    (alist :name ,name :register ,register :flags ,flags :description ,description)
-    :cycles
-    (lambda (,cpu ,memory)
-      (declare (ignorable ,cpu ,memory))
-      ,cycles)
-    :disassembly
-    (lambda (,cpu ,memory)
-      (declare (ignorable ,cpu ,memory))
-      ,disassembly)
-    :execute
-    ,(lambda (cpu-name memory-name)
-       `(let ((,cpu ,cpu-name)
-	      (,memory ,memory-name))
-	  ,execute))))
 
-#+nil
-(definstr #x0c (:name :inc-c
-		:register '(:c)
-		:flags '(:zero :subtraction :half-carry)
-		:description "Increment the contents of register C by 1.")
-    (cpu-in memory-in)
-    (:cycles
-     1)
-    (:disassembly
-     (list :inc-c))
-    (:execute
-     (let* ((c (1+ (cpu-c cpu-in))))
-       (setf (cpu-flag cpu-in)
-	     (flag (if (zerop c) 1 0)
-		   0
-		   (if (half-carry? (cpu-c cpu-in) 1) 1 0)
-		   (if (cpu-carry? cpu-in) 1 0)))
-       (setf (cpu-c cpu-in) c))
-     (incf (cpu-pc cpu-in) 1)))
+(defmacro definstr (&whole whole byte (cpu-name memory-name)
+		      bindings &key
+				 name description
+				 zero? subtraction? half-carry? carry?
+				 a b c d e f h l
+				 af bc de hl
+				 pc sp
+				 cycles
+				 memory
+				 disassembly)
+  (declare (ignore name description
+		   zero? subtraction? half-carry? carry?
+		   a b c d e f h l
+		   af bc de hl
+		   sp
+		   memory))
+  (unless cycles
+    (warn "CYCLES should be provided"))
+  (unless pc
+    (warn "PC should be provided"))
+  (unless disassembly
+    (warn "DISASSEMBLY should be provided"))
+  `(let ((instr (alist :cpu-name ',cpu-name
+		       :memory-name ',memory-name
+		       :bindings ',bindings
+		       :byte ',byte
+		       :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
+		       ,@ (apply 'nconc (amap (fn `(,% ',%%)) (apply 'alist (rest (rest (rest (rest whole))))))))))
+     (asetq ',byte instr *instrs*)))
+
+(defmacro deflong-instr (&whole whole byte (cpu-name memory-name)
+			   bindings &key
+				      name description
+				      zero? subtraction? half-carry? carry?
+				      a b c d e f h l
+				      af bc de hl
+				      pc sp
+				      cycles
+				      memory
+				      disassembly)
+  (declare (ignore name description
+		   zero? subtraction? half-carry? carry?
+		   a b c d e f h l
+		   af bc de hl
+		   sp
+		   memory))
+  (unless cycles
+    (warn "CYCLES should be provided"))
+  (unless pc
+    (warn "PC should be provided"))
+  (unless disassembly
+    (warn "DISASSEMBLY should be provided"))
+  `(progn
+     (let ((instr (alist :cpu-name ',cpu-name
+			 :memory-name ',memory-name
+			 :bindings ',bindings
+			 :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
+			 :byte ',byte
+			 ,@ (apply 'nconc (amap (fn `(,% ',%%)) (apply 'alist (rest (rest (rest (rest whole))))))))))
+       (asetq ',byte instr *long-instrs*))))
+
+(defmacro undefinstr (byte &body ignored)
+  (declare (ignore ignored))
+  `(progn
+     (setq *instrs* (aremove *instrs* ,byte))))
+(defmacro undeflong-instr (byte &body ignored)
+  (declare (ignore ignored))
+  `(progn
+     (setq *long-instrs* (aremove *long-instrs* ,byte))))
+
+(definstr #x0c (cpu memory) ((c (cpu-c cpu))
+			     (c+ (1+ c)))
+	  :name :inc-c
+	  :description "Increment the contents of register C by 1."
+	  :zero? (zerop c)
+	  :subtraction? 0
+	  :half-carry? (half-carry? c 1)
+	  :c c+
+	  :pc (1+ (cpu-pc cpu))
+	  :cycles 1
+	  :disassembly (list :inc-c))
+(definstr #x0e (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-c-d8
+	  :description "Load the 8-bit immediate operand d8 into register C."
+	  :disassembly (list :ld-c-d8 (list :d8 (register8-text (aref memory (1+ pc)))))
+	  :c (aref memory (1+ pc))
+	  :pc (+ 2 pc)
+	  :cycles 2)
+(definstr #x20 (cpu memory) ((pc (cpu-pc cpu))
+			     (not-zero? (not (cpu-zero? cpu)))
+			     (offset (s8 (aref memory (1+ pc)))))
+	  :name :jr-nz-s8
+	  :description "If the Z flag is 0, jump s8 steps from the current
+address stored in the program counter (PC).
+If not, the instruction following the current JP
+instruction is executed (as usual)."
+	  :disassembly (list :jr-nz-s8 (list :s8 offset) (list :addr (register16-text (+ pc offset 2))))
+	  :pc (if not-zero?
+		  (+ 2 pc offset)
+		  (+ 2 pc))
+	  :cycles (if not-zero? 3 2))
+(definstr #x21 (cpu memory) ((pc (cpu-pc cpu))
+			     (d16 (combined-register (aref memory (+ 2 pc))
+						     (aref memory (1+ pc)))))
+	  :name :ld-hl-d16
+	  :description "Load the 2 bytes of immediate data into register pair HL.
+
+The first byte of immediate data is the lower byte
+and the second byte of immediate data is the higher byte"
+	  :disassembly (list :ld-hl-d16 (list :d16 (register16-text d16)))
+	  :hl d16
+	  :l (aref memory (1+ pc))
+	  :h (aref memory (+ 2 pc))
+	  :pc (+ pc 3)
+	  :cycles 3)
+(definstr #x31 (cpu memory) ((pc (cpu-pc cpu))
+			     (imm (combined-register (aref memory (+ pc 2)) (aref memory (1+ pc)))))
+	  :name :ld-sp-imm
+	  :description "Load the 2 bytes of immediate data into register pair SP.
+
+The first byte of immediate data is the lower byte
+and the second byte of immediate data is the higher byte"
+	  :disassembly (list :ld-sp-imm (list :imm (register16-text imm)))
+	  :sp imm
+	  :pc (+ pc 3)
+	  :cycles 3)
+(definstr #x32 (cpu memory) ((pc (cpu-pc cpu))
+			     (hl (cpu-hl cpu)))
+	  :name :ld-hl-a
+	  :description "Store the contents of register A into the memory
+location specified by register pair HL,
+and simultaneously decrement the contents of HL."
+	  :disassembly (list :ld-hl-a)
+	  :hl (1- hl)
+	  :pc (+ pc 1)
+	  :cycles 2)
+(definstr #x3e (cpu memory) ((pc (cpu-pc cpu))
+			     (d8 (aref memory (1+ pc))))
+	  :name :ld-a-d8
+	  :description "Load the 8-bit immediate operand d8 into register A."
+	  :disassembly (list :ld-a-d8 (list :d8) (register8-text d8))
+	  :a d8
+	  :pc (+ pc 2)
+	  :cycles 2)
+(definstr #xaf (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :xor-a
+	  :description "Take the logical exclusive-OR for each bit of the
+contents of register A and the contents of register A,
+and store the results in register A."
+	  :disassembly (list :xor-a)
+	  :a 0
+	  :pc (+ pc 1)
+	  :cycles 1)
+(definstr #xe2 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-@c-a
+	  :description "Store the contents of register A in the port register,
+or mode register at the address
+in the range 0xFF00-0xFFFF specified by register C.
+- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
+- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
+- 0xFFFF: Interrupt Enable Register"
+	  :disassembly (list :ld-@c-a)
+	  :memory ((+ #xff00 (cpu-c cpu)) (cpu-a cpu))
+	  :pc (+ pc 1)
+	  :cycles 2)
+(deflong-instr #x7c (cpu memory) ((pc (cpu-pc cpu)))
+	       :name :bit-7-h
+	       :description "Copy the complement of the contents of bit 7 in
+register H to the Z flag."
+	       :disassembly (list :bit-7-h)
+	       :zero? (zerop (logand (cpu-h cpu) #x80))
+	       :subtraction? nil
+	       :half-carry? t
+	       :pc (+ pc 2)
+	       :cycles 2)
+
+(defun compile-disassemble-instr (instr-cpu-name instr-memory-name bindings disassembly)
+  (let ((cpu-name (gensym))
+	(memory-name (gensym)))
+    `(lambda (,cpu-name ,memory-name)
+       (let* ((,instr-cpu-name ,cpu-name)
+	      (,instr-memory-name ,memory-name))
+	 (declare (ignorable ,instr-cpu-name ,instr-memory-name))
+	 (let* ,bindings
+	   (declare (ignorable ,@(mapcar 'first bindings) ))
+	   ,disassembly)))))
+(defun compile-execute ()
+  (let ((cpu-name (gensym "CPU"))
+	(memory-name (gensym "MEMORY")))
+    `(defun execute! (,cpu-name ,memory-name)
+       (ecase (aref ,memory-name (cpu-pc ,cpu-name))
+	 ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *instrs*)
+	 (#xcb
+	  ;; TODO: optimize pc-access
+	  (ecase (aref ,memory-name (1+ (cpu-pc ,cpu-name)))
+	    ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *long-instrs*)))))))
+
+(defun cpu-register-accessor-name (register-key)
+  (ecase register-key
+    (:a 'cpu-a)
+    (:b 'cpu-b)
+    (:c 'cpu-c)
+    (:d 'cpu-d)
+    (:e 'cpu-e)
+    (:f 'cpu-f)
+    (:h 'cpu-h)
+    (:l 'cpu-l)
+    (:sp 'cpu-sp)
+    (:pc 'cpu-pc)))
+
+(defun compile-register-set (key instr-spec)
+  (let ((value (aval key instr-spec)))
+    (when value `((,(cpu-register-accessor-name key) ,(aval :cpu-name instr-spec)) ,value))))
+
+(defun compile-register-sets (instr-spec)
+  (apply 'nconc
+	 (mapcar (fn (compile-register-set % instr-spec))
+		 '(:a :b :c :d :e :f :h :l :sp :pc))))
+
+(defun compile-combined-register-set (instr-spec combined-key lo-key hi-key)
+  (let ((combined-value (aval combined-key instr-spec))
+	(cpu-name (aval :cpu-name instr-spec))
+	(combined-name (gensym)))
+    (when combined-value
+      `(let ((,combined-name ,combined-value))
+	 (setf (,(cpu-register-accessor-name lo-key) ,cpu-name) (lo-byte ,combined-name)
+	       (,(cpu-register-accessor-name hi-key) ,cpu-name) (hi-byte ,combined-name))))))
+
+(defun compile-combined-register-sets (instr-spec)
+  (remove 'nil (mapcar (fn (apply 'compile-combined-register-set instr-spec %))
+		       '((:af :f :a)
+			 (:bc :c :b)
+			 (:de :e :d)
+			 (:hl :l :h)))))
+
+(defun akey? (key alist)
+  (member key alist :key 'car))
+
+(defun compile-set-flag (cpu-flag-name flag-key bit-index instr-spec)
+  (if (akey? flag-key instr-spec)
+      `(if ,(aval flag-key instr-spec) 1 0)
+      `(bit-value ,cpu-flag-name ,bit-index)))
+
+(defun compile-set-flags (instr-spec)
+  (when (some (fn (akey? % instr-spec)) '(:zero? :subtraction? :half-carry? :carry?))
+    (let ((cpu-flag-name (gensym))
+	  (cpu-name (aval :cpu-name instr-spec)))
+      `((cpu-flag ,(aval :cpu-name instr-spec))
+	(let ((,cpu-flag-name (cpu-flag ,cpu-name)))
+	  (flag ,(compile-set-flag cpu-flag-name :zero? 3 instr-spec)
+		,(compile-set-flag cpu-flag-name :subtraction? 2 instr-spec)
+		,(compile-set-flag cpu-flag-name :half-carry? 1 instr-spec)
+		,(compile-set-flag cpu-flag-name :carry? 0 instr-spec)))))))
+
+(defun compile-set-memory (instr-spec)
+  (let ((memory (aval :memory instr-spec)))
+    (when memory
+      `((aref ,(aval :memory-name instr-spec) ,(first memory)) ,(second memory)))))
+
+(defun compile-instr-spec-for-execute (cpu-name memory-name instr-spec)
+  `(let* ((,(aval :cpu-name instr-spec) ,cpu-name)
+	  (,(aval :memory-name instr-spec) ,memory-name))
+     (declare (ignorable ,(aval :cpu-name instr-spec)
+			 ,(aval :memory-name instr-spec)))
+     (let* ,(aval :bindings instr-spec)
+       ,@(compile-combined-register-sets instr-spec)
+       (setf
+	,@(compile-set-memory instr-spec)
+	,@(compile-set-flags instr-spec)
+	,@(compile-register-sets instr-spec)))))
+
 
 (defun bit-value (value index)
   (let ((bitmask (ash 2 index)))
@@ -1424,105 +1633,6 @@ in the range 0xFF00-0xFFFF specified by register C.
 	0
 	1)))
 
-
-(defun compile-state-change (outer-cpu-name outer-memory-name state-changes)
-  (destructuring-bind ((cpu-name memory-name)
-		       bindings &key
-				  (zero? nil zero-supplied?)
-				  (subtraction? nil subtraction-supplied?)
-				  (half-carry? nil half-carry-supplied?)
-				  (carry? nil carry-supplied?)
-				  a b c d e f h l
-				  (af nil af-supplied?) (bc nil bc-supplied?)
-				  (de nil de-supplied?) (hl nil hl-supplied?)
-				  pc sp
-				  cycles
-				  memory)
-      state-changes
-    (declare (ignore cycles))
-    (unless pc
-      (warn "No PC provided in state-changes to compile-state-change"))
-    (let ((af-name (gensym))
-	  (bc-name (gensym))
-	  (de-name (gensym))
-	  (hl-name (gensym)))
-      `(let* ((,cpu-name ,outer-cpu-name)
-	      (,memory-name ,outer-memory-name))
-	 (let* ,bindings
-	   (let* (,@(when af-supplied? `((,af-name ,af)))
-		  ,@(when bc-supplied? `((,bc-name ,bc)))
-		  ,@(when de-supplied? `((,de-name ,de)))
-		  ,@(when hl-supplied? `((,hl-name ,hl))))
-	     (setf
-	      ,@(when (or zero-supplied? subtraction-supplied? half-carry-supplied? carry-supplied?)
-		  `((cpu-flag ,cpu-name)
-		    (flag ,(if zero-supplied?
-			       `(if ,zero? 1 0)
-			       `(bit-value (cpu-flag ,cpu-name) 3))
-			  ,(if subtraction-supplied?
-			       `(if ,subtraction? 1 0)
-			       `(bit-value (cpu-flag ,cpu-name) 2))
-			  ,(if half-carry-supplied?
-			       `(if ,half-carry? 1 0)
-			       `(bit-value (cpu-flag ,cpu-name) 1))
-			  ,(if carry-supplied?
-			       `(if ,carry? 1 0)
-			       `(bit-value (cpu-flag ,cpu-name) 0)))))
-	      ,@(when a `((cpu-a ,cpu-name) ,a))
-	      ,@(when b `((cpu-b ,cpu-name) ,b))
-	      ,@(when c `((cpu-c ,cpu-name) ,c))
-	      ,@(when d `((cpu-d ,cpu-name) ,d))
-	      ,@(when e `((cpu-e ,cpu-name) ,e))
-	      ,@(when f `((cpu-f ,cpu-name) ,f))
-	      ,@(when h `((cpu-h ,cpu-name) ,f))
-	      ,@(when l `((cpu-l ,cpu-name) ,h))
-	      ;; TODO: check byte order
-	      ,@(when af `((cpu-f ,cpu-name) (lo-byte ,af-name)
-			   (cpu-a ,cpu-name) (hi-byte ,af-name)))
-	      ,@(when bc `((cpu-c ,cpu-name) (lo-byte ,bc-name)
-			   (cpu-b ,cpu-name) (hi-byte ,bc-name)))
-	      ,@(when de `((cpu-e ,cpu-name) (lo-byte ,de-name)
-			   (cpu-d ,cpu-name) (hi-byte ,de-name)))
-	      ,@(when hl `((cpu-l ,cpu-name) (lo-byte ,hl-name)
-			   (cpu-h ,cpu-name) (hi-byte ,hl-name)))
-	      ,@(when pc `((cpu-pc ,cpu-name) ,pc))
-	      ,@(when sp `((cpu-sp ,cpu-name) ,sp))
-	      ,@(when memory `((aref ,memory-name ,(first memory)) ,(second memory))))))))))
-
-(compile-state-change
- 'cpu2
- 'memory2
- '((cpu memory)
-   ((c (cpu-c cpu))
-    (c+ (1+ c)))
-   :zero? (zerop c+)
-   :subtraction? nil
-   :half-carry? (half-carry? c 1)
-   :c c+
-   :pc (1+ (cpu-pc cpu))
-   :cycles 1))
-
-(compile-state-change
- 'cpu2
- 'memory2
- '((cpu memory)
-   ((pc (cpu-pc cpu))
-    (zero? (cpu-zero? cpu)))
-   :pc (if zero?
-	   (+ pc (aref memory (1+ pc)) 2)
-	   (+ pc 2))
-   :cycles (if zero? 3 2)))
-
-(compile-state-change
- 'cpu2
- 'memory2
- '((cpu memory)
-   ((hl (cpu-hl cpu))
-    (hl- (1- hl)))
-   :memory (hl (cpu-a cpu))
-   :hl hl-
-   :pc (1+ (cpu-pc cpu))
-   :cycles 2))
 
 ;; next thing to think about
 ;;   store state-change definitions
@@ -1532,3 +1642,13 @@ in the range 0xFF00-0xFFFF specified by register C.
 '((:memory (#x9fff #x80))
   (:hl #x9ffe)
   (:pc #x0007))
+
+;; TODO: distinguish between jumps, and moving to the next instruction
+;; TODO: replace instr-data, instr-disassembly, and update visualizations based on instr-spec
+
+;; recompile execute! definition
+(macrolet ((m () (compile-execute)))
+  (m))
+
+
+;; TODO: next, replace instr-data with definstr specs
