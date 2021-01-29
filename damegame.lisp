@@ -688,10 +688,10 @@ Test-fn and handle-fn are both functions of event."
 			(aval :title memory-visualization))))
 
 (defmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
-						  'hex8-text))
-(defmemory-visualization stack (memory-visualization "Stack" (g2 8 3) (fn (start-addr (cpu-sp (cpu-current))))
+						  'register8-text))
+(defmemory-visualization stack (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp (cpu-current))))
 						     'register8-text))
-(defmemory-visualization hl (memory-visualization "HL" (g2 19 3) (fn (start-addr (cpu-hl (cpu-current))))
+(defmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
 						  'register8-text))
 
 (defhandler handle-initialize-memory-visualization (event)
@@ -1216,7 +1216,6 @@ in the range 0xFF00-0xFFFF specified by register C.
   (reset-memory!)
   (read-rom-file-into-memory! "gb_bios.bin")
 
-  (asetq :colors () *cpu-visualization*)
   (update-visualizations! nil))
 
 (defun handle-execute-button-clicked! ()
@@ -1357,3 +1356,179 @@ in the range 0xFF00-0xFFFF specified by register C.
 ;; focus: the memory address that was last modified
 
 ;; central definition for instructions (compile into an execute)
+
+
+#+nil
+(alist :name :inc-c
+       :registers '(:c)
+       :flags '(:zero :subtraction :half-carry)
+       :description "Increment the contents of register C by 1."
+       :cycles (fn 1))
+#+nil
+(list :inc-c)
+#+nil
+(let* ((c (1+ (cpu-c cpu))))
+  (setf (cpu-flag cpu)
+	(flag (if (zerop c) 1 0)
+	      0
+	      (if (half-carry? (cpu-c cpu) 1) 1 0)
+	      (if (cpu-carry? cpu) 1 0)))
+  (setf (cpu-c cpu) c))
+
+(defmacro definstr (byte (&key name register flags description)
+		    (cpu memory)
+		    (&key cycles)
+		    (&key disassembly)
+		    (&key execute))
+  `(alist
+    :byte ,byte
+    :instr-data
+    (alist :name ,name :register ,register :flags ,flags :description ,description)
+    :cycles
+    (lambda (,cpu ,memory)
+      (declare (ignorable ,cpu ,memory))
+      ,cycles)
+    :disassembly
+    (lambda (,cpu ,memory)
+      (declare (ignorable ,cpu ,memory))
+      ,disassembly)
+    :execute
+    ,(lambda (cpu-name memory-name)
+       `(let ((,cpu ,cpu-name)
+	      (,memory ,memory-name))
+	  ,execute))))
+
+#+nil
+(definstr #x0c (:name :inc-c
+		:register '(:c)
+		:flags '(:zero :subtraction :half-carry)
+		:description "Increment the contents of register C by 1.")
+    (cpu-in memory-in)
+    (:cycles
+     1)
+    (:disassembly
+     (list :inc-c))
+    (:execute
+     (let* ((c (1+ (cpu-c cpu-in))))
+       (setf (cpu-flag cpu-in)
+	     (flag (if (zerop c) 1 0)
+		   0
+		   (if (half-carry? (cpu-c cpu-in) 1) 1 0)
+		   (if (cpu-carry? cpu-in) 1 0)))
+       (setf (cpu-c cpu-in) c))
+     (incf (cpu-pc cpu-in) 1)))
+
+(defun bit-value (value index)
+  (let ((bitmask (ash 2 index)))
+    (if (zerop (logand bitmask value))
+	0
+	1)))
+
+
+(defun compile-state-change (outer-cpu-name outer-memory-name state-changes)
+  (destructuring-bind ((cpu-name memory-name)
+		       bindings &key
+				  (zero? nil zero-supplied?)
+				  (subtraction? nil subtraction-supplied?)
+				  (half-carry? nil half-carry-supplied?)
+				  (carry? nil carry-supplied?)
+				  a b c d e f h l
+				  (af nil af-supplied?) (bc nil bc-supplied?)
+				  (de nil de-supplied?) (hl nil hl-supplied?)
+				  pc sp
+				  cycles
+				  memory)
+      state-changes
+    (declare (ignore cycles))
+    (unless pc
+      (warn "No PC provided in state-changes to compile-state-change"))
+    (let ((af-name (gensym))
+	  (bc-name (gensym))
+	  (de-name (gensym))
+	  (hl-name (gensym)))
+      `(let* ((,cpu-name ,outer-cpu-name)
+	      (,memory-name ,outer-memory-name))
+	 (let* ,bindings
+	   (let* (,@(when af-supplied? `((,af-name ,af)))
+		  ,@(when bc-supplied? `((,bc-name ,bc)))
+		  ,@(when de-supplied? `((,de-name ,de)))
+		  ,@(when hl-supplied? `((,hl-name ,hl))))
+	     (setf
+	      ,@(when (or zero-supplied? subtraction-supplied? half-carry-supplied? carry-supplied?)
+		  `((cpu-flag ,cpu-name)
+		    (flag ,(if zero-supplied?
+			       `(if ,zero? 1 0)
+			       `(bit-value (cpu-flag ,cpu-name) 3))
+			  ,(if subtraction-supplied?
+			       `(if ,subtraction? 1 0)
+			       `(bit-value (cpu-flag ,cpu-name) 2))
+			  ,(if half-carry-supplied?
+			       `(if ,half-carry? 1 0)
+			       `(bit-value (cpu-flag ,cpu-name) 1))
+			  ,(if carry-supplied?
+			       `(if ,carry? 1 0)
+			       `(bit-value (cpu-flag ,cpu-name) 0)))))
+	      ,@(when a `((cpu-a ,cpu-name) ,a))
+	      ,@(when b `((cpu-b ,cpu-name) ,b))
+	      ,@(when c `((cpu-c ,cpu-name) ,c))
+	      ,@(when d `((cpu-d ,cpu-name) ,d))
+	      ,@(when e `((cpu-e ,cpu-name) ,e))
+	      ,@(when f `((cpu-f ,cpu-name) ,f))
+	      ,@(when h `((cpu-h ,cpu-name) ,f))
+	      ,@(when l `((cpu-l ,cpu-name) ,h))
+	      ;; TODO: check byte order
+	      ,@(when af `((cpu-f ,cpu-name) (lo-byte ,af-name)
+			   (cpu-a ,cpu-name) (hi-byte ,af-name)))
+	      ,@(when bc `((cpu-c ,cpu-name) (lo-byte ,bc-name)
+			   (cpu-b ,cpu-name) (hi-byte ,bc-name)))
+	      ,@(when de `((cpu-e ,cpu-name) (lo-byte ,de-name)
+			   (cpu-d ,cpu-name) (hi-byte ,de-name)))
+	      ,@(when hl `((cpu-l ,cpu-name) (lo-byte ,hl-name)
+			   (cpu-h ,cpu-name) (hi-byte ,hl-name)))
+	      ,@(when pc `((cpu-pc ,cpu-name) ,pc))
+	      ,@(when sp `((cpu-sp ,cpu-name) ,sp))
+	      ,@(when memory `((aref ,memory-name ,(first memory)) ,(second memory))))))))))
+
+(compile-state-change
+ 'cpu2
+ 'memory2
+ '((cpu memory)
+   ((c (cpu-c cpu))
+    (c+ (1+ c)))
+   :zero? (zerop c+)
+   :subtraction? nil
+   :half-carry? (half-carry? c 1)
+   :c c+
+   :pc (1+ (cpu-pc cpu))
+   :cycles 1))
+
+(compile-state-change
+ 'cpu2
+ 'memory2
+ '((cpu memory)
+   ((pc (cpu-pc cpu))
+    (zero? (cpu-zero? cpu)))
+   :pc (if zero?
+	   (+ pc (aref memory (1+ pc)) 2)
+	   (+ pc 2))
+   :cycles (if zero? 3 2)))
+
+(compile-state-change
+ 'cpu2
+ 'memory2
+ '((cpu memory)
+   ((hl (cpu-hl cpu))
+    (hl- (1- hl)))
+   :memory (hl (cpu-a cpu))
+   :hl hl-
+   :pc (1+ (cpu-pc cpu))
+   :cycles 2))
+
+;; next thing to think about
+;;   store state-change definitions
+;;   use state-change definitions to enhance visualizations and replace some instr-data
+;;     (lambda (cpu state) ...) => list of concrete state changes
+;; e.g. calling (state-changes state-change-def cpu memory) =>
+'((:memory (#x9fff #x80))
+  (:hl #x9ffe)
+  (:pc #x0007))
