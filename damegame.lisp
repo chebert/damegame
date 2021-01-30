@@ -1046,92 +1046,7 @@ Test-fn and handle-fn are both functions of event."
 	      (funcall (aval :disassemble-instr instr) cpu memory)
 	      (list :unknown (hex8-text instr)))))))
 
-#+nil
-(defun execute! (cpu)
-  (let* ((pc (cpu-pc cpu))
-	 (instr (aref *memory* pc)))
-    (ecase instr
-      (#x0c
-       ;; Inc C
-       ;; 1 cycles
-       (let* ((c (1+ (cpu-c cpu))))
-	 (setf (cpu-flag cpu)
-	       (flag (if (zerop c) 1 0)
-		     0
-		     (if (half-carry? (cpu-c cpu) 1) 1 0)
-		     (if (cpu-carry? cpu) 1 0)))
-	 (setf (cpu-c cpu) c))
-       (incf (cpu-pc cpu) 1))
-      (#x0e
-       ;; Ld C, d8
-       ;; 2 cycles
-       (setf (cpu-c cpu) (aref *memory* (1+ pc)))
-       (incf (cpu-pc cpu) 2))
-      (#x20
-       ;; JR NZ, s8
-       (if (cpu-zero? cpu)
-	   (let* ((s8 (s8 (aref *memory* (1+ pc)))))
-	     ;; 3 cycles
-	     (setf (cpu-pc cpu) (+ pc s8 2)))
-	   ;; 2 cycles
-	   (incf (cpu-pc cpu) 2)))
-      (#x21
-       ;; LD HL d16
-       ;; 3 cycles
-       (setf (cpu-l cpu) (aref *memory* (1+ pc))
-	     (cpu-h cpu) (aref *memory* (+ 2 pc)))
-       (incf (cpu-pc cpu) 3))
-      (#x31
-       ;; LD SP Immediate
-       ;; 3 cycles
-       (setf (cpu-sp cpu) (combined-register (aref *memory* (+ pc 2)) (aref *memory* (1+ pc))))
-       (incf (cpu-pc cpu) 3))
-      (#x32
-       ;; LD HL- A
-       ;; 2 cycles
-       (setf (aref *memory* (cpu-hl cpu)) (cpu-a cpu))
-       (let* ((hl (1- (cpu-hl cpu))))
-	 (setf (cpu-h cpu) (hi-byte hl)
-	       (cpu-l cpu) (lo-byte hl)))
-       (incf (cpu-pc cpu) 1))
-      (#x3e
-       ;; LD a, d8
-       ;; 2 cycles
-       ;; see 0x0e
-       (setf (cpu-a cpu) (aref *memory* (1+ pc)))
-       (incf (cpu-pc cpu) 2))
-      (#xAF
-       ;; XOR A
-       ;; 1 cycles
-       (setf (cpu-a cpu) 0
-	     (cpu-flag cpu) #b1000)
-       (incf (cpu-pc cpu) 1))
-
-      (#xCB
-       (let* ((pc (1+ pc))
-	      (instr (aref *memory* pc)))
-	 (ecase instr
-	   (#x7c
-	    ;; Bit 7, H
-	    ;; 2 cycles
-	    (let* ((z (if (zerop (logand (cpu-h cpu) #x80))
-			  1
-			  0))
-		   (s 0)
-		   (h 1)
-		   (c (if (cpu-carry? cpu) 1 0)))
-	      (setf (cpu-flag cpu) (flag z s h c))
-	      (incf (cpu-pc cpu) 2))))))
-
-      (#xE2
-       ;; LD (C) a
-       ;; 2 cycles
-       (setf (aref *memory* (+ #xff00 (cpu-c cpu)))
-	     (cpu-a cpu))
-       (incf (cpu-pc cpu) 1)))))
 (run-tests!)
-
-(register8-text 12)
 
 (defvar *instruction-description-ids* (loop for i below 8 collecting (gensym)))
 
@@ -1211,10 +1126,11 @@ Test-fn and handle-fn are both functions of event."
 (defparameter *flag-keys*
   '(:zero? :subtraction? :half-carry? :carry?))
 
-(defun instr-affected-registers (instr-effects)
-  (intersection *register-keys* (akeys instr-effects)))
-(defun instr-affected-flags (instr-effects)
-  (intersection *flag-keys* (akeys instr-effects)))
+(defun instr-affected-keys (instr-effects)
+  (let* ((keys (akeys instr-effects)))
+    (if (aval :jump? instr-effects)
+	(union '(:pc) keys)
+	(remove :pc keys))))
 
 (defun cpu-visualization-colors (cpu-visualization)
   (let* ((cpu (funcall (aval :cpu-fn cpu-visualization)))
@@ -1223,8 +1139,8 @@ Test-fn and handle-fn are both functions of event."
 	 (prev-instr-effects (when cpu-previous (instr-effects cpu-previous *memory*)))
 	 (instr-effects (when cpu (instr-effects cpu *memory*)))
 
-	 (modified (akeys prev-instr-effects))
-	 (next (akeys instr-effects))
+	 (modified (instr-affected-keys prev-instr-effects))
+	 (next (instr-affected-keys instr-effects))
 
 	 (just-modified (set-difference modified next))
 	 (just-next (set-difference next modified))
@@ -1322,6 +1238,7 @@ Test-fn and handle-fn are both functions of event."
 			      :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
 			      ,@ (apply 'nconc (amap (fn `(,% ',%%)) properties)))
 		,alist-name))))
+
   (defun compile-execute ()
     (let ((cpu-name (gensym "CPU"))
 	  (memory-name (gensym "MEMORY")))
@@ -1408,13 +1325,14 @@ Test-fn and handle-fn are both functions of event."
 				 name description
 				 disassembly
 				 ;; effects
+				 jump?
 				 zero? subtraction? half-carry? carry?
 				 a b c d e f h l
 				 af bc de hl
 				 pc sp
 				 cycles
 				 memory)
-  (declare (ignore name description
+  (declare (ignore name description jump?
 		   zero? subtraction? half-carry? carry?
 		   a b c d e f h l
 		   af bc de hl
@@ -1427,6 +1345,7 @@ Test-fn and handle-fn are both functions of event."
 				      name description
 				      disassembly
 				      ;; Effects
+				      jump?
 				      zero? subtraction? half-carry? carry?
 				      a b c d e f h l
 				      af bc de hl
@@ -1434,6 +1353,7 @@ Test-fn and handle-fn are both functions of event."
 				      cycles
 				      memory)
   (declare (ignore name description
+		   jump?
 		   zero? subtraction? half-carry? carry?
 		   a b c d e f h l
 		   af bc de hl
@@ -1477,6 +1397,7 @@ address stored in the program counter (PC).
 If not, the instruction following the current JP
 instruction is executed (as usual)."
 	  :disassembly (list :jr-nz-s8 (list :s8 offset) (list :addr (register16-text (+ pc offset 2))))
+	  :jump? not-zero?
 	  :pc (if not-zero?
 		  (+ 2 pc offset)
 		  (+ 2 pc))
@@ -1569,8 +1490,6 @@ register H to the Z flag."
 	1)))
 
 
-;; TODO: distinguish between jumps, and moving to the next instruction
-
 ;; recompile execute! definition
 (macrolet ((m () (compile-execute)))
   (m))
@@ -1578,11 +1497,4 @@ register H to the Z flag."
 ;; Think about breakpoints
 ;;   conditional breakpoints
 
-
-;; indicate the following in memory:
-;;   PC, SP, HL, (others?)
-;;   if memory was just changed show what it was changed from & to
-
 ;; focus: the memory address that was last modified
-
-;; central definition for instructions (compile into an execute)
