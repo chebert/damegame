@@ -74,7 +74,7 @@
 
 
 (defparameter *fps* 60 "The number of frames/second.")
-(defparameter *width* 1024 "The width of the window.")
+(defparameter *width* 1280 "The width of the window.")
 (defparameter *height* 768 "The height of the window.")
 (defparameter *audio-frequency* 48000 "The sample playback frequency for the audio buffer.")
 (defparameter *audio-channels* 2
@@ -177,45 +177,47 @@ Removes events from the queue."
 	  vs)
     result))
 
-(defun alist (&rest plist)
-  "Create an association list ((id . value) (id2 . value2)...)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun alist (&rest plist)
+    "Create an association list ((id . value) (id2 . value2)...)
 From the plist (id value id2 value2 ...)"
-  (nlet rec ((plist plist)
-	     (result ()))
-    (if plist
-	(let ((key (first plist))
-	      (value (second plist))
-	      (rest (rest (rest plist))))
-	  (rec rest (acons key value result)))
-	result)))
-(defun aval (key alist &optional not-present)
-  "Get the value from the alist assuming it is there. Returns not-present if it isn't."
-  (let ((pair (assoc key alist)))
-    (if pair
-	(cdr pair)
-	not-present)))
-(defun aremove (alist &rest keys)
-  "Return a new alist with keys removed from alist."
-  (remove-if (fn (member % keys))
-	     alist
-	     :key 'car))
-(defun aset (key value alist)
-  "Return a new alist with the value associated with key added or replaced."
-  (acons key value (aremove alist key)))
-(defun akeys (alist)
-  "Return a list of all keys in alist."
-  (mapcar 'car alist))
-(defun amerge (old new)
-  "Return a new alist with the keys of old and new, where conflicts favor the new alist."
-  (nconc (apply 'aremove old (akeys new))
-	 new))
-(defun amap (fn alist)
-  "Apply fn to each key and value of alist returning a list of the results."
-  (mapcar (fn (funcall fn (car %) (cdr %)))
-	  alist))
-
-(defmacro asetq (id value alist-name)
-  `(setq ,alist-name (aset ,id ,value ,alist-name)))
+    (nlet rec ((plist plist)
+	       (result ()))
+      (if plist
+	  (let ((key (first plist))
+		(value (second plist))
+		(rest (rest (rest plist))))
+	    (rec rest (acons key value result)))
+	  result)))
+  (defun aval (key alist &optional not-present)
+    "Get the value from the alist assuming it is there. Returns not-present if it isn't."
+    (let ((pair (assoc key alist)))
+      (if pair
+	  (cdr pair)
+	  not-present)))
+  (defun aremove (alist &rest keys)
+    "Return a new alist with keys removed from alist."
+    (remove-if (fn (member % keys))
+	       alist
+	       :key 'car))
+  (defun aset (key value alist)
+    "Return a new alist with the value associated with key added or replaced."
+    (acons key value (aremove alist key)))
+  (defun akeys (alist)
+    "Return a list of all keys in alist."
+    (mapcar 'car alist))
+  (defun amerge (old new)
+    "Return a new alist with the keys of old and new, where conflicts favor the new alist."
+    (nconc (apply 'aremove old (akeys new))
+	   new))
+  (defun amap (fn alist)
+    "Apply fn to each key and value of alist returning a list of the results."
+    (mapcar (fn (funcall fn (car %) (cdr %)))
+	    alist))
+  (defun akey? (key alist)
+    (member key alist :key 'car))
+  (defmacro asetq (id value alist-name)
+    `(setq ,alist-name (aset ,id ,value ,alist-name))))
 
 ;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
 ;; something like a binary tree may be better
@@ -741,20 +743,20 @@ Test-fn and handle-fn are both functions of event."
       (draw-full-texture-id-right-aligned! :zero (v2 left-column y))
       (draw-full-texture-id-right-aligned! :subtraction (v2 right-column y))
       (let ((texture-id (flag-state-texture-id (cpu-zero? cpu))))
-	(set-texture-color! texture-id (aval :zero cpu-colors (white)))
+	(set-texture-color! texture-id (aval :zero? cpu-colors (white)))
 	(draw-full-texture-id! texture-id (v2 left-column y)))
       (let ((texture-id (flag-state-texture-id (cpu-subtraction? cpu))))
-	(set-texture-color! texture-id (aval :subtraction cpu-colors (white)))
+	(set-texture-color! texture-id (aval :subtraction? cpu-colors (white)))
 	(draw-full-texture-id! texture-id (v2 right-column y)))
       
       (incf y *grid-size*)
       (draw-full-texture-id-right-aligned! :half-carry (v2 left-column y))
       (draw-full-texture-id-right-aligned! :carry (v2 right-column y))
       (let ((texture-id (flag-state-texture-id (cpu-half-carry? cpu))))
-	(set-texture-color! texture-id (aval :half-carry cpu-colors (white)))
+	(set-texture-color! texture-id (aval :half-carry? cpu-colors (white)))
 	(draw-full-texture-id! texture-id (v2 left-column y)))
       (let ((texture-id (flag-state-texture-id (cpu-carry? cpu))))
-	(set-texture-color! texture-id (aval :carry cpu-colors (white)))
+	(set-texture-color! texture-id (aval :carry? cpu-colors (white)))
 	(draw-full-texture-id! texture-id (v2 right-column y)))
 
       (incf y *grid-size*)
@@ -1019,91 +1021,21 @@ Test-fn and handle-fn are both functions of event."
 (defun half-carry? (a b)
   (not (zerop (logand #x10 (+ (logand #xf a) (logand #xf b))))))
 
-#+nil
-(defun instr-data (b1 &optional b2)
-  (case b1
-    (#x0c (alist :name :inc-c
-		 :registers '(:c)
-		 :flags '(:zero :subtraction :half-carry)
-		 :description "Increment the contents of register C by 1."
-		 :cycles (fn 1)))
-    (#x0e (alist :name :ld-c-d8
-		 :registers '(:c)
-		 :flags '()
-		 :description "Load the 8-bit immediate operand d8 into register C."
-		 :cycles (fn 2)))
-    (#x20 (alist :name :jr-nz-s8
-		 :registers '(:pc)
-		 :flags '()
-		 :description "If the Z flag is 0, jump s8 steps from the current
-address stored in the program counter (PC).
-If not, the instruction following the current JP
-instruction is executed (as usual)."
-		 :cycles (fn (if (cpu-zero? %)
-				 3
-				 2))))
-    (#x21 (alist :name :ld-hl-d16
-		 :registers '(:hl :h :l)
-		 :flags '()
-		 :description "Load the 2 bytes of immediate data into register pair HL.
+(defun long-instr? (byte1)
+  (eql byte1 #xcb))
 
-The first byte of immediate data is the lower byte
-and the second byte of immediate data is the higher byte"
-		 :cycles (fn 3)))
-    (#x31 (alist :name :ld-sp-imm
-		 :registers '(:sp)
-		 :flags '()
-		 :description "Load the 2 bytes of immediate data into register pair SP.
-
-The first byte of immediate data is the lower byte
-and the second byte of immediate data is the higher byte"
-		 :cycles (fn 3)))
-    (#x32 (alist :name :ld-hl-a
-		 :registers '(:h :l :hl)
-		 :flags '()
-		 :description "Store the contents of register A into the memory
-location specified by register pair HL,
-and simultaneously decrement the contents of HL."
-		 :cycles (fn 2)))
-    (#x3e (alist :name :ld-a-d8
-		 :registers '(:a)
-		 :flags '()
-		 :description "Load the 8-bit immediate operand d8 into register A."
-		 :cycles (fn 2)))
-    (#xAF (alist :name :xor-a
-		 :registers '(:a)
-		 :flags '(:zero :subtraction :half-carry :carry)
-		 :description "Take the logical exclusive-OR for each bit of the
-contents of register A and the contents of register A,
-and store the results in register A."
-		 :cycles (fn 1)))
-    (#xCB
-     (ecase b2
-       (#x7c (alist :name :bit-7-h
-		    :registers '()
-		    :flags '(:zero :subtraction :half-carry)
-		    :description "Copy the complement of the contents of bit 7 in
-register H to the Z flag."
-		    :cycles (fn 2)))))
-
-    (#xE2 (alist :name :ld-@c-a
-		 :registers '()
-		 :flags '()
-		 :description "Store the contents of register A in the port register,
-or mode register at the address
-in the range 0xFF00-0xFFFF specified by register C.
-- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
-- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
-- 0xFFFF: Interrupt Enable Register"
-		 :cycles (fn 2)))))
-
-(defun next-instr-data (pc memory)
-  (instr-data (aref memory pc) (aref memory (1+ pc))))
+(defun next-instr (cpu memory)
+  (let* ((pc (cpu-pc cpu))
+	 (byte (aref memory pc)))
+    (if (long-instr? byte)
+	(let* ((byte2 (aref memory (1+ pc))))
+	  (aval byte2 *long-instrs*))
+	(aval byte *instrs*))))
 
 (defun disassemble-instr (cpu memory)
   (let* ((pc (cpu-pc cpu))
 	 (byte (aref memory pc)))
-    (if (eql byte #xcb)
+    (if (long-instr? byte)
 	(let* ((byte2 (aref memory (1+ pc)))
 	       (instr (aval byte2 *long-instrs*)))
 	  (if instr
@@ -1242,9 +1174,9 @@ in the range 0xFF00-0xFFFF specified by register C.
     (load-text-texture! :disassembly :font "(Disassembly)")
     (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
 
-    (initialize-description! (aval :description (next-instr-data (cpu-pc (cpu-current)) *memory*)))
+    (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
     
-    (load-text-texture! :disassembly-next :font "(Next Disassembly)")
+    (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
     (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29)))))
 
 #+nil
@@ -1274,18 +1206,25 @@ in the range 0xFF00-0xFFFF specified by register C.
   (format nil "~a: ~A"
 	  (register16-text (cpu-pc cpu))
 	  (disassemble-instr cpu memory)))
+(defparameter *register-keys*
+  '(:a :b :c :d :e :f :h :l :af :bc :de :hl))
+(defparameter *flag-keys*
+  '(:zero? :subtraction? :half-carry? :carry?))
+
+(defun instr-affected-registers (instr-effects)
+  (intersection *register-keys* (akeys instr-effects)))
+(defun instr-affected-flags (instr-effects)
+  (intersection *flag-keys* (akeys instr-effects)))
 
 (defun cpu-visualization-colors (cpu-visualization)
   (let* ((cpu (funcall (aval :cpu-fn cpu-visualization)))
 	 (cpu-previous (funcall (aval :previous-cpu-fn cpu-visualization)))
 
-	 (prev-instr-data (when cpu-previous (next-instr-data (cpu-pc cpu-previous) *memory*)))
-	 (instr-data (when cpu (next-instr-data (cpu-pc cpu) *memory*)))
+	 (prev-instr-effects (when cpu-previous (instr-effects cpu-previous *memory*)))
+	 (instr-effects (when cpu (instr-effects cpu *memory*)))
 
-	 (modified (append (aval :registers prev-instr-data)
-			   (aval :flags prev-instr-data)))
-	 (next (append (aval :registers instr-data)
-		       (aval :flags instr-data)))
+	 (modified (akeys prev-instr-effects))
+	 (next (akeys instr-effects))
 
 	 (just-modified (set-difference modified next))
 	 (just-next (set-difference next modified))
@@ -1307,8 +1246,7 @@ in the range 0xFF00-0xFFFF specified by register C.
 					       prev-disassembly-text
 					       "(Disassembly)"))
     (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
-    (let* ((instr-data (next-instr-data (cpu-pc (cpu-current)) *memory*)))
-      (initialize-description! (aval :description instr-data)))))
+    (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
@@ -1341,80 +1279,167 @@ in the range 0xFF00-0xFFFF specified by register C.
     (load-text-texture! :mouse-pos :font (mouse-pos-text))
     (add-mouse-pos-drawing!)))
 
-;; indicate the following in memory:
-;;   PC, SP, HL, (others?)
-;;   if memory was just changed show what it was changed from & to
-
-;; focus: the memory address that was last modified
-
-;; central definition for instructions (compile into an execute)
-
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *instrs* ())
-  (defvar *long-instrs* ()))
+  (defvar *long-instrs* ())
 
+  (defun compile-instr-effects (instr-cpu-name instr-memory-name bindings effects)
+    `(lambda (,instr-cpu-name ,instr-memory-name)
+       (declare (ignorable ,instr-cpu-name ,instr-memory-name))
+       (let* ,bindings
+	 (alist ,@(apply 'nconc (amap (fn (list % %%)) (aremove effects :memory)))
+		,@(let ((memory (aval :memory effects)))
+		    (when memory
+		      (list :memory (cons 'list memory))))))))
+
+  (defun compile-disassemble-instr (instr-cpu-name instr-memory-name bindings disassembly)
+    (let ((cpu-name (gensym))
+	  (memory-name (gensym)))
+      `(lambda (,cpu-name ,memory-name)
+	 (let* ((,instr-cpu-name ,cpu-name)
+		(,instr-memory-name ,memory-name))
+	   (declare (ignorable ,instr-cpu-name ,instr-memory-name))
+	   (let* ,bindings
+	     (declare (ignorable ,@(mapcar 'first bindings) ))
+	     ,disassembly)))))
+
+  (defun compile-definstr (whole byte cpu-name memory-name bindings cycles disassembly pc alist-name)
+    (unless pc
+      (warn "PC should be provided"))
+    (unless cycles
+      (warn "CYCLES should be provided"))
+    (unless disassembly
+      (warn "DISASSEMBLY should be provided"))
+    (let* ((properties (apply 'alist (rest (rest (rest (rest whole))))))
+	   (effects (aremove properties :name :description :disassembly)))
+      `(eval-when (:compile-toplevel :load-toplevel :execute)
+	 (asetq ',byte (alist :cpu-name ',cpu-name
+			      :memory-name ',memory-name
+			      :bindings ',bindings
+			      :byte ',byte
+			      :instr-effects ,(compile-instr-effects cpu-name memory-name bindings effects)
+			      :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
+			      ,@ (apply 'nconc (amap (fn `(,% ',%%)) properties)))
+		,alist-name))))
+  (defun compile-execute ()
+    (let ((cpu-name (gensym "CPU"))
+	  (memory-name (gensym "MEMORY")))
+      `(defun execute! (,cpu-name ,memory-name)
+	 (ecase (aref ,memory-name (cpu-pc ,cpu-name))
+	   ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *instrs*)
+	   (#xcb
+	    ;; TODO: optimize pc-access
+	    (ecase (aref ,memory-name (1+ (cpu-pc ,cpu-name)))
+	      ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *long-instrs*)))))))
+
+  (defun cpu-register-accessor-name (register-key)
+    (ecase register-key
+      (:a 'cpu-a)
+      (:b 'cpu-b)
+      (:c 'cpu-c)
+      (:d 'cpu-d)
+      (:e 'cpu-e)
+      (:f 'cpu-f)
+      (:h 'cpu-h)
+      (:l 'cpu-l)
+      (:sp 'cpu-sp)
+      (:pc 'cpu-pc)))
+
+  (defun compile-register-set (key instr-spec)
+    (let ((value (aval key instr-spec)))
+      (when value `((,(cpu-register-accessor-name key) ,(aval :cpu-name instr-spec)) ,value))))
+
+  (defun compile-register-sets (instr-spec)
+    (apply 'nconc
+	   (mapcar (fn (compile-register-set % instr-spec))
+		   '(:a :b :c :d :e :f :h :l :sp :pc))))
+
+  (defun compile-combined-register-set (instr-spec combined-key lo-key hi-key)
+    (let ((combined-value (aval combined-key instr-spec))
+	  (cpu-name (aval :cpu-name instr-spec))
+	  (combined-name (gensym)))
+      (when combined-value
+	`(let ((,combined-name ,combined-value))
+	   (setf (,(cpu-register-accessor-name lo-key) ,cpu-name) (lo-byte ,combined-name)
+		 (,(cpu-register-accessor-name hi-key) ,cpu-name) (hi-byte ,combined-name))))))
+
+  (defun compile-combined-register-sets (instr-spec)
+    (remove 'nil (mapcar (fn (apply 'compile-combined-register-set instr-spec %))
+			 '((:af :f :a)
+			   (:bc :c :b)
+			   (:de :e :d)
+			   (:hl :l :h)))))
+  (defun compile-set-flag (cpu-flag-name flag-key bit-index instr-spec)
+    (if (akey? flag-key instr-spec)
+	`(if ,(aval flag-key instr-spec) 1 0)
+	`(bit-value ,cpu-flag-name ,bit-index)))
+
+  (defun compile-set-flags (instr-spec)
+    (when (some (fn (akey? % instr-spec)) '(:zero? :subtraction? :half-carry? :carry?))
+      (let ((cpu-flag-name (gensym))
+	    (cpu-name (aval :cpu-name instr-spec)))
+	`((cpu-flag ,(aval :cpu-name instr-spec))
+	  (let ((,cpu-flag-name (cpu-flag ,cpu-name)))
+	    (flag ,(compile-set-flag cpu-flag-name :zero? 3 instr-spec)
+		  ,(compile-set-flag cpu-flag-name :subtraction? 2 instr-spec)
+		  ,(compile-set-flag cpu-flag-name :half-carry? 1 instr-spec)
+		  ,(compile-set-flag cpu-flag-name :carry? 0 instr-spec)))))))
+
+  (defun compile-set-memory (instr-spec)
+    (let ((memory (aval :memory instr-spec)))
+      (when memory
+	`((aref ,(aval :memory-name instr-spec) ,(first memory)) ,(second memory)))))
+
+  (defun compile-instr-spec-for-execute (cpu-name memory-name instr-spec)
+    `(let* ((,(aval :cpu-name instr-spec) ,cpu-name)
+	    (,(aval :memory-name instr-spec) ,memory-name))
+       (declare (ignorable ,(aval :cpu-name instr-spec)
+			   ,(aval :memory-name instr-spec)))
+       (let* ,(aval :bindings instr-spec)
+	 ,@(compile-combined-register-sets instr-spec)
+	 (setf
+	  ,@(compile-set-memory instr-spec)
+	  ,@(compile-set-flags instr-spec)
+	  ,@(compile-register-sets instr-spec))))))
 
 (defmacro definstr (&whole whole byte (cpu-name memory-name)
 		      bindings &key
 				 name description
+				 disassembly
+				 ;; effects
 				 zero? subtraction? half-carry? carry?
 				 a b c d e f h l
 				 af bc de hl
 				 pc sp
 				 cycles
-				 memory
-				 disassembly)
+				 memory)
   (declare (ignore name description
 		   zero? subtraction? half-carry? carry?
 		   a b c d e f h l
 		   af bc de hl
 		   sp
 		   memory))
-  (unless cycles
-    (warn "CYCLES should be provided"))
-  (unless pc
-    (warn "PC should be provided"))
-  (unless disassembly
-    (warn "DISASSEMBLY should be provided"))
-  `(let ((instr (alist :cpu-name ',cpu-name
-		       :memory-name ',memory-name
-		       :bindings ',bindings
-		       :byte ',byte
-		       :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
-		       ,@ (apply 'nconc (amap (fn `(,% ',%%)) (apply 'alist (rest (rest (rest (rest whole))))))))))
-     (asetq ',byte instr *instrs*)))
+  (compile-definstr whole byte cpu-name memory-name bindings cycles disassembly pc '*instrs*))
 
 (defmacro deflong-instr (&whole whole byte (cpu-name memory-name)
 			   bindings &key
 				      name description
+				      disassembly
+				      ;; Effects
 				      zero? subtraction? half-carry? carry?
 				      a b c d e f h l
 				      af bc de hl
 				      pc sp
 				      cycles
-				      memory
-				      disassembly)
+				      memory)
   (declare (ignore name description
 		   zero? subtraction? half-carry? carry?
 		   a b c d e f h l
 		   af bc de hl
 		   sp
 		   memory))
-  (unless cycles
-    (warn "CYCLES should be provided"))
-  (unless pc
-    (warn "PC should be provided"))
-  (unless disassembly
-    (warn "DISASSEMBLY should be provided"))
-  `(progn
-     (let ((instr (alist :cpu-name ',cpu-name
-			 :memory-name ',memory-name
-			 :bindings ',bindings
-			 :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
-			 :byte ',byte
-			 ,@ (apply 'nconc (amap (fn `(,% ',%%)) (apply 'alist (rest (rest (rest (rest whole))))))))))
-       (asetq ',byte instr *long-instrs*))))
+  (compile-definstr whole byte cpu-name memory-name bindings cycles disassembly pc '*long-instrs*))
 
 (defmacro undefinstr (byte &body ignored)
   (declare (ignore ignored))
@@ -1531,100 +1556,10 @@ register H to the Z flag."
 	       :pc (+ pc 2)
 	       :cycles 2)
 
-(defun compile-disassemble-instr (instr-cpu-name instr-memory-name bindings disassembly)
-  (let ((cpu-name (gensym))
-	(memory-name (gensym)))
-    `(lambda (,cpu-name ,memory-name)
-       (let* ((,instr-cpu-name ,cpu-name)
-	      (,instr-memory-name ,memory-name))
-	 (declare (ignorable ,instr-cpu-name ,instr-memory-name))
-	 (let* ,bindings
-	   (declare (ignorable ,@(mapcar 'first bindings) ))
-	   ,disassembly)))))
-(defun compile-execute ()
-  (let ((cpu-name (gensym "CPU"))
-	(memory-name (gensym "MEMORY")))
-    `(defun execute! (,cpu-name ,memory-name)
-       (ecase (aref ,memory-name (cpu-pc ,cpu-name))
-	 ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *instrs*)
-	 (#xcb
-	  ;; TODO: optimize pc-access
-	  (ecase (aref ,memory-name (1+ (cpu-pc ,cpu-name)))
-	    ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *long-instrs*)))))))
-
-(defun cpu-register-accessor-name (register-key)
-  (ecase register-key
-    (:a 'cpu-a)
-    (:b 'cpu-b)
-    (:c 'cpu-c)
-    (:d 'cpu-d)
-    (:e 'cpu-e)
-    (:f 'cpu-f)
-    (:h 'cpu-h)
-    (:l 'cpu-l)
-    (:sp 'cpu-sp)
-    (:pc 'cpu-pc)))
-
-(defun compile-register-set (key instr-spec)
-  (let ((value (aval key instr-spec)))
-    (when value `((,(cpu-register-accessor-name key) ,(aval :cpu-name instr-spec)) ,value))))
-
-(defun compile-register-sets (instr-spec)
-  (apply 'nconc
-	 (mapcar (fn (compile-register-set % instr-spec))
-		 '(:a :b :c :d :e :f :h :l :sp :pc))))
-
-(defun compile-combined-register-set (instr-spec combined-key lo-key hi-key)
-  (let ((combined-value (aval combined-key instr-spec))
-	(cpu-name (aval :cpu-name instr-spec))
-	(combined-name (gensym)))
-    (when combined-value
-      `(let ((,combined-name ,combined-value))
-	 (setf (,(cpu-register-accessor-name lo-key) ,cpu-name) (lo-byte ,combined-name)
-	       (,(cpu-register-accessor-name hi-key) ,cpu-name) (hi-byte ,combined-name))))))
-
-(defun compile-combined-register-sets (instr-spec)
-  (remove 'nil (mapcar (fn (apply 'compile-combined-register-set instr-spec %))
-		       '((:af :f :a)
-			 (:bc :c :b)
-			 (:de :e :d)
-			 (:hl :l :h)))))
-
-(defun akey? (key alist)
-  (member key alist :key 'car))
-
-(defun compile-set-flag (cpu-flag-name flag-key bit-index instr-spec)
-  (if (akey? flag-key instr-spec)
-      `(if ,(aval flag-key instr-spec) 1 0)
-      `(bit-value ,cpu-flag-name ,bit-index)))
-
-(defun compile-set-flags (instr-spec)
-  (when (some (fn (akey? % instr-spec)) '(:zero? :subtraction? :half-carry? :carry?))
-    (let ((cpu-flag-name (gensym))
-	  (cpu-name (aval :cpu-name instr-spec)))
-      `((cpu-flag ,(aval :cpu-name instr-spec))
-	(let ((,cpu-flag-name (cpu-flag ,cpu-name)))
-	  (flag ,(compile-set-flag cpu-flag-name :zero? 3 instr-spec)
-		,(compile-set-flag cpu-flag-name :subtraction? 2 instr-spec)
-		,(compile-set-flag cpu-flag-name :half-carry? 1 instr-spec)
-		,(compile-set-flag cpu-flag-name :carry? 0 instr-spec)))))))
-
-(defun compile-set-memory (instr-spec)
-  (let ((memory (aval :memory instr-spec)))
-    (when memory
-      `((aref ,(aval :memory-name instr-spec) ,(first memory)) ,(second memory)))))
-
-(defun compile-instr-spec-for-execute (cpu-name memory-name instr-spec)
-  `(let* ((,(aval :cpu-name instr-spec) ,cpu-name)
-	  (,(aval :memory-name instr-spec) ,memory-name))
-     (declare (ignorable ,(aval :cpu-name instr-spec)
-			 ,(aval :memory-name instr-spec)))
-     (let* ,(aval :bindings instr-spec)
-       ,@(compile-combined-register-sets instr-spec)
-       (setf
-	,@(compile-set-memory instr-spec)
-	,@(compile-set-flags instr-spec)
-	,@(compile-register-sets instr-spec)))))
+(defun instr-effects (cpu memory)
+  (let* ((instr (next-instr cpu memory)))
+    (when instr
+      (funcall (aval :instr-effects instr) cpu memory))))
 
 
 (defun bit-value (value index)
@@ -1634,21 +1569,20 @@ register H to the Z flag."
 	1)))
 
 
-;; next thing to think about
-;;   store state-change definitions
-;;   use state-change definitions to enhance visualizations and replace some instr-data
-;;     (lambda (cpu state) ...) => list of concrete state changes
-;; e.g. calling (state-changes state-change-def cpu memory) =>
-'((:memory (#x9fff #x80))
-  (:hl #x9ffe)
-  (:pc #x0007))
-
 ;; TODO: distinguish between jumps, and moving to the next instruction
-;; TODO: replace instr-data, instr-disassembly, and update visualizations based on instr-spec
 
 ;; recompile execute! definition
 (macrolet ((m () (compile-execute)))
   (m))
 
+;; Think about breakpoints
+;;   conditional breakpoints
 
-;; TODO: next, replace instr-data with definstr specs
+
+;; indicate the following in memory:
+;;   PC, SP, HL, (others?)
+;;   if memory was just changed show what it was changed from & to
+
+;; focus: the memory address that was last modified
+
+;; central definition for instructions (compile into an execute)
