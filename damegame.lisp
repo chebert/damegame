@@ -1268,7 +1268,11 @@ Test-fn and handle-fn are both functions of event."
       (:h 'cpu-h)
       (:l 'cpu-l)
       (:sp 'cpu-sp)
-      (:pc 'cpu-pc)))
+      (:pc 'cpu-pc)
+      (:af 'cpu-af)
+      (:bc 'cpu-bc)
+      (:de 'cpu-de)
+      (:hl 'cpu-hl)))
 
   (defun compile-register-set (key instr-spec)
     (let ((value (aval key instr-spec)))
@@ -1377,47 +1381,87 @@ Test-fn and handle-fn are both functions of event."
   `(progn
      (setq *long-instrs* (aremove *long-instrs* ,byte))))
 
+(defun extract-bits (value bit-index num)
+  "extract the bits from bit-index to bit-index+num out of value."
+  (truncate (logand value (ash (1- (expt 2 num)) bit-index)) (expt 2 bit-index)))
+
+(defun register-key-from-opcode (opcode bit-index)
+  (register-key (extract-bits opcode bit-index 3)))
+
 
 ;; Load 8-bit register into 8-bit register
 ;; S2.1
-(defmacro definstr-ld-r8-r8 (opcode into-register-key from-register-key)
-  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu)))
-	     :name ,(list :ld into-register-key from-register-key)
-	     :description ,(format nil "Load the contents of register ~A into register ~A." from-register-key into-register-key)
-	     ,into-register-key (,(cpu-register-accessor-name from-register-key) cpu)
-	     :pc (+ pc 1)
-	     :cycles 1))
-(definstr-ld-r8-r8 #x4f :c :a)
+(defmacro definstr-ld-r8-r8 (opcode)
+  (let* ((into-register-key (register-key-from-opcode opcode 3))
+	 (from-register-key (register-key-from-opcode opcode 0)))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu)))
+	       :name ,(list :ld into-register-key from-register-key)
+	       :description ,(format nil "Load the contents of register ~A into register ~A." from-register-key into-register-key)
+	       ,into-register-key (,(cpu-register-accessor-name from-register-key) cpu)
+	       :pc (+ pc 1)
+	       :cycles 1)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defparameter *register-codes* '(0 1 2 3 4 5 7))
+  (defun ld-r8-r8-opcodes ()
+    (let ((register-codes *register-codes*)
+	  (opcodes ()))
+      (loop for r in register-codes do
+	(loop for r2 in register-codes
+	      do (push (logior (ash 2 6)
+			       (ash r 3)
+			       r2)
+		       opcodes)))
+      opcodes)))
+
+(defmacro def-ld-r8-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-ld-r8-r8 ,%)) (ld-r8-r8-opcodes))))
+(def-ld-r8-r8-instrs)
 
 ;; Load 8-bit immediate into 8-bit register
-(defmacro definstr-ld-r8-imm8 (opcode register-key)
-  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
-				   (d8 (aref memory (1+ pc))))
-	     :name ,(list :ld register-key :imm8)
-	     :description ,(format nil "Load the 8-bit immediate operand d8 into register ~A." register-key)
-	     :disassembly (alist :d8 (register8-text d8))
-	     ,register-key d8
-	     :pc (+ 2 pc)
-	     :cycles 2))
+(defmacro definstr-ld-r8-imm8 (opcode)
+  (let* ((register-key (register-key-from-opcode opcode 3)))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				     (d8 (aref memory (1+ pc))))
+	       :name ,(list :ld register-key :imm8)
+	       :description ,(format nil "Load the 8-bit immediate operand d8 into register ~A." register-key)
+	       :disassembly (alist :d8 (register8-text d8))
+	       ,register-key d8
+	       :pc (+ 2 pc)
+	       :cycles 2)))
 
-(definstr-ld-r8-imm8 #x06 :b)
-(definstr-ld-r8-imm8 #x0e :c)
-(definstr-ld-r8-imm8 #x3e :a)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun ld-r8-imm8-opcodes ()
+    (loop for r in *register-codes*
+	  collecting (logior (ash r 3)
+			     #b110))))
 
+(defmacro def-ld-r8-imm8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-ld-r8-imm8 ,%)) (ld-r8-imm8-opcodes))))
+(def-ld-r8-imm8-instrs)
 
 ;; Load 8-bit register into memory location specified by HL
-(defmacro definstr-ld-@hl-r8 (opcode register-key)
-  `(definstr ,opcode (cpu memory) ()
-	     :name ,(list :ld :@hl register-key)
-	     :description ,(format nil "Store the contents of register ~A in the memory location
+(defmacro definstr-ld-@hl-r8 (opcode)
+  (let* ((register-key (register-key-from-opcode opcode 0)))
+    `(definstr ,opcode (cpu memory) ()
+	       :name ,(list :ld :@hl register-key)
+	       :description ,(format nil "Store the contents of register ~A in the memory location
 specified by register pair HL." register-key)
-	     :memory (((cpu-hl cpu) (cpu-a cpu)))
-	     :pc (1+ (cpu-pc cpu))
-	     :cycles 2))
+	       :memory (((cpu-hl cpu) (cpu-a cpu)))
+	       :pc (1+ (cpu-pc cpu))
+	       :cycles 2)))
 
-(definstr-ld-@hl-r8 #x77 :a)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun ld-@hl-r8-opcodes ()
+    (loop for r in *register-codes*
+	  collecting (logior #b01110000 r))))
 
-;; Load contents of value @ 16-bit register into 8-bit register
+(defmacro def-ld-@hl-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-ld-@hl-r8 ,%)) (ld-@hl-r8-opcodes))))
+(def-ld-@hl-r8-instrs)
+
 ;; Load contents of value @ DE into A
 (definstr #x1a (cpu memory) ((pc (cpu-pc cpu)))
 	  :name :ld-a-@de
@@ -1451,6 +1495,17 @@ operand a8."
 	  :pc (+ pc 2)
 	  :cycles 3)
 
+;; LD (HLI), A
+(definstr #x22 (cpu memory) ((pc (cpu-pc cpu))
+			     (hl (cpu-hl cpu)))
+	  :name :ld-@hli-a
+	  :description "Store the contents of register A into the memory
+location specified by register pair HL,
+and simultaneously increment the contents of HL."
+	  :hl (1+ hl)
+	  :memory ((hl (cpu-a cpu)))
+	  :pc (+ pc 1)
+	  :cycles 2)
 
 ;; LD (HLD), A
 (definstr #x32 (cpu memory) ((pc (cpu-pc cpu))
@@ -1464,74 +1519,218 @@ and simultaneously decrement the contents of HL."
 	  :pc (+ pc 1)
 	  :cycles 2)
 
+(defun dd-register-pair-key-from-opcode (opcode bit-index)
+  (ecase (extract-bits opcode bit-index 2)
+    (0 :bc)
+    (1 :de)
+    (2 :hl)
+    (3 :sp)))
+(defun qq-register-pair-key-from-opcode (opcode bit-index)
+  (ecase (extract-bits opcode bit-index 2)
+    (0 :bc)
+    (1 :de)
+    (2 :hl)
+    (3 :af)))
+
+(defparameter *register-pair-codes* '(0 1 2 3))
 
 ;; Load 16-bit immediate into 16-bit register
 ;; S2.2
-(defmacro definstr-ld-r16-imm16 (opcode register-key)
-  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
-				   (d16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc)))))
-	     :name ,(list :ld register-key :imm16)
-	     :description ,(format nil "Load the 2 bytes of immediate data into register pair ~A.
+(defmacro definstr-ld-r16-imm16 (opcode)
+  (let* ((register-key (dd-register-pair-key-from-opcode opcode 4)))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				     (d16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc)))))
+	       :name ,(list :ld register-key :imm16)
+	       :description ,(format nil "Load the 2 bytes of immediate data into register pair ~A.
 
 The first byte of immediate data is the lower byte,
 and the second byte of immediate data is the higher byte." register-key)
-	     :disassembly (alist :d16 (hex16-text d16))
-	     ,register-key d16
-	     :pc (+ 3 pc)
-	     :cycles 3))
-(definstr-ld-r16-imm16 #x11 :de)
-(definstr-ld-r16-imm16 #x21 :hl)
-(definstr-ld-r16-imm16 #x31 :sp)
+	       :disassembly (alist :d16 (hex16-text d16))
+	       ,register-key d16
+	       :pc (+ 3 pc)
+	       :cycles 3)))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun ld-r16-imm16-opcodes ()
+    (loop for r in *register-pair-codes*
+	  collecting (logior (ash r 4)
+			     #b001))))
+
+(defmacro def-ld-r16-imm16-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-ld-r16-imm16 ,%)) (ld-r16-imm16-opcodes))))
+(def-ld-r16-imm16-instrs)
+
+(defun register8-keys-from-register-pair-key (combined-key)
+  (ecase combined-key
+    (:af '(:a :f))
+    (:bc '(:b :c))
+    (:de '(:d :e))
+    (:hl '(:h :l))))
 
 ;; Push 16-bit register onto stack
-(defmacro definstr-push-r16 (opcode hi-register-key lo-register-key)
-  (let* ((combined-key (make-keyword (symbolicate hi-register-key lo-register-key))))
-    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
-				     (sp (cpu-sp cpu))
-				     (sp-2 (- sp 2)))
-	       :name ,(list :push combined-key)
-	       :description ,(format nil "Push the contents of register pair ~A onto the memory stack." combined-key)
-	       :memory (((1- sp) (,(cpu-register-accessor-name hi-register-key) cpu))
-			(sp-2 (,(cpu-register-accessor-name lo-register-key) cpu)))
-	       :sp sp-2
-	       :pc (1+ pc)
-	       :cycles 4)))
-(definstr-push-r16 #xc5 :b :c)
+(defmacro definstr-push-r16 (opcode)
+  (let* ((combined-key (qq-register-pair-key-from-opcode opcode 4)))
+    (destructuring-bind (hi-register-key lo-register-key)
+	(register8-keys-from-register-pair-key combined-key)
+      `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				       (sp (cpu-sp cpu))
+				       (sp-2 (- sp 2)))
+		 :name ,(list :push combined-key)
+		 :description ,(format nil "Push the contents of register pair ~A onto the stack." combined-key)
+		 :memory (((1- sp) (,(cpu-register-accessor-name hi-register-key) cpu))
+			  (sp-2 (,(cpu-register-accessor-name lo-register-key) cpu)))
+		 :sp sp-2
+		 :pc (1+ pc)
+		 :cycles 4))))
 
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun push-r16-opcodes ()
+    (loop for r in *register-pair-codes*
+	  collecting (logior #b11000101
+			     (ash r 4)))))
+
+(defmacro def-push-r16-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-push-r16 ,%)) (push-r16-opcodes))))
+(def-push-r16-instrs)
+
+(defmacro definstr-pop-r16 (opcode)
+  (let* ((combined-key (qq-register-pair-key-from-opcode opcode 4)))
+    (destructuring-bind (hi-register-key lo-register-key)
+	(register8-keys-from-register-pair-key combined-key)
+      `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				       (sp (cpu-sp cpu))
+				       (sp+ (1+ sp)))
+		 :name ,(list :pop combined-key)
+		 :description ,(format nil "Pop the 16-bit value off the stack 
+and into register pair ~A." combined-key)
+		 :sp (+ sp 2)
+		 ,hi-register-key (aref memory sp+)
+		 ,lo-register-key (aref memory sp)
+		 :pc (1+ pc)
+		 :cycles 3))))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun pop-r16-opcodes ()
+    (loop for r in *register-pair-codes*
+	  collecting (logior #b11000001
+			     (ash r 4)))))
+
+(defmacro def-pop-r16-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-pop-r16 ,%)) (pop-r16-opcodes))))
+(def-pop-r16-instrs)
 
 ;; S2.3
 ;; Logical XOR 8-bit register with A into register A
-(defmacro definstr-xor-r8 (opcode register-key)
-  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
-				   (result (logxor (cpu-a cpu) (,(cpu-register-accessor-name register-key) cpu))))
-	     :name ,(list :xor register-key)
-	     :description ,(format nil "Take the logical exclusive-OR for each bit of the
+(defmacro definstr-xor-r8 (opcode)
+  (let ((register-key (register-key-from-opcode opcode 0)))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				     (result (logxor (cpu-a cpu) (,(cpu-register-accessor-name register-key) cpu))))
+	       :name ,(list :xor register-key)
+	       :description ,(format nil "Take the logical exclusive-OR for each bit of the
 contents of register A and the contents of register ~A,
 and store the results in register A." register-key)
-	     ,register-key result
-	     :carry? nil
-	     :half-carry? nil
-	     :subtraction? nil
-	     :zero? (zerop result)
-	     :pc (+ pc 1)
-	     :cycles 1))
-(definstr-xor-r8 #xaf :a)
+	       ,register-key result
+	       :carry? nil
+	       :half-carry? nil
+	       :subtraction? nil
+	       :zero? (zerop result)
+	       :pc (+ pc 1)
+	       :cycles 1)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun xor-r8-opcodes ()
+    (loop for r in *register-codes*
+	  collecting (logior #b10101000
+			     r))))
+
+(defmacro def-xor-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-xor-r8 ,%)) (xor-r8-opcodes))))
+(def-xor-r8-instrs)
 
 ;; S2.4
 ;; Increment 8-bit register
-(defmacro definstr-inc-r8 (opcode register-key)
-  `(definstr ,opcode (cpu memory) ((data (,(cpu-register-accessor-name register-key) cpu))
-				   (data+ (logand #xff (1+ data))))
-	     :name ,(list :inc register-key)
-	     :description ,(format nil "Increment the contents of register ~A by 1." register-key)
-	     :zero? (zerop data+)
-	     :subtraction? nil
-	     :half-carry? (half-carry? data 1)
-	     ,register-key data+
-	     :pc (1+ (cpu-pc cpu))
-	     :cycles 1))
-(definstr-inc-r8 #x0c :c)
+(defmacro definstr-inc-r8 (opcode)
+  (let ((register-key (register-key-from-opcode opcode 3)))
+    `(definstr ,opcode (cpu memory) ((data (,(cpu-register-accessor-name register-key) cpu))
+				     (data+ (logand #xff (1+ data))))
+	       :name ,(list :inc register-key)
+	       :description ,(format nil "Increment the contents of register ~A by 1." register-key)
+	       :zero? (zerop data+)
+	       :subtraction? nil
+	       :half-carry? (half-carry? data 1)
+	       ,register-key data+
+	       :pc (1+ (cpu-pc cpu))
+	       :cycles 1)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun inc-r8-opcodes ()
+    (loop for r in *register-codes*
+	  collecting (logior #b00000100
+			     (ash r 3)))))
+
+(defmacro def-inc-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-inc-r8 ,%)) (inc-r8-opcodes))))
+(def-inc-r8-instrs)
+
+
+(defun half-borrow? (a b)
+  ;; TODO: check if this is right.
+  (let* ((half-a (logand #xf a))
+	 (half-b (logand #xf b)))
+    (< half-a half-b)))
+
+;; decrement 8-bit register
+(defmacro definstr-dec-r8 (opcode)
+  (let ((register-key (register-key-from-opcode opcode 3)))
+    `(definstr ,opcode (cpu memory) ((data (,(cpu-register-accessor-name register-key) cpu))
+				     (data- (logand #xff (1- data))))
+	       :name ,(list :dec register-key)
+	       :description ,(format nil "decrement the contents of register ~A by 1." register-key)
+	       :zero? (zerop data-)
+	       :subtraction? t
+	       :half-carry? (half-borrow? data 1)
+	       ,register-key data-
+	       :pc (1+ (cpu-pc cpu))
+	       :cycles 1)))
+
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun dec-r8-opcodes ()
+    (loop for r in *register-codes*
+	  collecting (logior #b101
+			     (ash r 3)))))
+
+(defmacro def-dec-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-dec-r8 ,%)) (dec-r8-opcodes))))
+(def-dec-r8-instrs)
+
+(defmacro definstr-inc-r16 (opcode)
+  (let* ((combined-key (dd-register-pair-key-from-opcode opcode 4)))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				     (data (,(cpu-register-accessor-name combined-key) cpu)))
+	       :name ,(list :inc combined-key)
+	       :description ,(format nil "Increment the contents of register pair ~A" combined-key)
+	       ,combined-key (1+ data)
+	       :pc (1+ pc)
+	       :cycles 2)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun inc-r16-opcodes ()
+    (loop for r in *register-pair-codes*
+	  collecting (logior #b00000011
+			     (ash r 4)))))
+
+(defmacro def-inc-r16-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-inc-r16 ,%)) (inc-r16-opcodes))))
+(def-inc-r16-instrs)
 
 (defun bit7? (byte)
   (not (zerop (logand #x80 byte))))
@@ -1539,7 +1738,7 @@ and store the results in register A." register-key)
   (if (cpu-carry? cpu) 1 0))
 
 ;; S2.5
-;; Rotate left contents of 8-bit register
+;; Rotate left contents of A
 (definstr #x17 (cpu memory) ((pc (cpu-pc cpu))
 			     (a (cpu-a cpu))
 			     (rla (rotate-left a (cpu-carry-bit cpu))))
@@ -1554,46 +1753,126 @@ through the carry (CY) flag."
 	  :a rla
 	  :pc (1+ pc))
 
+(defun register-key (code)
+  (ecase code
+    (#b111 :a)
+    (#b0 :b)
+    (#b1 :c)
+    (#b010 :d)
+    (#b011 :e)
+    (#b100 :h)
+    (#b101 :l)))
+
+(defmacro definstr-rl-r8 (opcode)
+  (let ((register-key (register-key-from-opcode opcode 0)))
+    `(deflong-instr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+					  (data (,(cpu-register-accessor-name register-key) cpu))
+					  (result (rotate-left data (cpu-carry-bit cpu))))
+		    :name ,(list :rl register-key)
+		    :description ,(format nil "Rotate the contents of register ~A to the left. 
+That is, the contents of bit 0 are copied to bit 1,
+and the previous contents of bit 1 are copied to bit 2.
+The previous contents of the carry (CY) flag
+are copied to bit 0 of register ~A." register-key register-key)
+		    :zero? (zerop result)
+		    :carry? (bit7? data)
+		    :subtraction? nil
+		    :half-carry? nil
+		    ,register-key result
+		    :pc (+ pc 2)
+		    :cycles 2)))
+
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun rl-r8-opcodes ()
+    (loop for r in *register-codes*
+	  collecting (logior #b00010000
+			     r))))
+
+(defmacro def-rl-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-rl-r8 ,%)) (rl-r8-opcodes))))
+(def-rl-r8-instrs)
+
 ;; S2.6
 ;; Test complement of (bit of 8-bit register) into zero flag
-(defmacro definstr-bit-r8 (opcode bit-index register-key)
-  `(deflong-instr ,opcode (cpu memory) ((pc (cpu-pc cpu))
-					(bit-mask ,(expt 2 bit-index)))
-		  :name ,(list :bit bit-index register-key)
-		  :description ,(format nil "Copy the complement of the contents of bit ~A in
+(defmacro definstr-bit-r8 (opcode)
+  (let ((bit-index (extract-bits opcode 3 3))
+	(register-key (register-key-from-opcode opcode 0)))
+    `(deflong-instr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+					  (bit-mask ,(expt 2 bit-index)))
+		    :name ,(list :bit bit-index register-key)
+		    :description ,(format nil "Copy the complement of the contents of bit ~A in
 register ~A to the Zero flag." bit-index register-key)
-		  :zero? (zerop (logand (,(cpu-register-accessor-name register-key) cpu) bit-mask))
-		  :subtraction? nil
-		  :half-carry? t
-		  :pc (+ pc 2)
-		  :cycles 2))
+		    :zero? (zerop (logand (,(cpu-register-accessor-name register-key) cpu) bit-mask))
+		    :subtraction? nil
+		    :half-carry? t
+		    :pc (+ pc 2)
+		    :cycles 2)))
 
-(definstr-bit-r8 #x7c 7 :h)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun bit-r8-opcodes ()
+    (let ((opcodes ()))
+      (loop for r in *register-codes*
+	    do (loop for bit-index below 8 do
+	      (push (logior #b01000000
+			    (ash bit-index 3)
+			    r)
+		    opcodes)))
+      opcodes)))
+
+(defmacro def-bit-r8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-bit-r8 ,%)) (bit-r8-opcodes))))
+(def-bit-r8-instrs)
+
+(defun condition-code-from-opcode (opcode bit-index)
+  (ecase (extract-bits opcode bit-index 2)
+    (0 :nz)
+    (1 :z)
+    (2 :nc)
+    (3 :c)))
+
+(defun compile-condition-code-test (condition-code cpu-name)
+  (ecase condition-code
+    (:nz `(not (cpu-zero? ,cpu-name)))
+    (:z `(cpu-zero? ,cpu-name))
+    (:c `(cpu-carry? ,cpu-name))
+    (:nc `(not (cpu-carry? ,cpu-name)))))
 
 ;; S2.7
 ;; Jump relative on condition
-(defmacro definstr-jr-cc-imm8 (opcode condition-code)
-  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
-				   (cc? ,(ecase condition-code
-					   (:nz '(not (cpu-zero? cpu)))
-					   (:z '(cpu-zero? cpu))
-					   (:c '(cpu-carry? cpu))
-					   (:nc '(not (cpu-carry? cpu)))))
-				   (offset (s8 (aref memory (1+ pc))))
-				   (destination (+ 2 pc offset)))
-	     :name ,(list :jr condition-code :s8)
-	     :description ,(format nil "If the condition code ~A is true, jump s8 steps from the current
-address stored in PC.
+(defmacro definstr-jr-cc-imm8 (opcode)
+  (let* ((condition-code (condition-code-from-opcode opcode 3)))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				     (cc? ,(compile-condition-code-test condition-code 'cpu))
+				     (offset (s8 (aref memory (1+ pc))))
+				     (destination (+ 2 pc offset)))
+	       :name ,(list :jr condition-code :s8)
+	       :description ,(format nil "If the condition code ~A is true,
+jump s8 steps from the current address stored in PC.
 If not, the instruction following the current JP
 instruction is executed (as usual)." condition-code)
-	     :disassembly (alist :s8 offset :addr (register16-text destination))
-	     :jump? cc?
-	     :pc (if cc?
-		     destination
-		     (+ 2 pc))
-	     :cycles (if cc? 3 2)))
+	       :disassembly (alist :s8 offset :addr (register16-text destination))
+	       :jump? cc?
+	       :pc (if cc?
+		       destination
+		       (+ 2 pc))
+	       :cycles (if cc? 3 2))))
 
-(definstr-jr-cc-imm8 #x20 :nz)
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defparameter *condition-codes* '(0 1 2 3))
+  (defun jr-cc-imm8-opcodes ()
+    (loop for r in *condition-codes*
+	  collecting
+	  (logior #b00100000
+		  (ash r 3)))))
+
+(defmacro def-jr-cc-imm8-instrs ()
+  `(progn
+     ,@(mapcar (fn `(definstr-jr-cc-imm8 ,%)) (jr-cc-imm8-opcodes))))
+(def-jr-cc-imm8-instrs)
 
 ;; S2.8
 ;; Call immediate
@@ -1615,25 +1894,19 @@ To Push: decrement SP, then copy byte to SP."
 	  :pc a16
 	  :cycles 6)
 
+;; Return
+(definstr #xc9 (cpu memory) ((sp (cpu-sp cpu))
+			     (return-addr (combined-register (aref memory (1+ sp)) (aref memory sp))))
+	  :name :ret
+	  :description "Pops the 16-bit return value off the stack into the PC."
+	  :disassembly (alist :addr (hex16-text return-addr))
+	  :jump? t
+	  :sp (+ sp 2)
+	  :pc return-addr
+	  :cycles 4)
+
 (defun rotate-left (register carry-bit)
   (logior carry-bit (logand #xff (ash register 1))))
-
-(deflong-instr #x11 (cpu memory) ((pc (cpu-pc cpu))
-				  (c (cpu-c cpu))
-				  (rlc (rotate-left c (if (cpu-carry? cpu) 1 0))))
-	       :name :rl-c
-	       :description "Rotate the contents of register C to the left. 
-That is, the contents of bit 0 are copied to bit 1,
-and the previous contents of bit 1 are copied to bit 2.
-The previous contents of the carry (CY) flag
-are copied to bit 0 of register C."
-	       :zero? (zerop rlc)
-	       :carry? (not (zerop (logand #x80 c)))
-	       :subtraction? nil
-	       :half-carry? nil
-	       :c rlc
-	       :pc (+ pc 2)
-	       :cycles 2)
 
 (defun instr-effects (cpu memory)
   (let* ((instr (next-instr cpu memory)))
@@ -1662,7 +1935,7 @@ are copied to bit 0 of register C."
 
 (defbreakpoint bookmark (cpu memory)
   (let* ((pc (cpu-pc cpu)))
-    (= pc #x9c)))
+    (= pc #x2e)))
 
 ;; recompile execute! definition
 (macrolet ((m () (compile-execute)))
@@ -1670,3 +1943,4 @@ are copied to bit 0 of register C."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
+;; button to refresh drawings
