@@ -927,6 +927,8 @@ Test-fn and handle-fn are both functions of event."
   (checkeql (s16 #x0) 0)
   (checkeql (s16 #xffff) -1))
 
+(defun bin8-text (num)
+  (format nil "0b~8,'0b" num))
 (defun hex8-text (num)
   (format nil "0x~2,'0x" num))
 (defun hex16-text (num)
@@ -940,7 +942,7 @@ Test-fn and handle-fn are both functions of event."
     (:unsigned
      (format nil "~d" register))
     (:binary
-     (format nil "0b~8,'0b" register))))
+     (bin8-text register))))
 (defun register16-text (register)
   (ecase *number-base*
     ((:hexadecimal :binary)
@@ -1039,12 +1041,12 @@ Test-fn and handle-fn are both functions of event."
 	(let* ((byte2 (aref memory (1+ pc)))
 	       (instr (aval byte2 *long-instrs*)))
 	  (if instr
-	      (funcall (aval :disassemble-instr instr) cpu memory)
+	      (list* (aval :name instr) (funcall (aval :disassemble-instr instr) cpu memory))
 	      (list :unknown (register16-text (combined-register byte2 byte)))))
 	(let* ((instr (aval byte *instrs*)))
 	  (if instr
-	      (funcall (aval :disassemble-instr instr) cpu memory)
-	      (list :unknown (hex8-text instr)))))))
+	      (list* (aval :name instr) (funcall (aval :disassemble-instr instr) cpu memory))
+	      (list :unknown (hex8-text byte)))))))
 
 (run-tests!)
 
@@ -1230,8 +1232,6 @@ Test-fn and handle-fn are both functions of event."
       (warn "PC should be provided"))
     (unless cycles
       (warn "CYCLES should be provided"))
-    (unless disassembly
-      (warn "DISASSEMBLY should be provided"))
     (let* ((properties (apply 'alist (rest (rest (rest (rest whole))))))
 	   (effects (aremove properties :name :description :disassembly)))
       `(eval-when (:compile-toplevel :load-toplevel :execute)
@@ -1378,168 +1378,225 @@ Test-fn and handle-fn are both functions of event."
      (setq *long-instrs* (aremove *long-instrs* ,byte))))
 
 
+;; Load 8-bit register into 8-bit register
+;; S2.1
+(defmacro definstr-ld-r8-r8 (opcode into-register-key from-register-key)
+  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu)))
+	     :name ,(list :ld into-register-key from-register-key)
+	     :description ,(format nil "Load the contents of register ~A into register ~A." from-register-key into-register-key)
+	     ,into-register-key (,(cpu-register-accessor-name from-register-key) cpu)
+	     :pc (+ pc 1)
+	     :cycles 1))
+(definstr-ld-r8-r8 #x4f :c :a)
 
-(definstr #x06 (cpu memory) ((pc (cpu-pc cpu))
-			     (d8 (aref memory (1+ pc))))
-	  :name :ld-b-d8
-	  :description "Load the 8-bit immediate operand d8 into register B."
-	  :pc (+ 2 pc)
-	  :cycles 2
-	  :b d8
-	  :disassembly (list :ld-b-d8 (list :d8 (register8-text d8))))
+;; Load 8-bit immediate into 8-bit register
+(defmacro definstr-ld-r8-imm8 (opcode register-key)
+  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				   (d8 (aref memory (1+ pc))))
+	     :name ,(list :ld register-key :imm8)
+	     :description ,(format nil "Load the 8-bit immediate operand d8 into register ~A." register-key)
+	     :disassembly (alist :d8 (register8-text d8))
+	     ,register-key d8
+	     :pc (+ 2 pc)
+	     :cycles 2))
 
-(definstr #x0c (cpu memory) ((c (cpu-c cpu))
-			     (c+ (1+ c)))
-	  :name :inc-c
-	  :description "Increment the contents of register C by 1."
-	  :zero? (zerop c)
-	  :subtraction? 0
-	  :half-carry? (half-carry? c 1)
-	  :c c+
-	  :pc (1+ (cpu-pc cpu))
-	  :cycles 1
-	  :disassembly (list :inc-c))
-(definstr #x0e (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-c-d8
-	  :description "Load the 8-bit immediate operand d8 into register C."
-	  :disassembly (list :ld-c-d8 (list :d8 (register8-text (aref memory (1+ pc)))))
-	  :c (aref memory (1+ pc))
-	  :pc (+ 2 pc)
-	  :cycles 2)
+(definstr-ld-r8-imm8 #x06 :b)
+(definstr-ld-r8-imm8 #x0e :c)
+(definstr-ld-r8-imm8 #x3e :a)
 
-(definstr #x11 (cpu memory) ((pc (cpu-pc cpu))
-			     (d16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc)))))
-	  :name :ld-de-d16
-	  :description "Load the 2 bytes of immediate data into register pair DE.
 
-The first byte of immediate data is the lower byte,
-and the second byte of immediate data is the higher byte."
-	  :disassembly (list :ld-de-d16 (list :d16 (hex16-text d16)))
-	  :de d16
-	  :pc (+ 3 pc)
-	  :cycles 3)
+;; Load 8-bit register into memory location specified by HL
+(defmacro definstr-ld-@hl-r8 (opcode register-key)
+  `(definstr ,opcode (cpu memory) ()
+	     :name ,(list :ld :@hl register-key)
+	     :description ,(format nil "Store the contents of register ~A in the memory location
+specified by register pair HL." register-key)
+	     :memory (((cpu-hl cpu) (cpu-a cpu)))
+	     :pc (1+ (cpu-pc cpu))
+	     :cycles 2))
 
+(definstr-ld-@hl-r8 #x77 :a)
+
+;; Load contents of value @ 16-bit register into 8-bit register
+;; Load contents of value @ DE into A
 (definstr #x1a (cpu memory) ((pc (cpu-pc cpu)))
 	  :name :ld-a-@de
 	  :description "Load the 8-bit contents of memory specified by 
 register pair DE into register A."
-	  :disassembly (list :ld-a-@de)
 	  :a (aref memory (cpu-de cpu))
 	  :pc (+ 1 pc)
 	  :cycles 2)
 
+;; Load A into memory-register specified by C
+(definstr #xe2 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-@c-a
+	  :description "Store the contents of register A in the port register,
+or mode register at the address
+in the range 0xFF00-0xFFFF specified by register C.
+- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
+- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
+- 0xFFFF: Interrupt Enable Register"
+	  :memory (((+ #xff00 (cpu-c cpu)) (cpu-a cpu)))
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+;; Load A into memory-register specified by 8-bit immediate
+(definstr #xe0 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-@a8-a
+	  :description "Store the contents of register A in the internal RAM,
+port register, or mode register at the address in the
+range 0xFF00-0xFFFF specified by the 8-bit immediate 
+operand a8."
+	  :memory (((+ #xff00 (aref memory (1+ pc))) (cpu-a cpu)))
+	  :pc (+ pc 2)
+	  :cycles 3)
+
+
+;; LD (HLD), A
+(definstr #x32 (cpu memory) ((pc (cpu-pc cpu))
+			     (hl (cpu-hl cpu)))
+	  :name :ld-@hld-a
+	  :description "Store the contents of register A into the memory
+location specified by register pair HL,
+and simultaneously decrement the contents of HL."
+	  :hl (1- hl)
+	  :memory ((hl (cpu-a cpu)))
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+
+;; Load 16-bit immediate into 16-bit register
+;; S2.2
+(defmacro definstr-ld-r16-imm16 (opcode register-key)
+  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				   (d16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc)))))
+	     :name ,(list :ld register-key :imm16)
+	     :description ,(format nil "Load the 2 bytes of immediate data into register pair ~A.
+
+The first byte of immediate data is the lower byte,
+and the second byte of immediate data is the higher byte." register-key)
+	     :disassembly (alist :d16 (hex16-text d16))
+	     ,register-key d16
+	     :pc (+ 3 pc)
+	     :cycles 3))
+(definstr-ld-r16-imm16 #x11 :de)
+(definstr-ld-r16-imm16 #x21 :hl)
+(definstr-ld-r16-imm16 #x31 :sp)
+
+
+;; Push 16-bit register onto stack
+(defmacro definstr-push-r16 (opcode hi-register-key lo-register-key)
+  (let* ((combined-key (make-keyword (symbolicate hi-register-key lo-register-key))))
+    `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				     (sp (cpu-sp cpu))
+				     (sp-2 (- sp 2)))
+	       :name ,(list :push combined-key)
+	       :description ,(format nil "Push the contents of register pair ~A onto the memory stack." combined-key)
+	       :memory (((1- sp) (,(cpu-register-accessor-name hi-register-key) cpu))
+			(sp-2 (,(cpu-register-accessor-name lo-register-key) cpu)))
+	       :sp sp-2
+	       :pc (1+ pc)
+	       :cycles 4)))
+(definstr-push-r16 #xc5 :b :c)
+
+
+;; S2.3
+;; Logical XOR 8-bit register with A into register A
+(defmacro definstr-xor-r8 (opcode register-key)
+  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				   (result (logxor (cpu-a cpu) (,(cpu-register-accessor-name register-key) cpu))))
+	     :name ,(list :xor register-key)
+	     :description ,(format nil "Take the logical exclusive-OR for each bit of the
+contents of register A and the contents of register ~A,
+and store the results in register A." register-key)
+	     ,register-key result
+	     :carry? nil
+	     :half-carry? nil
+	     :subtraction? nil
+	     :zero? (zerop result)
+	     :pc (+ pc 1)
+	     :cycles 1))
+(definstr-xor-r8 #xaf :a)
+
+;; S2.4
+;; Increment 8-bit register
+(defmacro definstr-inc-r8 (opcode register-key)
+  `(definstr ,opcode (cpu memory) ((data (,(cpu-register-accessor-name register-key) cpu))
+				   (data+ (logand #xff (1+ data))))
+	     :name ,(list :inc register-key)
+	     :description ,(format nil "Increment the contents of register ~A by 1." register-key)
+	     :zero? (zerop data+)
+	     :subtraction? nil
+	     :half-carry? (half-carry? data 1)
+	     ,register-key data+
+	     :pc (1+ (cpu-pc cpu))
+	     :cycles 1))
+(definstr-inc-r8 #x0c :c)
+
+(defun bit7? (byte)
+  (not (zerop (logand #x80 byte))))
+(defun cpu-carry-bit (cpu)
+  (if (cpu-carry? cpu) 1 0))
+
+;; S2.5
+;; Rotate left contents of 8-bit register
 (definstr #x17 (cpu memory) ((pc (cpu-pc cpu))
 			     (a (cpu-a cpu))
-			     (rla (rotate-left a (if (cpu-carry? cpu) 1 0))))
-	  :name :rl-a
+			     (rla (rotate-left a (cpu-carry-bit cpu))))
+	  :name :rla
 	  :description "Rotate the contents of register A to the left,
 through the carry (CY) flag."
-	  :disassembly (list :rl-a)
-	  :zero? (zerop rla)
+	  :zero? nil
 	  :subtraction? nil
 	  :half-carry? nil
-	  :carry? (not (zerop (logand #x80 a)))
+	  :carry? (bit7? a)
 	  :cycles 1
 	  :a rla
 	  :pc (1+ pc))
 
-(definstr #x20 (cpu memory) ((pc (cpu-pc cpu))
-			     (not-zero? (not (cpu-zero? cpu)))
-			     (offset (s8 (aref memory (1+ pc)))))
-	  :name :jr-nz-s8
-	  :description "If the Z flag is 0, jump s8 steps from the current
-address stored in the program counter (PC).
+;; S2.6
+;; Test complement of (bit of 8-bit register) into zero flag
+(defmacro definstr-bit-r8 (opcode bit-index register-key)
+  `(deflong-instr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+					(bit-mask ,(expt 2 bit-index)))
+		  :name ,(list :bit bit-index register-key)
+		  :description ,(format nil "Copy the complement of the contents of bit ~A in
+register ~A to the Zero flag." bit-index register-key)
+		  :zero? (zerop (logand (,(cpu-register-accessor-name register-key) cpu) bit-mask))
+		  :subtraction? nil
+		  :half-carry? t
+		  :pc (+ pc 2)
+		  :cycles 2))
+
+(definstr-bit-r8 #x7c 7 :h)
+
+;; S2.7
+;; Jump relative on condition
+(defmacro definstr-jr-cc-imm8 (opcode condition-code)
+  `(definstr ,opcode (cpu memory) ((pc (cpu-pc cpu))
+				   (cc? ,(ecase condition-code
+					   (:nz '(not (cpu-zero? cpu)))
+					   (:z '(cpu-zero? cpu))
+					   (:c '(cpu-carry? cpu))
+					   (:nc '(not (cpu-carry? cpu)))))
+				   (offset (s8 (aref memory (1+ pc))))
+				   (destination (+ 2 pc offset)))
+	     :name ,(list :jr condition-code :s8)
+	     :description ,(format nil "If the condition code ~A is true, jump s8 steps from the current
+address stored in PC.
 If not, the instruction following the current JP
-instruction is executed (as usual)."
-	  :disassembly (list :jr-nz-s8 (list :s8 offset) (list :addr (register16-text (+ pc offset 2))))
-	  :jump? not-zero?
-	  :pc (if not-zero?
-		  (+ 2 pc offset)
-		  (+ 2 pc))
-	  :cycles (if not-zero? 3 2))
-(definstr #x21 (cpu memory) ((pc (cpu-pc cpu))
-			     (d16 (combined-register (aref memory (+ 2 pc))
-						     (aref memory (1+ pc)))))
-	  :name :ld-hl-d16
-	  :description "Load the 2 bytes of immediate data into register pair HL.
+instruction is executed (as usual)." condition-code)
+	     :disassembly (alist :s8 offset :addr (register16-text destination))
+	     :jump? cc?
+	     :pc (if cc?
+		     destination
+		     (+ 2 pc))
+	     :cycles (if cc? 3 2)))
 
-The first byte of immediate data is the lower byte
-and the second byte of immediate data is the higher byte"
-	  :disassembly (list :ld-hl-d16 (list :d16 (register16-text d16)))
-	  :hl d16
-	  :l (aref memory (1+ pc))
-	  :h (aref memory (+ 2 pc))
-	  :pc (+ pc 3)
-	  :cycles 3)
-(definstr #x31 (cpu memory) ((pc (cpu-pc cpu))
-			     (imm (combined-register (aref memory (+ pc 2)) (aref memory (1+ pc)))))
-	  :name :ld-sp-imm
-	  :description "Load the 2 bytes of immediate data into register pair SP.
+(definstr-jr-cc-imm8 #x20 :nz)
 
-The first byte of immediate data is the lower byte
-and the second byte of immediate data is the higher byte"
-	  :disassembly (list :ld-sp-imm (list :imm (register16-text imm)))
-	  :sp imm
-	  :pc (+ pc 3)
-	  :cycles 3)
-(definstr #x32 (cpu memory) ((pc (cpu-pc cpu))
-			     (hl (cpu-hl cpu)))
-	  :name :ld-hl-a
-	  :description "Store the contents of register A into the memory
-location specified by register pair HL,
-and simultaneously decrement the contents of HL."
-	  :disassembly (list :ld-hl-a)
-	  :hl (1- hl)
-	  :pc (+ pc 1)
-	  :cycles 2)
-(definstr #x3e (cpu memory) ((pc (cpu-pc cpu))
-			     (d8 (aref memory (1+ pc))))
-	  :name :ld-a-d8
-	  :description "Load the 8-bit immediate operand d8 into register A."
-	  :disassembly (list :ld-a-d8 (list :d8) (register8-text d8))
-	  :a d8
-	  :pc (+ pc 2)
-	  :cycles 2)
-
-(definstr #x4f (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-c-a
-	  :description "Load the contents of register A into register C."
-	  :disassembly (list :ld-c-a)
-	  :c (cpu-a cpu)
-	  :pc (+ pc 1)
-	  :cycles 1)
-
-(definstr #x77 (cpu memory) ()
-	  :name :ld-@hl-a
-	  :description "Store the contents of register A in the memory location
-specified by register pair HL."
-	  :disassembly (list :ld-@hl-a)
-	  :cycles 2
-	  :pc (1+ (cpu-pc cpu))
-	  :memory (((cpu-hl cpu) (cpu-a cpu))))
-
-(definstr #xaf (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :xor-a
-	  :description "Take the logical exclusive-OR for each bit of the
-contents of register A and the contents of register A,
-and store the results in register A."
-	  :disassembly (list :xor-a)
-	  :a 0
-	  :pc (+ pc 1)
-	  :cycles 1)
-
-(definstr #xc5 (cpu memory) ((pc (cpu-pc cpu))
-			     (sp (cpu-sp cpu))
-			     (sp-2 (- sp 2)))
-	  :name :push-bc
-	  :description "Push the contents of register pair BC onto the memory stack."
-	  :disassembly (list :push-bc)
-	  :memory (((1- sp) (cpu-b cpu))
-		   (sp-2 (cpu-c cpu)))
-	  :sp sp-2
-	  :pc (1+ pc)
-	  :cycles 4)
-
+;; S2.8
+;; Call immediate
 (definstr #xcd (cpu memory) ((pc (cpu-pc cpu))
 			     (return-value (+ pc 3))
 			     (a16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc))))
@@ -1550,48 +1607,13 @@ Push hi-byte of return value.
 Push the lo-byte of return value.
 Jump to A16.
 To Push: decrement SP, then copy byte to SP."
-	  :disassembly (list :call-a16 (list :a16 (hex16-text a16)))
+	  :disassembly (alist :a16 (hex16-text a16))
 	  :jump? t
 	  :memory (((1- sp) (hi-byte return-value))
 		   ((- sp 2) (lo-byte return-value)))
 	  :sp (- sp 2)
 	  :pc a16
 	  :cycles 6)
-
-(definstr #xe0 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-@a8-a
-	  :cycles 3
-	  :disassembly (list :ld-@a8-a)
-	  :description "Store the contents of register A in the internal RAM,
-port register, or mode register at the address in the
-range 0xFF00-0xFFFF specified by the 8-bit immediate 
-operand a8."
-	  :memory (((+ #xff00 (aref memory (1+ pc))) (cpu-a cpu)))
-	  :pc (+ pc 2))
-
-(definstr #xe2 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-@c-a
-	  :description "Store the contents of register A in the port register,
-or mode register at the address
-in the range 0xFF00-0xFFFF specified by register C.
-- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
-- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
-- 0xFFFF: Interrupt Enable Register"
-	  :disassembly (list :ld-@c-a)
-	  :memory (((+ #xff00 (cpu-c cpu)) (cpu-a cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
-
-(deflong-instr #x7c (cpu memory) ((pc (cpu-pc cpu)))
-	       :name :bit-7-h
-	       :description "Copy the complement of the contents of bit 7 in
-register H to the Z flag."
-	       :disassembly (list :bit-7-h)
-	       :zero? (zerop (logand (cpu-h cpu) #x80))
-	       :subtraction? nil
-	       :half-carry? t
-	       :pc (+ pc 2)
-	       :cycles 2)
 
 (defun rotate-left (register carry-bit)
   (logior carry-bit (logand #xff (ash register 1))))
@@ -1605,7 +1627,6 @@ That is, the contents of bit 0 are copied to bit 1,
 and the previous contents of bit 1 are copied to bit 2.
 The previous contents of the carry (CY) flag
 are copied to bit 0 of register C."
-	       :disassembly (list :rl-c)
 	       :zero? (zerop rlc)
 	       :carry? (not (zerop (logand #x80 c)))
 	       :subtraction? nil
@@ -1649,4 +1670,3 @@ are copied to bit 0 of register C."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
-;; TODO; find a better resource for opcodes
