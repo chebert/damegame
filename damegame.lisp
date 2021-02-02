@@ -381,6 +381,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (setq *drawings* ())
 	 (setq *events* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
+	 (load-font! :font "DroidSansMono.ttf" 16)
 	 (event! (event-initialization-finished))
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
@@ -390,6 +391,8 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (clrhash *event-handlers*)
     (quit!)))
 
+(defun event-initialization-finished? (event)
+  (eql (aval :type event) :initialization-finished))
 (defun event-font-opened? (event font-id)
   "True if the event is an event-font-opened for the font-id"
   (and (eql (aval :type event) :font-opened)
@@ -547,10 +550,6 @@ Test-fn and handle-fn are both functions of event."
     (when texture
       (free-texture! texture)
       (remhash id *textures*))))
-
-(defhandler handle-intialization-finished! (event)
-  (when (eql (aval :type event) :initialization-finished)
-    (load-font! :font "DroidSansMono.ttf" 16)))
 
 (defun texture-right-aligned (x texture-id)
   (- x (texture-width (gethash texture-id *textures*))))
@@ -1155,24 +1154,28 @@ Test-fn and handle-fn are both functions of event."
 (defbutton reset (button "Reset" 1  (g2 32 31) :font)
   (reset!))
 
+(defbutton refresh (button "Refresh" 1 (g2 32 32) :font)
+  (update-visualizations!))
+
 (defbutton continue (button "Continue!" 1 (g2 37 30) :font)
   (loop until (break? (cpu-current) *memory*)
 	do (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
 	   (execute! (cpu-current) *memory*))
   (update-visualizations!))
 
-(defbutton hex (button "Hex" 1 (g2 32 33) :font)
-  (setq *number-base* :hexadecimal)
-  (update-visualizations!))
-(defbutton bin (button "Bin" 1 (g2 34 33) :font)
-  (setq *number-base* :binary)
-  (update-visualizations!))
-(defbutton signed (button "10s" 1 (g2 32 34) :font)
-  (setq *number-base* :signed)
-  (update-visualizations!))
-(defbutton unsigned (button "10u" 1 (g2 34 34) :font)
-  (setq *number-base* :unsigned)
-  (update-visualizations!))
+(let* ((top 34))
+  (defbutton hex (button "Hex" 1 (g2 32 top) :font)
+    (setq *number-base* :hexadecimal)
+    (update-visualizations!))
+  (defbutton bin (button "Bin" 1 (g2 34 top) :font)
+    (setq *number-base* :binary)
+    (update-visualizations!))
+  (defbutton signed (button "10s" 1 (g2 32 (1+ top)) :font)
+    (setq *number-base* :signed)
+    (update-visualizations!))
+  (defbutton unsigned (button "10u" 1 (g2 34 (1+ top)) :font)
+    (setq *number-base* :unsigned)
+    (update-visualizations!)))
 
 (defun mouse-pos-text ()
   (format nil "<~3,' d, ~3,' d><G~2,' d, G~2,' d>"
@@ -1475,6 +1478,17 @@ Test-fn and handle-fn are both functions of event."
       :pc (+ 2 pc)
       :cycles 2)))
 
+;; Load contents of memory location specified by HL into 8 bit-register
+(definstr-class (#b01000110 (register *register-codes* 3)) (cpu memory)
+  (let* ((register-key (register-key register)))
+    `(()
+      :name ,(list :ld register-key :@hl)
+      :description ,(format nil "Store the contents of  the memory location
+specified by register pair HL into register ~A." register-key)
+      ,register-key (aref memory (cpu-hl cpu))
+      :pc (1+ (cpu-pc cpu))
+      :cycles 2)))
+
 ;; Load 8-bit register into memory location specified by HL
 (definstr-class (#b01110000 (register *register-codes* 0)) (cpu memory)
   (let* ((register-key (register-key register)))
@@ -1486,6 +1500,26 @@ specified by register pair HL." register-key)
       :pc (1+ (cpu-pc cpu))
       :cycles 2)))
 
+;; Load 8-bit immediate value into memory location specified by HL
+(definstr #b00110110 (cpu memory) ((pc (cpu-pc cpu))
+				   (imm8 (aref memory (1+ pc))))
+	  :name :ld-@hl-imm8
+	  :disassembly (alist :imm8 imm8)
+	  :description "Load the 8-bit immediate value into
+the memory location specified by HL"
+	  :memory (((cpu-hl cpu) imm8))
+	  :pc (+ 2 pc)
+	  :cycles 3)
+
+;; Load contents of value @ BC into A
+(definstr #b00001010 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-a-@bc
+	  :description "Load the 8-bit contents of memory specified by 
+register pair BC into register A."
+	  :a (aref memory (cpu-bc cpu))
+	  :pc (+ 1 pc)
+	  :cycles 2)
+
 ;; Load contents of value @ DE into A
 (definstr #x1a (cpu memory) ((pc (cpu-pc cpu)))
 	  :name :ld-a-@de
@@ -1493,6 +1527,19 @@ specified by register pair HL." register-key)
 register pair DE into register A."
 	  :a (aref memory (cpu-de cpu))
 	  :pc (+ 1 pc)
+	  :cycles 2)
+
+;; Load into A the memory-register specified by C
+(definstr #b11110010 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-a-@c
+	  :description "Store into A the contents of the port register,
+or mode register at the address
+in the range 0xFF00-0xFFFF specified by register C.
+- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
+- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
+- 0xFFFF: Interrupt Enable Register"
+	  :a (aref memory (+ #xff00 (cpu-c cpu)))
+	  :pc (+ pc 1)
 	  :cycles 2)
 
 ;; Load A into memory-register specified by C
@@ -1508,14 +1555,31 @@ in the range 0xFF00-0xFFFF specified by register C.
 	  :pc (+ pc 1)
 	  :cycles 2)
 
+;; Load into A the memory-register specified by 8-bit immediate
+(definstr #b11110000 (cpu memory) ((pc (cpu-pc cpu))
+				   (imm8 (aref memory (1+ pc)))
+				   (addr (+ #xff00 imm8)))
+	  :name :ld-a-@a8
+	  :description "Store the into register A in the contents of internal RAM,
+port register, or mode register at the address in the
+range 0xFF00-0xFFFF specified by the 8-bit immediate 
+operand a8."
+	  :disassembly (alist :imm8 imm8 :addr addr)
+	  :a (aref memory addr)
+	  :pc (+ pc 2)
+	  :cycles 3)
+
 ;; Load A into memory-register specified by 8-bit immediate
-(definstr #xe0 (cpu memory) ((pc (cpu-pc cpu)))
+(definstr #xe0 (cpu memory) ((pc (cpu-pc cpu))
+			     (imm8 (aref memory (1+ pc)))
+			     (addr (+ #xff00 imm8)))
 	  :name :ld-@a8-a
 	  :description "Store the contents of register A in the internal RAM,
 port register, or mode register at the address in the
 range 0xFF00-0xFFFF specified by the 8-bit immediate 
 operand a8."
-	  :memory (((+ #xff00 (aref memory (1+ pc))) (cpu-a cpu)))
+	  :disassembly (alist :imm8 imm8 :addr addr)
+	  :memory ((addr (cpu-a cpu)))
 	  :pc (+ pc 2)
 	  :cycles 3)
 
@@ -1808,5 +1872,4 @@ To Push: decrement SP, then copy byte to SP."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
-;; button to refresh drawings
-;; event-handlers should take in an event-matcher and a body
+;; event-handlers could take in an event-matcher and a body
