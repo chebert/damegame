@@ -35,25 +35,6 @@
 (defun run-tests! ()
   (maphash (fn (funcall %)) *tests*))
 
-(defmacro defcloss (name direct-superclasses &rest documentation-and-slot-names)
-  "Defcloss provides a similar interface to defstruct (with the addition of direct-superclasses)."
-  (let* ((first (first documentation-and-slot-names))
-	 (documentation (when (stringp first)
-			  first))
-	 (slot-names (if (stringp first)
-			 (rest documentation-and-slot-names)
-			 documentation-and-slot-names))
-	 (slot-keys (mapcar 'make-keyword slot-names))
-	 (slot-reader-names (mapcar (fn (symbolicate name '- %)) slot-names))
-	 (slot-forms (mapcar (fn (list % :initarg %% :reader %)) slot-reader-names slot-keys)))
-    `(progn
-       (defclass ,name ,direct-superclasses
-	 ,slot-forms
-	 ,@ (when documentation (list (list :documentation documentation))))
-       (defun ,(symbolicate name '-p) (instance)
-	 (typep instance ',name))
-       ',name)))
-
 ;; From CBaggers' Swank.Live
 (defmacro continuable (&body body)
   "Helper macro that we can use to allow us to continue from an
@@ -120,8 +101,9 @@ Removes events from the queue."
 (defvar *fonts* (make-hash-table))
 (defvar *textures* (make-hash-table))
 
-(defcloss event-font-opened ()
-  font-id)
+(defun event-font-opened (font-id)
+  (alist :type :font-opened
+	 :font-id font-id))
 
 (defun load-font! (font-id path size)
   "Opens the font and stores it in *fonts*, closing any existing font."
@@ -131,11 +113,11 @@ Removes events from the queue."
       (close-font! existing-font))
     ;; Open the font and add it to the *fonts* hash-table
     (setf (gethash font-id *fonts*) (open-font! path size))
-    (notify-handlers! (make-instance
-		       'event-font-opened :font-id font-id))))
+    (notify-handlers! (event-font-opened font-id))))
 
-(defcloss event-texture-loaded ()
-  texture-id)
+(defun event-texture-loaded (texture-id)
+  (alist :type :texture-loaded
+	 :texture-id texture-id))
 (defun load-text-texture! (id font-id text)
   "Creates the text texture and stores it in *textures*, destroying any existing texture."
   (let* ((font (gethash font-id *fonts*))
@@ -151,8 +133,7 @@ Removes events from the queue."
        ;; Create the texture and add it to the textures hash-table
        (setf (gethash id *textures*)
 	     (create-text-texture! font text))
-       (notify-handlers! (make-instance
-			  'event-texture-loaded :texture-id id))))))
+       (notify-handlers! (event-texture-loaded id))))))
 
 (defun draw-full-texture! (texture dx dy)
   (when texture
@@ -281,8 +262,9 @@ From the plist (id value id2 value2 ...)"
   (defvar *compiled-event-handlers* (make-hash-table)
     "A hash-table of compile-time created event-handlers."))
 
-(defcloss event-button-clicked ()
-  button-id)
+(defun event-button-clicked (button-id)
+  (alist :type :button-clicked
+	 :button-id button-id))
 
 (defun notify-handlers! (event)
   "Call the compiled & runtime event handlers with the given event."
@@ -383,7 +365,8 @@ updates based on timestep, and renders to the screen."
 	   (delay! (frame-milliseconds-remaining last-update-milliseconds
 						 (elapsed-milliseconds)))))))
 
-(defcloss event-initialization-finished ())
+(defun event-initialization-finished ()
+  (alist :type :initialization-finished))
 
 (defun main! ()
   "Entry point into the application. Recompiles the SDL-Wrapper, creates the window, 
@@ -398,7 +381,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (setq *drawings* ())
 	 (setq *events* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
-	 (event! (make-instance 'event-initialization-finished))
+	 (event! (event-initialization-finished))
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
@@ -409,16 +392,16 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 
 (defun event-font-opened? (event font-id)
   "True if the event is an event-font-opened for the font-id"
-  (and (event-font-opened-p event)
-       (eql font-id (event-font-opened-font-id event))))
+  (and (eql (aval :type event) :font-opened)
+       (eql font-id (aval :font-id event))))
 (defun event-button-clicked? (event button-id)
   "True if event is button-id's button being clicked."
-  (and (event-button-clicked-p event)
-       (eql button-id (event-button-clicked-button-id event))))
+  (and (eql (aval :type event) :button-clicked)
+       (eql button-id (aval :button-id event))))
 (defun event-texture-loaded? (event texture-id)
   "True if event is texture-id's texture being created."
-  (and (event-texture-loaded-p event)
-       (eql texture-id (event-texture-loaded-texture-id event))))
+  (and (eql (aval :type event) :texture-loaded)
+       (eql texture-id (aval :texture-id event))))
 
 (defun draw-full-texture-id! (texture-id pos)
   (draw-full-texture! (gethash texture-id *textures*) (x pos) (y pos)))
@@ -535,7 +518,7 @@ Test-fn and handle-fn are both functions of event."
   "Process the effects on the button associated button-id of the left mouse button being released"
   (let* ((button (get-button button-id)))
     (when (and (aval :pressed? button) (aval :hovered? button))
-      (notify-handlers! (make-instance 'event-button-clicked :button-id button-id)))
+      (notify-handlers! (event-button-clicked button-id)))
     ;; set pressed? to nil
     (set-button! button-id (aset :pressed? nil button))))
 
@@ -566,7 +549,7 @@ Test-fn and handle-fn are both functions of event."
       (remhash id *textures*))))
 
 (defhandler handle-intialization-finished! (event)
-  (when (event-initialization-finished-p event)
+  (when (eql (aval :type event) :initialization-finished)
     (load-font! :font "DroidSansMono.ttf" 16)))
 
 (defun texture-right-aligned (x texture-id)
@@ -1826,5 +1809,4 @@ To Push: decrement SP, then copy byte to SP."
 ;; focus: the memory address that was last modified
 ;; add cycles
 ;; button to refresh drawings
-;; get rid of defcloss
 ;; event-handlers should take in an event-matcher and a body
