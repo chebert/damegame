@@ -1433,7 +1433,7 @@ Test-fn and handle-fn are both functions of event."
       (#b100 :h)
       (#b101 :l))))
 
-(defmacro definstr-class% (deflong-instr-or-definstr (opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
+(defun compile-definstr-class (deflong-instr-or-definstr opcode-template opcode-parameter-bindings cpu memory instr-spec)
   (let* ((opcode-parameter-lists (mapcar (fn (eval (second %))) opcode-parameter-bindings)))
     `(progn
        ,@(apply
@@ -1447,10 +1447,12 @@ Test-fn and handle-fn are both functions of event."
 	  opcode-parameter-lists))))
 
 (defmacro definstr-class ((opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
-  `(definstr-class% definstr (,opcode-template ,@opcode-parameter-bindings) (,cpu ,memory) ,@instr-spec))
+  (compile-definstr-class 'definstr opcode-template opcode-parameter-bindings cpu memory
+			  instr-spec))
 
 (defmacro deflong-instr-class ((opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
-  `(definstr-class% deflong-instr (,opcode-template ,@opcode-parameter-bindings) (,cpu ,memory) ,@instr-spec))
+  (compile-definstr-class 'deflong-instr opcode-template opcode-parameter-bindings cpu memory
+			  instr-spec))
 
 
 
@@ -1583,6 +1585,74 @@ operand a8."
 	  :pc (+ pc 2)
 	  :cycles 3)
 
+(defun imm16 (addr memory)
+  (combined-register (aref memory (1+ addr)) (aref memory addr)))
+
+;; Load into A the contents of the memory specified by the 16-bit immediate
+(definstr #b11111010 (cpu memory) ((pc (cpu-pc cpu))
+				   (addr (imm16 (1+ pc) memory)))
+	  :name :ld-a-@imm16
+	  :description "Load into register A the contents of
+the memory specified by the 16-bit immediate."
+	  :disassembly (alist :addr addr)
+	  :a (aref memory addr)
+	  :pc (+ 3 pc)
+	  :cycles 4)
+
+;; Load A into the memory specified by the 16-bit immediate
+(definstr #b11111010 (cpu memory) ((pc (cpu-pc cpu))
+				   (addr (imm16 (1+ pc) memory)))
+	  :name :ld-@imm16-a
+	  :description "Load the contents of register A into
+the memory specified by the 16-bit immediate."
+	  :disassembly (alist :addr addr)
+	  :memory ((addr (cpu-a cpu)))
+	  :pc (+ 3 pc)
+	  :cycles 4)
+
+
+;; LD A, (HLI)
+(definstr #b00101010 (cpu memory) ((pc (cpu-pc cpu))
+				   (hl (cpu-hl cpu)))
+	  :name :ld-a-@hli
+	  :description "Store into register A the memory at the
+location specified by register pair HL,
+and simultaneously increment the contents of HL."
+	  :hl (1+ hl)
+	  :a (aref memory hl)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+
+;; LD A, (HLD)
+(definstr #b00111010 (cpu memory) ((pc (cpu-pc cpu))
+				   (hl (cpu-hl cpu)))
+	  :name :ld-a-@hld
+	  :description "Store into register A into the contents of
+memory location specified by register pair HL,
+and simultaneously decrement the contents of HL."
+	  :hl (1- hl)
+	  :a (aref memory hl)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+;; LD (BC), A
+(definstr #b00000010 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-@bc-a
+	  :description "Store contents of register A into
+memory location specified by register BC."
+	  :memory (((cpu-bc cpu) (cpu-a cpu)))
+	  :pc (+ pc 1)
+	  :cycles 2)
+;; LD (DE), A
+(definstr #b00010010 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-@de-a
+	  :description "Store contents of register A into
+memory location specified by register DE."
+	  :memory (((cpu-de cpu) (cpu-a cpu)))
+	  :pc (+ pc 1)
+	  :cycles 2)
+
 ;; LD (HLI), A
 (definstr #x22 (cpu memory) ((pc (cpu-pc cpu))
 			     (hl (cpu-hl cpu)))
@@ -1607,8 +1677,9 @@ and simultaneously decrement the contents of HL."
 	  :pc (+ pc 1)
 	  :cycles 2)
 
-;; Load 16-bit immediate into 16-bit register
+
 ;; S2.2
+;; Load 16-bit immediate into 16-bit register
 (definstr-class (#b00000001 (register-pair *register-pair-codes* 4)) (cpu memory)
   (let* ((register-key (dd-register-pair-key register-pair)))
     `(((pc (cpu-pc cpu))
@@ -1622,6 +1693,14 @@ and the second byte of immediate data is the higher byte." register-key)
       ,register-key d16
       :pc (+ 3 pc)
       :cycles 3)))
+
+;; LD SP, HL
+(definstr #b11111001 (cpu memory) ((pc (cpu-pc cpu)))
+	  :name :ld-sp-hl
+	  :description "Copy register HL into SP."
+	  :sp (cpu-hl cpu)
+	  :pc (1+ pc)
+	  :cycles 2)
 
 ;; Push 16-bit register onto stack
 (definstr-class (#b11000101 (register-pair *register-pair-codes* 4)) (cpu memory)
@@ -1656,7 +1735,277 @@ and into register pair ~A." combined-key)
 	:pc (1+ pc)
 	:cycles 3))))
 
+(defun bit-carry? (from-bit-index a b)
+  (let* ((bit-index (1+ from-bit-index))
+	 (mask (1- (expt 2 bit-index))))
+    (not (zerop (logand (+ (logand mask a)
+			   (logand mask b))
+			(expt 2 bit-index))))))
+
+
+(definstr #b11111000 (cpu memory) ((pc (cpu-pc cpu))
+				   (e (s8 (aref memory (1+ pc))))
+				   (sp (cpu-sp cpu)))
+	  :name :ldhl-sp-e
+	  :description "Add signed imm8 value to sp and store the
+result in HL."
+	  :disassembly (alist :imm8 (register8-text e))
+	  :hl (+ e sp)
+	  :zero? nil
+	  :subtraction? nil
+	  :half-carry? (bit-carry? 11 sp e)
+	  :carry? (bit-carry? 15 sp e)
+	  :pc (+ 2 pc)
+	  :cycles 3)
+
+(definstr #b00001000 (cpu memory) ((pc (cpu-pc cpu))
+				   (imm16 (imm16 (1+ pc) memory))
+				   (sp (cpu-sp cpu))
+				   (spl (lo-byte sp))
+				   (sph (hi-byte sp)))
+	  :name :ld-@imm16-sp
+	  :description "Store the stack pointer at the memory location
+specified by the imm16 value."
+	  :disassembly (alist :imm16 imm16)
+	  :memory ((imm16 spl)
+		   ((1+ imm16) sph))
+	  :pc (+ 3 pc)
+	  :cycles 5)
+
 ;; S2.3
+;; ADD
+(definstr-class (#b10000000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (result (logand #xff (+ (cpu-a cpu) data))))
+      :name ,(list :add register-key)
+      :description ,(format nil "Adds the contents of register ~A to
+register A and stores the result in register A" register-key)
+      :a result
+      :carry? (bit-carry? 7 a data)
+      :half-carry? (bit-carry? 3 a data)
+      :subtraction? nil
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+(definstr #b11000110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (result (logand #xff (+ (cpu-a cpu) imm8))))
+	  :name :add-a-imm8
+	  :description "Adds the contents of register A to
+the 8-bit immediate value and
+stores the result in register A"
+	  :a result
+	  :carry? (bit-carry? 7 a imm8)
+	  :half-carry? (bit-carry? 3 a imm8)
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10000110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logand #xff (+ (cpu-a cpu) data))))
+
+	  :name :add-a-@hl
+	  :description "Adds the contents of register A to
+the contents of the memory specified by HL and
+stores the result in register A"
+	  :a result
+	  :carry? (bit-carry? 7 a data)
+	  :half-carry? (bit-carry? 3 a data)
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+(defun bit-carry-cy? (bit-index a b cy)
+  ;; TODO: Check up on how to check for bit-carry?
+  (or (bit-carry? bit-index a b)
+      (bit-carry? bit-index (+ a b) cy)))
+
+;; ADC
+(definstr-class (#b10001000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (cy (cpu-carry-bit cpu))
+       (result (logand #xff (+ a data cy))))
+      :name ,(list :adc register-key)
+      :description ,(format nil "Add register ~A, register A, and the
+carry bit and store the result in A." register-key)
+      :a result
+      :carry? (bit-carry-cy? 7 a data cy)
+      :half-carry? (bit-carry-cy? 3 a data cy)
+      :subtraction? nil
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+(definstr #b11001110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (cy (cpu-carry-bit cpu))
+	   (result (logand #xff (+ (cpu-a cpu) imm8 cy))))
+	  :name :adc-a-imm8
+	  :description "Adds the contents of register A to
+the 8-bit immediate value and the carry-bit
+stores the result in register A"
+	  :a result
+	  :carry? (bit-carry-cy? 7 a imm8 cy)
+	  :half-carry? (bit-carry-cy? 3 a imm8 cy)
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10001110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (cy (cpu-carry-bit cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logand #xff (+ (cpu-a cpu) data cy))))
+
+	  :name :adc-a-@hl
+	  :description "Adds the contents of register A to
+the contents of the memory specified by HL and
+the carry bit stores the result in register A"
+	  :a result
+	  :carry? (bit-carry-cy? 7 a data cy)
+	  :half-carry? (bit-carry-cy? 3 a data cy)
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+
+
+;; SUB
+(defun bit-borrow? (bit-index a b)
+  (let* ((mask (1- (expt 2 bit-index))))
+    (< (logand a mask)
+       (logand b mask))))
+
+(definstr-class (#b10010000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (result (logand #xff (- (cpu-a cpu) data))))
+      :name ,(list :sub register-key)
+      :description ,(format nil "Subtracts the contents of register ~A from
+register A and stores the result in register A" register-key)
+      :a result
+      :carry? (bit-borrow? 8 a data)
+      :half-carry? (bit-borrow? 4 a data)
+      :subtraction? t
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+(definstr #b11010110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (result (logand #xff (- a imm8))))
+	  :name :sub-a-imm8
+	  :description "Subtracts the the 8-bit immediate value
+from register A and stores the result in register A"
+	  :a result
+	  :carry? (bit-borrow? 8 a imm8)
+	  :half-carry? (bit-borrow? 4 a imm8)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10010110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logand #xff (- (cpu-a cpu) data))))
+
+	  :name :sub-a-@hl
+	  :description "Subtract from register A
+the contents of the memory specified by HL and
+stores the result in register A"
+	  :a result
+	  :carry? (bit-borrow? 8 a data)
+	  :half-carry? (bit-borrow? 4 a data)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+(defun bit-borrow-cy? (bit-index a b cy)
+  ;; TODO: Check up on how to check for bit-borrow?
+  (or (bit-borrow? bit-index a b)
+      (bit-borrow? bit-index (- a b) cy)))
+
+(definstr-class (#b10011000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (cy (cpu-carry-bit cpu))
+       (result (logand #xff (- a data cy))))
+      :name ,(list :sbc register-key)
+      :description ,(format nil "Subtract from register A: register ~A and the
+carry bit and store the result in A." register-key)
+      :a result
+      :carry? (bit-borrow-cy? 8 a data cy)
+      :half-carry? (bit-borrow-cy? 4 a data cy)
+      :subtraction? t
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+(definstr #b11011110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (cy (cpu-carry-bit cpu))
+	   (result (logand #xff (- a imm8 cy))))
+	  :name :sbc-a-imm8
+	  :description "Subtracts from register A:
+the 8-bit immediate value and the carry-bit and
+stores the result in register A"
+	  :a result
+	  :carry? (bit-borrow-cy? 8 a imm8 cy)
+	  :half-carry? (bit-borrow-cy? 4 a imm8 cy)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10011110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (cy (cpu-carry-bit cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logand #xff (- (cpu-a cpu) data cy))))
+
+	  :name :sbc-a-@hl
+	  :description "Subtracts from register A:
+the contents of the memory specified by HL and
+the carry bit; stores the result in register A"
+	  :a result
+	  :carry? (bit-borrow-cy? 8 a data cy)
+	  :half-carry? (bit-borrow-cy? 4 a data cy)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
 ;; Logical XOR 8-bit register with A into register A
 (definstr-class (#b10101000 (register *register-codes* 0)) (cpu memory)
   (let ((register-key (register-key register)))
@@ -1666,7 +2015,7 @@ and into register pair ~A." combined-key)
       :description ,(format nil "Take the logical exclusive-OR for each bit of the
 contents of register A and the contents of register ~A,
 and store the results in register A." register-key)
-      ,register-key result
+      :a result
       :carry? nil
       :half-carry? nil
       :subtraction? nil
