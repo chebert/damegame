@@ -1044,7 +1044,7 @@ Test-fn and handle-fn are both functions of event."
 	       (instr (aval byte2 *long-instrs*)))
 	  (if instr
 	      (list* (aval :name instr) (funcall (aval :disassemble-instr instr) cpu memory))
-	      (list :unknown (register16-text (combined-register byte2 byte)))))
+	      (list :unknown (register16-text (combined-register byte byte2)))))
 	(let* ((instr (aval byte *instrs*)))
 	  (if instr
 	      (list* (aval :name instr) (funcall (aval :disassemble-instr instr) cpu memory))
@@ -2459,9 +2459,9 @@ To Push: decrement SP, then copy byte to SP."
 (defun break? (cpu memory)
   (some (fn (funcall % cpu memory)) (mapcar 'cdr *breakpoints*)))
 
-(defbreakpoint bookmark (cpu memory)
-  (let* ((pc (cpu-pc cpu)))
-    (not (<= #x98 pc #xa1))))
+(undefbreakpoint bookmark (cpu memory)
+		 (let* ((pc (cpu-pc cpu)))
+		   (not (<= #x98 pc #xa1))))
 
 ;; recompile execute! definition
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -2469,3 +2469,31 @@ To Push: decrement SP, then copy byte to SP."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
+
+
+;; Noticed duplication
+;;  s-instructions; e.g.
+;;     CP r
+;;     CP n
+;;     CP (HL)
+
+;; ADD/SUB
+;;   differences:
+;;     bit-carry 7/bit-borrow 8
+;;     bit-carry 3/bit-borrow 4
+;;     descriptions
+;;     names
+;;     +/-
+
+;; CP/SUB
+;;   differences:
+;;     result ignored/A <- result
+;;     description
+;;     name
+
+;; IDEA:
+(defun 8bit-sub-flags (a b)
+  (alist :carry? (bit-borrow? 8 a b)
+	 :half-carry? (bit-borrow? 4 a b)
+	 :subtraction? t
+	 :zero? (zerop (- a b))))
