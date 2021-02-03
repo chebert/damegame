@@ -262,27 +262,38 @@ From the plist (id value id2 value2 ...)"
   (defvar *compiled-event-handlers* (make-hash-table)
     "A hash-table of compile-time created event-handlers."))
 
+(defun event-handler (event-matcher event-response)
+  (cons event-matcher event-response))
+
 (defun event-button-clicked (button-id)
   (alist :type :button-clicked
 	 :button-id button-id))
 
+(defun event-matches? (event-matcher event)
+  (funcall event-matcher event))
+
 (defun notify-handlers! (event)
   "Call the compiled & runtime event handlers with the given event."
-  (maphash (fn (funcall %% event %)) *compiled-event-handlers*)
-  (maphash (fn (funcall %% event %)) *event-handlers*))
-(defun register-handler! (id fn)
+  (let* ((notify (lambda (id event-handler)
+		   (when (event-matches? (car event-handler) event)
+		     (funcall (cdr event-handler) event id)))))
+    (maphash notify *compiled-event-handlers*)
+    (maphash notify *event-handlers*)))
+(defun register-handler! (id event-handler)
   "Add/replace the handler in *event-handlers*"
-  (setf (gethash id *event-handlers*) fn))
+  (setf (gethash id *event-handlers*) event-handler))
 (defun remove-handler! (id)
   "Remove the handler from *event-handlers*"
   (remhash id *event-handlers*))
-(defmacro defhandler (name (event) &body body)
+(defmacro defhandler (name (event) event-matcher-form &body body)
   "Add/replace the handler NAME in *compiled-event-handlers*"
   (let ((handler-id (gensym)))
     `(setf (gethash ',name *compiled-event-handlers*)
-	   (lambda (,event ,handler-id)
-	     (declare (ignorable ,event ,handler-id))
-	     ,@body))))
+	   (event-handler
+	    ,event-matcher-form
+	    (lambda (,event ,handler-id)
+	      (declare (ignorable ,event ,handler-id))
+	      ,@body)))))
 (defmacro undefhandler (name &rest rest)
   "Remove the handler NAME from *compiled-event-handlers*"
   (declare (ignore rest))
@@ -391,6 +402,15 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (clrhash *event-handlers*)
     (quit!)))
 
+(defun event-matcher-font-opened (font-id)
+  (fn (event-font-opened? % font-id)))
+(defun event-matcher-initialization-finished ()
+  'event-initialization-finished?)
+(defun event-matcher-button-clicked (button-id)
+  (fn
+    (and (eql (aval :type %) :button-clicked)
+	 (eql button-id (aval :button-id %)))))
+
 (defun event-initialization-finished? (event)
   (eql (aval :type event) :initialization-finished))
 (defun event-font-opened? (event font-id)
@@ -483,8 +503,8 @@ Test-fn and handle-fn are both functions of event."
     (t (grey 60))))
 
 (defhandler handle-intialize-buttons (event)
-  (when (event-font-opened? event :font)
-    (amap (fn (initialize-button! %)) *buttons*)))
+	    (event-matcher-font-opened :font)
+  (amap (fn (initialize-button! %)) *buttons*))
 
 ;;; Lifetime of a button
 ;; Draw: rect, texture-id, pos, (hovered?, pressed?)
@@ -530,8 +550,8 @@ Test-fn and handle-fn are both functions of event."
 	(button-name (gensym)))
     `(let* ((,button-name ,button))
        (defhandler ,(symbolicate 'handle- name '-clicked!) (,event)
-	 (when (event-button-clicked? ,event ',name)
-	   ,@on-click))
+		   (event-matcher-button-clicked ',name)
+	 ,@on-click)
        (command!
 	 (set-button! ',name ,button-name)
 	 (when (gethash (aval :font-id ,button-name) *fonts*)
@@ -679,8 +699,8 @@ Test-fn and handle-fn are both functions of event."
 						  'register8-text))
 
 (defhandler handle-initialize-memory-visualization (event)
-  (when (event-font-opened? event :font)
-    (amap 'initialize-memory-visualization! *memory-visualizations*)))
+	    (event-matcher-font-opened :font)
+  (amap 'initialize-memory-visualization! *memory-visualizations*))
 
 
 (defvar *cpu-visualizations* ())
@@ -818,29 +838,29 @@ Test-fn and handle-fn are both functions of event."
 		       (fn (or (third *cpus*) (cpu-initial)))))
 
 (defhandler load-cpu-visualization (event)
-  (when (event-font-opened? event :font)
-    (load-text-texture! :no :font "[No]")
-    (load-text-texture! :yes :font "[Yes]")
-    (load-text-texture! :zero :font "Zero? ")
-    (load-text-texture! :subtraction :font "Subtraction? ")
-    (load-text-texture! :half-carry :font "Half-carry? ")
-    (load-text-texture! :carry :font "Carry? ")
-    (load-text-texture! :a-register :font "A ")
-    (load-text-texture! :f-register :font "F ")
-    (load-text-texture! :af-register :font "AF ")
-    (load-text-texture! :b-register :font "B ")
-    (load-text-texture! :c-register :font "C ")
-    (load-text-texture! :bc-register :font "BC ")
-    (load-text-texture! :d-register :font "D ")
-    (load-text-texture! :e-register :font "E ")
-    (load-text-texture! :de-register :font "DE ")
-    (load-text-texture! :h-register :font "H ")
-    (load-text-texture! :l-register :font "L ")
-    (load-text-texture! :hl-register :font "HL ")
-    (load-text-texture! :stack-pointer :font "Stack Pointer: ")
-    (load-text-texture! :program-counter :font "Program Counter: ")
+	    (event-matcher-font-opened :font)
+  (load-text-texture! :no :font "[No]")
+  (load-text-texture! :yes :font "[Yes]")
+  (load-text-texture! :zero :font "Zero? ")
+  (load-text-texture! :subtraction :font "Subtraction? ")
+  (load-text-texture! :half-carry :font "Half-carry? ")
+  (load-text-texture! :carry :font "Carry? ")
+  (load-text-texture! :a-register :font "A ")
+  (load-text-texture! :f-register :font "F ")
+  (load-text-texture! :af-register :font "AF ")
+  (load-text-texture! :b-register :font "B ")
+  (load-text-texture! :c-register :font "C ")
+  (load-text-texture! :bc-register :font "BC ")
+  (load-text-texture! :d-register :font "D ")
+  (load-text-texture! :e-register :font "E ")
+  (load-text-texture! :de-register :font "DE ")
+  (load-text-texture! :h-register :font "H ")
+  (load-text-texture! :l-register :font "L ")
+  (load-text-texture! :hl-register :font "HL ")
+  (load-text-texture! :stack-pointer :font "Stack Pointer: ")
+  (load-text-texture! :program-counter :font "Program Counter: ")
 
-    (amap 'initialize-cpu-visualization! *cpu-visualizations*)))
+  (amap 'initialize-cpu-visualization! *cpu-visualizations*))
 
 (defun flag-state-texture-id (set?)
   (if set? :yes :no))
@@ -1069,14 +1089,14 @@ Test-fn and handle-fn are both functions of event."
 					     (g1 (1+ (length lines))))))))))
 
 (defhandler handle-initialize-cpu-visualization (event)
-  (when (event-font-opened? event :font)
-    (load-text-texture! :disassembly :font "(Disassembly)")
-    (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
+	    (event-matcher-font-opened :font)
+  (load-text-texture! :disassembly :font "(Disassembly)")
+  (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
 
-    (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
-    
-    (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
-    (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29)))))
+  (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
+  
+  (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
+  (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29))))
 
 #+nil
 (command! (reset!))
@@ -1185,9 +1205,9 @@ Test-fn and handle-fn are both functions of event."
 	  (truncate *mouse-y* *grid-size*)))
 
 (defhandler initialize-mouse-cursor-pos-text (event)
-  (when (event-font-opened? event :font)
-    (load-text-texture! :mouse-pos :font (mouse-pos-text))
-    (add-mouse-pos-drawing!)))
+	    (event-matcher-font-opened :font)
+  (load-text-texture! :mouse-pos :font (mouse-pos-text))
+  (add-mouse-pos-drawing!))
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -2221,4 +2241,3 @@ To Push: decrement SP, then copy byte to SP."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
-;; event-handlers could take in an event-matcher and a body
