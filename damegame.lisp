@@ -2026,13 +2026,122 @@ the carry bit; stores the result in register A"
 	  :pc (+ pc 1)
 	  :cycles 2)
 
+;; AND
+
+(definstr-class (#b10100000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (result (logand a data)))
+      :name ,(list :and register-key)
+      :description ,(format nil "Logical AND of register A with register ~A and
+store the result in A." register-key)
+      :a result
+      :carry? nil
+      :half-carry? t
+      :subtraction? nil
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+
+(definstr #b11100110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (result (logand a imm8)))
+	  :name :and-a-imm8
+	  :description "Logical AND of register A with 8-bit immediate
+and store the result in A."
+	  :a result
+	  :carry? nil
+	  :half-carry? t
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10100110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logand a data)))
+
+	  :name :and-a-@hl
+	  :description "Logical AND of register A and
+the contents of the memory specified by HL;
+stores the result in register A"
+	  :a result
+	  :carry? nil
+	  :half-carry? t
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+;; OR
+
+(definstr-class (#b10110000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (result (logior a data)))
+      :name ,(list :or register-key)
+      :description ,(format nil "Logical OR of register A with register ~A and
+store the result in A." register-key)
+      :a result
+      :carry? nil
+      :half-carry? nil
+      :subtraction? nil
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+
+(definstr #b11110110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (result (logior a imm8)))
+	  :name :or-a-imm8
+	  :description "Logical OR of register A with 8-bit immediate
+and store the result in A."
+	  :a result
+	  :carry? nil
+	  :half-carry? nil
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10110110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logior a data)))
+
+	  :name :or-a-@hl
+	  :description "Logical OR of register A and
+the contents of the memory specified by HL;
+stores the result in register A"
+	  :a result
+	  :carry? nil
+	  :half-carry? nil
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+
 ;; Logical XOR 8-bit register with A into register A
 (definstr-class (#b10101000 (register *register-codes* 0)) (cpu memory)
   (let ((register-key (register-key register)))
     `(((pc (cpu-pc cpu))
        (result (logxor (cpu-a cpu) (,(cpu-register-accessor-name register-key) cpu))))
       :name ,(list :xor register-key)
-      :description ,(format nil "Take the logical exclusive-OR for each bit of the
+      :description ,(format nil "Take the logical OR for each bit of the
 contents of register A and the contents of register ~A,
 and store the results in register A." register-key)
       :a result
@@ -2042,6 +2151,42 @@ and store the results in register A." register-key)
       :zero? (zerop result)
       :pc (+ pc 1)
       :cycles 1)))
+
+
+(definstr #b11110110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (result (logxor a imm8)))
+	  :name :xor-a-imm8
+	  :description "Logical XOR of register A with 8-bit immediate
+and store the result in A."
+	  :a result
+	  :carry? nil
+	  :half-carry? nil
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10110110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logior a data)))
+
+	  :name :xor-a-@hl
+	  :description "Logical XOR of register A and
+the contents of the memory specified by HL;
+stores the result in register A"
+	  :a result
+	  :carry? nil
+	  :half-carry? nil
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
 
 ;; S2.4
 ;; Increment 8-bit register
