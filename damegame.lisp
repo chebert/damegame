@@ -2187,8 +2187,57 @@ stores the result in register A"
 	  :pc (+ pc 1)
 	  :cycles 2)
 
+;; CP (compare with A)
 
-;; S2.4
+(definstr-class (#b10111000 (register *register-codes* 0)) (cpu memory)
+  (let ((register-key (register-key register)))
+    `(((pc (cpu-pc cpu))
+       (a (cpu-a cpu))
+       (data (,(cpu-register-accessor-name register-key) cpu))
+       (result (logand #xff (- (cpu-a cpu) data))))
+      :name ,(list :cp register-key)
+      :description ,(format nil "Compares register ~A with
+register A and sets the flags." register-key)
+      :carry? (bit-borrow? 8 a data)
+      :half-carry? (bit-borrow? 4 a data)
+      :subtraction? t
+      :zero? (zerop result)
+      :pc (+ pc 1)
+      :cycles 1)))
+
+(definstr #b11111110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (imm8 (aref memory (1+ pc)))
+	   (result (logand #xff (- a imm8))))
+	  :name :cp-a-imm8
+	  :description "Compares the the 8-bit immediate value
+with register A and sets the flags."
+	  :carry? (bit-borrow? 8 a imm8)
+	  :half-carry? (bit-borrow? 4 a imm8)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 2)
+	  :cycles 2)
+
+(definstr #b10111110 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (a (cpu-a cpu))
+	   (data (aref memory (cpu-hl cpu)))
+	   (result (logand #xff (- (cpu-a cpu) data))))
+
+	  :name :cp-a-@hl
+	  :description "Compare register A with
+the contents of the memory specified by HL and
+sets the flags"
+	  :carry? (bit-borrow? 8 a data)
+	  :half-carry? (bit-borrow? 4 a data)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 2)
+
+;; INC
 ;; Increment 8-bit register
 (definstr-class (#b00000100 (register *register-codes* 3)) (cpu memory)
   (let ((register-key (register-key register)))
@@ -2203,12 +2252,28 @@ stores the result in register A"
       :pc (1+ (cpu-pc cpu))
       :cycles 1)))
 
+(definstr #b00110100 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (hl (cpu-hl cpu))
+	   (data (aref memory hl))
+	   (result (logand #xff (1+ data))))
+	  :name :inc-@hl
+	  :description "Increment the contents of the memory specified by HL."
+	  :memory ((hl result))
+	  :subtraction? nil
+	  :zero? (zerop result)
+	  :half-carry? (bit-carry? 3 data 1)
+	  :carry? (bit-carry? 7 data 1)
+	  :pc (1+ pc)
+	  :cycles 3)
+
 (defun half-borrow? (a b)
   ;; TODO: check if this is right.
   (let* ((half-a (logand #xf a))
 	 (half-b (logand #xf b)))
     (< half-a half-b)))
 
+;; DEC
 ;; decrement 8-bit register
 (definstr-class (#b00000101 (register *register-codes* 3)) (cpu memory)
   (let ((register-key (register-key register)))
@@ -2223,6 +2288,24 @@ stores the result in register A"
       :pc (1+ (cpu-pc cpu))
       :cycles 1)))
 
+(definstr #b00110101 (cpu memory)
+	  ((pc (cpu-pc cpu))
+	   (hl (cpu-hl cpu))
+	   (data (aref memory hl))
+	   (result (logand #xff (- data 1))))
+
+	  :name :dec-@hl
+	  :description "Decrement the contents of the memory 
+specified by HL."
+	  :memory ((hl result))
+	  :carry? (bit-borrow? 8 data 1)
+	  :half-carry? (bit-borrow? 4 data 1)
+	  :subtraction? t
+	  :zero? (zerop result)
+	  :pc (+ pc 1)
+	  :cycles 3)
+
+;; S2.4
 (definstr-class (#b00000011 (register-pair *register-pair-codes* 4)) (cpu memory)
   (let* ((combined-key (dd-register-pair-key register-pair)))
     `(((pc (cpu-pc cpu))
