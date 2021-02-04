@@ -187,10 +187,17 @@ From the plist (id value id2 value2 ...)"
   (defun akeys (alist)
     "Return a list of all keys in alist."
     (mapcar 'car alist))
-  (defun amerge (old new)
-    "Return a new alist with the keys of old and new, where conflicts favor the new alist."
-    (nconc (apply 'aremove old (akeys new))
-	   new))
+  (defun amerge (old &rest new-alists)
+    "Return a new alist with the keys of old and new, where conflicts favor the newer alist."
+    (if new-alists
+	(let* ((new (first new-alists)))
+	  (apply 'amerge
+		 
+		 ;; => ((:C . 3) (:B . 2) (:D . 5) (:A . 2) ((:E . 6) (:C . 4)))
+		 (nconc (apply 'aremove old (akeys new))
+			new)
+		 (rest new-alists)))
+	old))
   (defun amap (fn alist)
     "Apply fn to each key and value of alist returning a list of the results."
     (mapcar (fn (funcall fn (car %) (cdr %)))
@@ -1129,6 +1136,9 @@ Test-fn and handle-fn are both functions of event."
   '(:a :b :c :d :e :f :h :l :af :bc :de :hl))
 (defparameter *flag-keys*
   '(:zero? :subtraction? :half-carry? :carry?))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defparameter *register8-keys* '(:a :b :c :d :e :f :h :l)))
+(defparameter *register16-keys* '(:af :bc :de :hl))
 
 (defun instr-affected-keys (instr-effects)
   (let* ((keys (akeys instr-effects)))
@@ -1453,18 +1463,19 @@ Test-fn and handle-fn are both functions of event."
       (#b100 :h)
       (#b101 :l))))
 
-(defun compile-definstr-class (deflong-instr-or-definstr opcode-template opcode-parameter-bindings cpu memory instr-spec)
-  (let* ((opcode-parameter-lists (mapcar (fn (eval (second %))) opcode-parameter-bindings)))
-    `(progn
-       ,@(apply
-	  'map-cartesian
-	  (lambda (opcode-arguments)
-	    `(,deflong-instr-or-definstr
-		 ,(opcode-from-template opcode-template opcode-parameter-bindings opcode-arguments) (,cpu ,memory)
-	       ;; TODO: can we get rid of this eval?
-	       ,@(eval `(let* ,(opcode-bindings opcode-parameter-bindings opcode-arguments)
-			  ,@instr-spec))))
-	  opcode-parameter-lists))))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun compile-definstr-class (deflong-instr-or-definstr opcode-template opcode-parameter-bindings cpu memory instr-spec)
+    (let* ((opcode-parameter-lists (mapcar (fn (eval (second %))) opcode-parameter-bindings)))
+      `(progn
+	 ,@(apply
+	    'map-cartesian
+	    (lambda (opcode-arguments)
+	      `(,deflong-instr-or-definstr
+		   ,(opcode-from-template opcode-template opcode-parameter-bindings opcode-arguments) (,cpu ,memory)
+		 ;; TODO: can we get rid of this eval?
+		 ,@(eval `(let* ,(opcode-bindings opcode-parameter-bindings opcode-arguments)
+			    ,@instr-spec))))
+	    opcode-parameter-lists)))))
 
 (defmacro definstr-class ((opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
   (compile-definstr-class 'definstr opcode-template opcode-parameter-bindings cpu memory
@@ -1473,6 +1484,79 @@ Test-fn and handle-fn are both functions of event."
 (defmacro deflong-instr-class ((opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
   (compile-definstr-class 'deflong-instr opcode-template opcode-parameter-bindings cpu memory
 			  instr-spec))
+
+
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun compile-instr-spec (instr-spec)
+    (let* ((def-form (if (aval :long? instr-spec)
+			 'deflong-instr
+			 'definstr)))
+      `(,def-form ,(aval :opcode instr-spec)
+	   (,(aval :cpu-name instr-spec) ,(aval :memory-name instr-spec))
+	 ,(aval :bindings instr-spec)
+	 ,@(apply 'nconc (amap (fn (list % %%)) (aremove instr-spec :bindings :opcode :cpu-name :memory-name))))))
+
+
+  (defun opcode-from-template2 (opcode-template opcode-argument-indices opcode-arguments)
+    (let* ((opcode-parameters (mapcar (fn (cons % %%))
+				      opcode-argument-indices
+				      opcode-arguments)))
+      (apply 'logior
+	     opcode-template
+	     (amap (fn (ash %% %)) opcode-parameters))))
+
+  (defun map-opcodes (fn opcode-template opcode-list-parameters)
+    (let ((opcode-parameter-lists (mapcar 'cdr opcode-list-parameters))
+	  (opcode-parameter-indices (mapcar 'car opcode-list-parameters)))
+      (apply 'map-cartesian
+	     (lambda (arguments)
+	       (let* ((opcode (opcode-from-template2 opcode-template opcode-parameter-indices arguments)))
+		 (apply fn opcode arguments)))
+	     opcode-parameter-lists)))
+
+  (defun merge-instr-specs (old &rest new-instr-specs)
+    (if new-instr-specs
+	(let* ((new (first new-instr-specs)))
+	  (let* ((old-bindings (aval :bindings old))
+		 (new-bindings (aval :bindings new))
+		 (bindings (append old-bindings new-bindings)))
+	    (apply 'merge-instr-specs
+		   (aset :bindings bindings (amerge old new))
+		   (rest new-instr-specs))))
+	old))
+
+  (defun compile-instr-spec-class (fn opcode-template opcode-list-parameters)
+    (cons
+     'progn
+     (mapcar 'compile-instr-spec (map-opcodes fn opcode-template opcode-list-parameters))))
+
+  (defun compile-8bit-alu-instrs (opcode-template imm8-opcode hl-opcode instr-spec-fn)
+    (list*
+     'progn
+     (compile-instr-spec
+      (funcall instr-spec-fn (imm8-instr-spec imm8-opcode) 'imm8 nil))
+     (compile-instr-spec
+      (funcall instr-spec-fn (instr-spec hl-opcode) '(aref memory (cpu-hl cpu)) :hl))
+     (mapcar
+      'compile-instr-spec
+      (map-opcodes
+       (lambda (opcode register)
+	 (let* ((register-key (register-key register))
+		(accessor (cpu-register-accessor-name register-key)))
+	   (funcall instr-spec-fn (instr-spec opcode) `(,accessor cpu) register-key)))
+       opcode-template (alist 0 *register-codes*))))))
+
+(defmacro definstr-spec (instr-spec)
+  `(macrolet ((m () (compile-instr-spec ,instr-spec)))
+     (m)))
+(defmacro definstr-spec-class (opcode-template opcode-list-parameters instr-spec-fn)
+  `(macrolet ((m () (compile-instr-spec-class ,instr-spec-fn ,opcode-template ,opcode-list-parameters)))
+     (m)))
+
+(defmacro def8bit-alu-instrs (opcode-template imm8-opcode hl-opcode instr-spec-fn)
+  `(macrolet ((m () (compile-8bit-alu-instrs ,opcode-template ,imm8-opcode ,hl-opcode ,instr-spec-fn)))
+     (m)))
 
 
 
@@ -1915,327 +1999,188 @@ the carry bit stores the result in register A"
     (< (logand a mask)
        (logand b mask))))
 
-(definstr-class (#b10010000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (a (cpu-a cpu))
-       (data (,(cpu-register-accessor-name register-key) cpu))
-       (result (logand #xff (- (cpu-a cpu) data))))
-      :name ,(list :sub register-key)
-      :description ,(format nil "Subtracts the contents of register ~A from
-register A and stores the result in register A" register-key)
-      :a result
-      :carry? (bit-borrow? 8 a data)
-      :half-carry? (bit-borrow? 4 a data)
-      :subtraction? t
-      :zero? (zerop result)
-      :pc (+ pc 1)
-      :cycles 1)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun instr-spec (opcode &key name description (cpu-name 'cpu) (memory-name 'memory) (pc-name 'pc) cycles
+			      instr-size bindings disassembly)
+    (amerge
+     (alist :opcode opcode
+	    :cpu-name cpu-name
+	    :memory-name memory-name
+	    :bindings (append `((,pc-name (cpu-pc ,cpu-name)))
+			      bindings)
+	    :name name
+	    :description description
+	    :disassembly disassembly
+	    :cycles cycles)
+     (when instr-size
+       (alist :pc `(+ ,pc-name ,instr-size)))))
 
-(definstr #b11010110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (imm8 (aref memory (1+ pc)))
-	   (result (logand #xff (- a imm8))))
-	  :name :sub-a-imm8
-	  :description "Subtracts the the 8-bit immediate value
-from register A and stores the result in register A"
-	  :a result
-	  :carry? (bit-borrow? 8 a imm8)
-	  :half-carry? (bit-borrow? 4 a imm8)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 2)
-	  :cycles 2)
 
-(definstr #b10010110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (data (aref memory (cpu-hl cpu)))
-	   (result (logand #xff (- (cpu-a cpu) data))))
 
-	  :name :sub-a-@hl
-	  :description "Subtract from register A
-the contents of the memory specified by HL and
-stores the result in register A"
-	  :a result
-	  :carry? (bit-borrow? 8 a data)
-	  :half-carry? (bit-borrow? 4 a data)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 2)
+  (defun alu-op-name (op-key operand)
+    (cond
+      ((member operand *register8-keys*)
+       (list op-key operand))
+      ((eql operand :hl)
+       (list op-key :@hl))
+      (t
+       (list op-key :imm8))))
+  (defun alu-op-description (op-name operand store-result?)
+    (let* ((operand-name (cond
+			   ((member operand *register8-keys*)
+			    (format nil "Register ~A" operand))
+			   ((eql operand :hl)
+			    (format nil "the contents of the memory specified by HL"))
+			   (t
+			    "the 8-bit immediate value"))))
+      (format nil "Performs ~A with A as the first argument 
+and ~A as the second.
+~a" op-name operand-name (if store-result?
+			     "Stores the result in A"
+			     "Discards the result."))))
+  (defun alu-op-instr-size (operand)
+    (cond
+      ((member operand *register8-keys*) 1)
+      ((eql operand :hl) 1)
+      (t 2)))
+
+  (defun alu-op-cycles (operand)
+    (cond
+      ((member operand *register8-keys*) 1)
+      ((eql operand :hl) 2)
+      (t 2)))
+
+  (defun imm8-instr-spec (opcode &optional (pc-name 'pc) (memory-name 'memory))
+    (instr-spec opcode
+	:bindings `((imm8 (aref ,memory-name (1+ ,pc-name))))
+	:disassembly '(alist :imm8 (register8-text imm8)))))
+
+;; SUB
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun sub-8bit-instr-spec (instr-spec right-form operand)
+    (merge-instr-specs
+     instr-spec
+     (alist :bindings `((left (cpu-a ,(aval :cpu-name instr-spec)))
+			(right ,right-form)
+			(result (logand #xff (- left right))))
+	    :carry? `(bit-borrow? 8 left right)
+	    :half-carry? `(bit-borrow? 4 left right)
+	    :subtraction? t
+	    :zero? `(zerop result)
+	    :a 'result
+	    :name (alu-op-name :sub operand)
+	    :description (alu-op-description "subtraction" operand t)
+	    :pc `(+ pc ,(alu-op-instr-size operand))
+	    :cycles (alu-op-cycles operand)))))
+(def8bit-alu-instrs #b10010000 #b110100110 #b10010110 'sub-8bit-instr-spec)
 
 (defun bit-borrow-cy? (bit-index a b cy)
   ;; TODO: Check up on how to check for bit-borrow?
   (or (bit-borrow? bit-index a b)
       (bit-borrow? bit-index (- a b) cy)))
 
-(definstr-class (#b10011000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (a (cpu-a cpu))
-       (data (,(cpu-register-accessor-name register-key) cpu))
-       (cy (cpu-carry-bit cpu))
-       (result (logand #xff (- a data cy))))
-      :name ,(list :sbc register-key)
-      :description ,(format nil "Subtract from register A: register ~A and the
-carry bit and store the result in A." register-key)
-      :a result
-      :carry? (bit-borrow-cy? 8 a data cy)
-      :half-carry? (bit-borrow-cy? 4 a data cy)
-      :subtraction? t
-      :zero? (zerop result)
-      :pc (+ pc 1)
-      :cycles 1)))
+;; SBC
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun sbc-8bit-instr-spec (instr-spec right-form operand)
+    (merge-instr-specs
+     instr-spec
+     (alist :bindings `((left (cpu-a ,(aval :cpu-name instr-spec)))
+			(right ,right-form)
+			(cy (cpu-carry-bit ,(aval :cpu-name instr-spec)))
+			(result (logand #xff (- left right cy))))
+	    :carry? `(bit-borrow-cy? 8 left right cy)
+	    :half-carry? `(bit-borrow-cy? 4 left right cy)
+	    :subtraction? t
+	    :zero? `(zerop result)
+	    :a 'result
+	    :name (alu-op-name :sbc operand)
+	    :description (alu-op-description "subtraction with carry" operand t)
+	    :pc `(+ pc ,(alu-op-instr-size operand))
+	    :cycles (alu-op-cycles operand)))))
 
-(definstr #b11011110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (imm8 (aref memory (1+ pc)))
-	   (cy (cpu-carry-bit cpu))
-	   (result (logand #xff (- a imm8 cy))))
-	  :name :sbc-a-imm8
-	  :description "Subtracts from register A:
-the 8-bit immediate value and the carry-bit and
-stores the result in register A"
-	  :a result
-	  :carry? (bit-borrow-cy? 8 a imm8 cy)
-	  :half-carry? (bit-borrow-cy? 4 a imm8 cy)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 2)
-	  :cycles 2)
-
-(definstr #b10011110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (cy (cpu-carry-bit cpu))
-	   (data (aref memory (cpu-hl cpu)))
-	   (result (logand #xff (- (cpu-a cpu) data cy))))
-
-	  :name :sbc-a-@hl
-	  :description "Subtracts from register A:
-the contents of the memory specified by HL and
-the carry bit; stores the result in register A"
-	  :a result
-	  :carry? (bit-borrow-cy? 8 a data cy)
-	  :half-carry? (bit-borrow-cy? 4 a data cy)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 2)
+(def8bit-alu-instrs #b10011000 #b11011110 #b10011110 'sbc-8bit-instr-spec)
 
 ;; AND
 
-(definstr-class (#b10100000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (a (cpu-a cpu))
-       (data (,(cpu-register-accessor-name register-key) cpu))
-       (result (logand a data)))
-      :name ,(list :and register-key)
-      :description ,(format nil "Logical AND of register A with register ~A and
-store the result in A." register-key)
-      :a result
-      :carry? nil
-      :half-carry? t
-      :subtraction? nil
-      :zero? (zerop result)
-      :pc (+ pc 1)
-      :cycles 1)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun and-8bit-instr-spec (instr-spec right-form operand)
+    (merge-instr-specs
+     instr-spec
+     (alist :bindings `((left (cpu-a ,(aval :cpu-name instr-spec)))
+			(right ,right-form)
+			(result (logand left right)))
+	    :carry? nil
+	    :half-carry? t
+	    :subtraction? nil
+	    :zero? `(zerop result)
+	    :a 'result
+	    :name (alu-op-name :and operand)
+	    :description (alu-op-description "a logical and" operand t)
+	    :pc `(+ pc ,(alu-op-instr-size operand))
+	    :cycles (alu-op-cycles operand)))))
 
-
-(definstr #b11100110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (imm8 (aref memory (1+ pc)))
-	   (result (logand a imm8)))
-	  :name :and-a-imm8
-	  :description "Logical AND of register A with 8-bit immediate
-and store the result in A."
-	  :a result
-	  :carry? nil
-	  :half-carry? t
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :pc (+ pc 2)
-	  :cycles 2)
-
-(definstr #b10100110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (data (aref memory (cpu-hl cpu)))
-	   (result (logand a data)))
-
-	  :name :and-a-@hl
-	  :description "Logical AND of register A and
-the contents of the memory specified by HL;
-stores the result in register A"
-	  :a result
-	  :carry? nil
-	  :half-carry? t
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 2)
+(def8bit-alu-instrs #b10100000 #b11100110 #b10100110 'and-8bit-instr-spec)
 
 ;; OR
 
-(definstr-class (#b10110000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (a (cpu-a cpu))
-       (data (,(cpu-register-accessor-name register-key) cpu))
-       (result (logior a data)))
-      :name ,(list :or register-key)
-      :description ,(format nil "Logical OR of register A with register ~A and
-store the result in A." register-key)
-      :a result
-      :carry? nil
-      :half-carry? nil
-      :subtraction? nil
-      :zero? (zerop result)
-      :pc (+ pc 1)
-      :cycles 1)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun or-8bit-instr-spec (instr-spec right-form operand)
+    (merge-instr-specs
+     instr-spec
+     (alist :bindings `((left (cpu-a ,(aval :cpu-name instr-spec)))
+			(right ,right-form)
+			(result (logior left right)))
+	    :carry? nil
+	    :half-carry? nil
+	    :subtraction? nil
+	    :zero? `(zerop result)
+	    :a 'result
+	    :name (alu-op-name :or operand)
+	    :description (alu-op-description "a logical or" operand t)
+	    :pc `(+ pc ,(alu-op-instr-size operand))
+	    :cycles (alu-op-cycles operand)))))
 
-
-(definstr #b11110110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (imm8 (aref memory (1+ pc)))
-	   (result (logior a imm8)))
-	  :name :or-a-imm8
-	  :description "Logical OR of register A with 8-bit immediate
-and store the result in A."
-	  :a result
-	  :carry? nil
-	  :half-carry? nil
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :pc (+ pc 2)
-	  :cycles 2)
-
-(definstr #b10110110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (data (aref memory (cpu-hl cpu)))
-	   (result (logior a data)))
-
-	  :name :or-a-@hl
-	  :description "Logical OR of register A and
-the contents of the memory specified by HL;
-stores the result in register A"
-	  :a result
-	  :carry? nil
-	  :half-carry? nil
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 2)
+(def8bit-alu-instrs #b10110000 #b11110110 #b10110110 'or-8bit-instr-spec)
 
 
 ;; Logical XOR 8-bit register with A into register A
-(definstr-class (#b10101000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (result (logxor (cpu-a cpu) (,(cpu-register-accessor-name register-key) cpu))))
-      :name ,(list :xor register-key)
-      :description ,(format nil "Take the logical OR for each bit of the
-contents of register A and the contents of register ~A,
-and store the results in register A." register-key)
-      :a result
-      :carry? nil
-      :half-carry? nil
-      :subtraction? nil
-      :zero? (zerop result)
-      :pc (+ pc 1)
-      :cycles 1)))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun xor-8bit-instr-spec (instr-spec right-form operand)
+    (merge-instr-specs
+     instr-spec
+     (alist :bindings `((left (cpu-a ,(aval :cpu-name instr-spec)))
+			(right ,right-form)
+			(result (logxor left right)))
+	    :carry? nil
+	    :half-carry? nil
+	    :subtraction? nil
+	    :zero? `(zerop result)
+	    :a 'result
+	    :name (alu-op-name :xor operand)
+	    :description (alu-op-description "a logical xor" operand t)
+	    :pc `(+ pc ,(alu-op-instr-size operand))
+	    :cycles (alu-op-cycles operand)))))
 
-
-(definstr #b11110110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (imm8 (aref memory (1+ pc)))
-	   (result (logxor a imm8)))
-	  :name :xor-a-imm8
-	  :description "Logical XOR of register A with 8-bit immediate
-and store the result in A."
-	  :a result
-	  :carry? nil
-	  :half-carry? nil
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :pc (+ pc 2)
-	  :cycles 2)
-
-(definstr #b10110110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (data (aref memory (cpu-hl cpu)))
-	   (result (logior a data)))
-
-	  :name :xor-a-@hl
-	  :description "Logical XOR of register A and
-the contents of the memory specified by HL;
-stores the result in register A"
-	  :a result
-	  :carry? nil
-	  :half-carry? nil
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 2)
+(def8bit-alu-instrs #b10101000 #b11101110 #b10101110 'xor-8bit-instr-spec)
 
 ;; CP (compare with A)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun cp-8bit-instr-spec (instr-spec right-form operand)
+    (merge-instr-specs
+     instr-spec
+     (alist :bindings `((left (cpu-a ,(aval :cpu-name instr-spec)))
+			(right ,right-form)
+			(result (logand #xff (- left right))))
+	    :carry? `(bit-borrow? 8 left right)
+	    :half-carry? `(bit-borrow? 4 left right)
+	    :subtraction? t
+	    :zero? `(zerop result)
+	    :name (alu-op-name :sub operand)
+	    :description (alu-op-description "subtract-compare" operand nil)
+	    :pc `(+ pc ,(alu-op-instr-size operand))
+	    :cycles (alu-op-cycles operand)))))
+(def8bit-alu-instrs #b10111000 #b11111110 #b10111110 'cp-8bit-instr-spec)
 
-(definstr-class (#b10111000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (a (cpu-a cpu))
-       (data (,(cpu-register-accessor-name register-key) cpu))
-       (result (logand #xff (- (cpu-a cpu) data))))
-      :name ,(list :cp register-key)
-      :description ,(format nil "Compares register ~A with
-register A and sets the flags." register-key)
-      :carry? (bit-borrow? 8 a data)
-      :half-carry? (bit-borrow? 4 a data)
-      :subtraction? t
-      :zero? (zerop result)
-      :pc (+ pc 1)
-      :cycles 1)))
-
-(definstr #b11111110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (imm8 (aref memory (1+ pc)))
-	   (result (logand #xff (- a imm8))))
-	  :name :cp-a-imm8
-	  :description "Compares the the 8-bit immediate value
-with register A and sets the flags."
-	  :carry? (bit-borrow? 8 a imm8)
-	  :half-carry? (bit-borrow? 4 a imm8)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 2)
-	  :cycles 2)
-
-(definstr #b10111110 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (a (cpu-a cpu))
-	   (data (aref memory (cpu-hl cpu)))
-	   (result (logand #xff (- (cpu-a cpu) data))))
-
-	  :name :cp-a-@hl
-	  :description "Compare register A with
-the contents of the memory specified by HL and
-sets the flags"
-	  :carry? (bit-borrow? 8 a data)
-	  :half-carry? (bit-borrow? 4 a data)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 2)
 
 ;; INC
 ;; Increment 8-bit register
@@ -2469,31 +2414,3 @@ To Push: decrement SP, then copy byte to SP."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
-
-
-;; Noticed duplication
-;;  s-instructions; e.g.
-;;     CP r
-;;     CP n
-;;     CP (HL)
-
-;; ADD/SUB
-;;   differences:
-;;     bit-carry 7/bit-borrow 8
-;;     bit-carry 3/bit-borrow 4
-;;     descriptions
-;;     names
-;;     +/-
-
-;; CP/SUB
-;;   differences:
-;;     result ignored/A <- result
-;;     description
-;;     name
-
-;; IDEA:
-(defun 8bit-sub-flags (a b)
-  (alist :carry? (bit-borrow? 8 a b)
-	 :half-carry? (bit-borrow? 4 a b)
-	 :subtraction? t
-	 :zero? (zerop (- a b))))
