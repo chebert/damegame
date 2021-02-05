@@ -181,6 +181,10 @@ From the plist (id value id2 value2 ...)"
     (remove-if (fn (member % keys))
 	       alist
 	       :key 'car))
+  (defun akeep (alist &rest keys)
+    (remove-if-not (fn (member % keys))
+		   alist
+		   :key 'car))
   (defun aset (key value alist)
     "Return a new alist with the value associated with key added or replaced."
     (acons key value (aremove alist key)))
@@ -1397,6 +1401,7 @@ Test-fn and handle-fn are both functions of event."
   `(progn
      (setq *long-instrs* (aremove *long-instrs* ,byte))))
 
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defparameter *bit-indices* '(0 1 2 3 4 5 6 7))
   (defparameter *register-codes* '(0 1 2 3 4 5 7))
@@ -1558,136 +1563,217 @@ Test-fn and handle-fn are both functions of event."
   `(macrolet ((m () (compile-8bit-alu-instrs ,opcode-template ,imm8-opcode ,hl-opcode ,instr-spec-fn)))
      (m)))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defvar *instr-specs* ())
+  (defun set-instr-spec! (instr-spec)
+    (setq *instr-specs*
+	  (cons instr-spec (remove (aval :opcode instr-spec) *instr-specs* :key (fn (aval :opcode %)))))))
+(defmacro definstr-spec2 (instr-spec)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (set-instr-spec! ,instr-spec)))
 
 
-;; Load 8-bit register into 8-bit register
-;; S2.1
-(definstr-class (#b01000000 (from-register *register-codes* 3) (into-register *register-codes* 0)) (cpu memory)
-  (let* ((into-register-key (register-key into-register))
-	 (from-register-key (register-key from-register)))
-    `(((pc (cpu-pc cpu)))
-      :name ,(list :ld into-register-key from-register-key)
-      :description ,(format nil "Load the contents of register ~A into register ~A." from-register-key into-register-key)
-      ,into-register-key (,(cpu-register-accessor-name from-register-key) cpu)
-      :pc (+ pc 1)
-      :cycles 1)))
+(defun compile-instr-spec-effects (instr-spec)
+  (compile-instr-effects (aval :cpu-name instr-spec)
+			 (aval :memory-name instr-spec)
+			 (aval :bindings instr-spec)
+			 (akeep instr-spec :a :b :c :d :e :f :h :l :af :bc :de :hl :sp :pc :memory :cycles)))
+(defun compile-instr-spec-disassemble-instr (instr-spec)
+  (compile-disassemble-instr (aval :cpu-name instr-spec)
+			     (aval :memory-name instr-spec)
+			     (aval :bindings instr-spec)
+			     (aval :disassembly instr-spec)))
 
-;; Load 8-bit immediate into 8-bit register
-(definstr-class (#b00000110 (register *register-codes* 3)) (cpu memory)
-  (let* ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (d8 (aref memory (1+ pc))))
-      :name ,(list :ld register-key :imm8)
-      :description ,(format nil "Load the 8-bit immediate operand d8 into register ~A." register-key)
-      :disassembly (alist :d8 (register8-text d8))
-      ,register-key d8
-      :pc (+ 2 pc)
-      :cycles 2)))
+(defun class-instr-specs (opcode-template opcode-list-parameters instr-spec-fn)
+  "(Instr-spec-fn opcode opcode-arguments...) => instr-spec"
+  (map-opcodes instr-spec-fn opcode-template opcode-list-parameters))
 
-;; Load contents of memory location specified by HL into 8 bit-register
-(definstr-class (#b01000110 (register *register-codes* 3)) (cpu memory)
-  (let* ((register-key (register-key register)))
-    `(()
-      :name ,(list :ld register-key :@hl)
-      :description ,(format nil "Store the contents of  the memory location
-specified by register pair HL into register ~A." register-key)
-      ,register-key (aref memory (cpu-hl cpu))
-      :pc (1+ (cpu-pc cpu))
-      :cycles 2)))
+(defun ld-name (contents into)
+  (list :ld into contents))
 
-;; Load 8-bit register into memory location specified by HL
-(definstr-class (#b01110000 (register *register-codes* 0)) (cpu memory)
-  (let* ((register-key (register-key register)))
-    `(()
-      :name ,(list :ld :@hl register-key)
-      :description ,(format nil "Store the contents of register ~A in the memory location
-specified by register pair HL." register-key)
-      :memory (((cpu-hl cpu) (cpu-a cpu)))
-      :pc (1+ (cpu-pc cpu))
-      :cycles 2)))
+(defun key-description (key)
+  (cond
+    ((member key *register-keys*) key)
+    ((eql key :imm8) "the 8-bit immediate operand")
+    ((eql key :@imm8) "the memory @(imm8 + #xFF00)")
+    ((eql key :@bc) "the memory @BC")
+    ((eql key :@de) "the memory @DE")
+    ((eql key :@af) "the memory @AF")
+    ((eql key :@hl) "the memory @HL")
+    ((eql key :@c) "the memory @(C + #xFF00)")))
+(defun ld-description (contents into)
+  (format nil "Load the contents of ~A into ~A." (key-description contents) (key-description into)))
 
-;; Load 8-bit immediate value into memory location specified by HL
-(definstr #b00110110 (cpu memory) ((pc (cpu-pc cpu))
-				   (imm8 (aref memory (1+ pc))))
-	  :name :ld-@hl-imm8
-	  :disassembly (alist :imm8 imm8)
-	  :description "Load the 8-bit immediate value into
-the memory location specified by HL"
-	  :memory (((cpu-hl cpu) imm8))
-	  :pc (+ 2 pc)
-	  :cycles 3)
+(defun compile-key-accessor (key &key (cpu-name 'cpu) (memory-name 'memory) (imm8-name 'imm8))
+  (cond
+    ((member key *register-keys*) `(,(cpu-register-accessor-name key) ,cpu-name))
+    ((eql key :imm8) imm8-name)
+    ((eql key :@imm8) `(aref ,memory-name (+ #xff00 ,imm8-name)))
+    ((eql key :@bc) `(aref ,memory-name (cpu-bc ,cpu-name)))
+    ((eql key :@de) `(aref ,memory-name (cpu-de ,cpu-name)))
+    ((eql key :@af) `(aref ,memory-name (cpu-af ,cpu-name)))
+    ((eql key :@hl) `(aref ,memory-name (cpu-hl ,cpu-name)))
+    ((eql key :@c) `(aref ,memory-name (+ #xff00 (cpu-c ,cpu-name))))))
+(defun key-set-instr-spec (key value-form &key (cpu-name 'cpu) (imm8-name 'imm8))
+  (cond
+    ((member key *register-keys*) (alist key value-form))
+    ((eql key :@imm8) (alist :memory `(((+ #xff00 ,imm8-name) ,value-form))))
+    ((eql key :@bc) (alist :memory `(((cpu-bc ,cpu-name) ,value-form))))
+    ((eql key :@de) (alist :memory `(((cpu-de ,cpu-name) ,value-form))))
+    ((eql key :@af) (alist :memory `(((cpu-af ,cpu-name) ,value-form))))
+    ((eql key :@hl) (alist :memory `(((cpu-hl ,cpu-name) ,value-form))))
+    ((eql key :@c) (alist :memory `(((+ #xff00 (cpu-c ,cpu-name)) ,value-form))))))
 
-;; Load contents of value @ BC into A
-(definstr #b00001010 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-a-@bc
-	  :description "Load the 8-bit contents of memory specified by 
-register pair BC into register A."
-	  :a (aref memory (cpu-bc cpu))
-	  :pc (+ 1 pc)
-	  :cycles 2)
+(defun ld-8bit-instr-spec (contents-key into-key)
+  (let ((instr-size (if (or (member contents-key '(:imm8 :@imm8))
+			    (member into-key '(:imm8 :@imm8)))
+			2
+			1)))
+    (merge-instr-specs
+     (instr-specs-defaults)
+     (alist 
+      :name (ld-name contents-key into-key)
+      :description (ld-description contents-key into-key)
+      :pc `(+ ,instr-size pc))
+     (key-set-instr-spec into-key (compile-key-accessor contents-key)
+			 :cpu-name 'cpu :imm8-name 'imm8))))
 
-;; Load contents of value @ DE into A
-(definstr #x1a (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-a-@de
-	  :description "Load the 8-bit contents of memory specified by 
-register pair DE into register A."
-	  :a (aref memory (cpu-de cpu))
-	  :pc (+ 1 pc)
-	  :cycles 2)
 
-;; Load into A the memory-register specified by C
-(definstr #b11110010 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-a-@c
-	  :description "Store into A the contents of the port register,
-or mode register at the address
-in the range 0xFF00-0xFFFF specified by register C.
-- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
-- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
-- 0xFFFF: Interrupt Enable Register"
-	  :a (aref memory (+ #xff00 (cpu-c cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
+(defun instr-specs-defaults (&key (cpu-name 'cpu) (memory-name 'memory) (pc-name 'pc))
+  (alist :cpu-name cpu-name
+	 :memory-name memory-name
+	 :bindings `((,pc-name (cpu-pc ,cpu-name)))))
 
-;; Load A into memory-register specified by C
-(definstr #xe2 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-@c-a
-	  :description "Store the contents of register A in the port register,
-or mode register at the address
-in the range 0xFF00-0xFFFF specified by register C.
-- 0xFF00-0xFF7F: Port/Mode, control, & sound registers
-- 0xFF80-0xFFFE: Working & Stack RAM (127 bytes)
-- 0xFFFF: Interrupt Enable Register"
-	  :memory (((+ #xff00 (cpu-c cpu)) (cpu-a cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
+(defun ld-r8-r8-instr-specs ()
+  (class-instr-specs
+   #b01000000 (alist 3 *register-codes*
+		     0 *register-codes*)
+   (lambda (opcode from-register into-register)
+     (merge-instr-specs
+      (alist :opcode opcode :cycles 1)
+      (ld-8bit-instr-spec (register-key from-register) (register-key into-register))))))
 
-;; Load into A the memory-register specified by 8-bit immediate
-(definstr #b11110000 (cpu memory) ((pc (cpu-pc cpu))
-				   (imm8 (aref memory (1+ pc)))
-				   (addr (+ #xff00 imm8)))
-	  :name :ld-a-@a8
-	  :description "Store the into register A in the contents of internal RAM,
-port register, or mode register at the address in the
-range 0xFF00-0xFFFF specified by the 8-bit immediate 
-operand a8."
-	  :disassembly (alist :imm8 imm8 :addr addr)
-	  :a (aref memory addr)
-	  :pc (+ pc 2)
-	  :cycles 3)
+(defun imm8-instr-spec2 (&key (pc-name 'pc) (memory-name 'memory) (imm8-name 'imm8))
+  (alist
+   :bindings `((,imm8-name (aref ,memory-name (1+ ,pc-name))))
+   :disassembly `(alist :imm8 (register8-text ,imm8-name))))
 
-;; Load A into memory-register specified by 8-bit immediate
-(definstr #xe0 (cpu memory) ((pc (cpu-pc cpu))
-			     (imm8 (aref memory (1+ pc)))
-			     (addr (+ #xff00 imm8)))
-	  :name :ld-@a8-a
-	  :description "Store the contents of register A in the internal RAM,
-port register, or mode register at the address in the
-range 0xFF00-0xFFFF specified by the 8-bit immediate 
-operand a8."
-	  :disassembly (alist :imm8 imm8 :addr addr)
-	  :memory ((addr (cpu-a cpu)))
-	  :pc (+ pc 2)
-	  :cycles 3)
+(defun ld-r8-imm8-instr-specs ()
+  (class-instr-specs
+   #b00000110 (alist 3 *register-codes*)
+   (lambda (opcode register)
+     (merge-instr-specs
+      (imm8-instr-spec2)
+      (ld-8bit-instr-spec :imm8 (register-key register))
+      (alist :cycles 2)))))
+
+(defun ld-r8-@hl-instr-specs ()
+  (class-instr-specs
+   #b01000110 (alist 3 *register-codes*)
+   (lambda (opcode register)
+     (merge-instr-specs
+      (ld-8bit-instr-spec :@hl (register-key register))
+      (alist :opcode opcode :cycles 2)))))
+
+(defun ld-@hl-r8-instr-specs ()
+  (class-instr-specs
+   #b01110000 (alist 0 *register-codes*)
+   (lambda (opcode register)
+     (let* ((register-key (register-key register)))
+       (merge-instr-specs
+	(instr-spec opcode
+		    :name (ld-name register-key :@hl)
+		    :description (ld-description register-key :@hl)
+		    :instr-size 1
+		    :cycles 2)
+	(alist :memory '(((cpu-hl cpu) (cpu-a cpu)))))))))
+
+(defun ld-@hl-imm8-instr-specs ()
+  (list (merge-instr-specs
+	 (imm8-instr-spec #b00110110)
+	 (alist :name (ld-name :imm8 :@hl)
+		:description (ld-description :imm8 :@hl)
+		:memory '(((cpu-hl cpu) imm8))
+		:pc '(+ 2 pc)
+		:cycles 3))))
+
+(defun ld-a-@bc-instr-specs ()
+  (list (merge-instr-specs
+	 (instr-spec #b00001010
+		     :name (ld-name :@bc :a)
+		     :description (ld-description :@bc :a)
+		     :instr-size 1
+		     :cycles 2)
+	 (alist :a '(aref memory (cpu-bc cpu))))))
+
+(defun ld-a-@de-instr-specs ()
+  (list (merge-instr-specs
+	 (instr-spec #b00011010
+		     :name (ld-name :@de :a)
+		     :description (ld-description :@de :a)
+		     :instr-size 1
+		     :cycles 2)
+	 (alist :a '(aref memory (cpu-de cpu))))))
+
+(defun ld-a-@c-instr-specs ()
+  (list (merge-instr-specs
+	 (instr-spec #b11110010
+		     :name (ld-name :@c :a)
+		     :description (ld-description :@c :a)
+		     :instr-size 1
+		     :cycles 2)
+	 (alist :a '(aref memory (+ #xff00 (cpu-c cpu)))))))
+
+(defun ld-@c-a-instr-specs ()
+  (list (merge-instr-specs
+	 (instr-spec #b11100010
+		     :name (ld-name :a :@c)
+		     :description (ld-description :a :@c)
+		     :instr-size 1
+		     :cycles 2)
+	 (alist :memory '(((+ #xff00 (cpu-c cpu)) (cpu-a cpu)))))))
+
+(defun ld-a-@imm8-instr-specs ()
+  (list (merge-instr-specs
+	 (imm8-instr-spec #b11110000)
+	 (alist
+	  :bindings '((addr (+ imm8 #xff00)))
+	  :name (ld-name :@imm8 :a)
+	  :disassembly '(alist :imm8 imm8 :addr addr)
+	  :description (ld-description :@imm8 :a)
+	  :pc '(+ 2 pc)
+	  :a '(aref memory addr)
+	  :cycles 3))))
+
+
+(defun ld-@imm8-a-instr-specs ()
+  (list (merge-instr-specs
+	 (imm8-instr-spec #b11110000)
+	 (alist
+	  :bindings '((addr (+ imm8 #xff00)))
+	  :name (ld-name :a :@imm8)
+	  :disassembly '(alist :imm8 imm8 :addr addr)
+	  :description (ld-description :a :@imm8)
+	  :pc '(+ 2 pc)
+	  :memory '((addr (cpu-a cpu)))
+	  :cycles 3))))
+
+(defun ld-8bit-instr-specs ()
+  (nconc
+   (ld-r8-r8-instr-specs)
+   (ld-r8-imm8-instr-specs)
+   (ld-r8-@hl-instr-specs)
+   (ld-@hl-r8-instr-specs)
+   (ld-@hl-imm8-instr-specs)
+   (ld-a-@bc-instr-specs)
+   (ld-a-@de-instr-specs)
+   (ld-a-@c-instr-specs)
+   (ld-@c-a-instr-specs)
+   (ld-a-@imm8-instr-specs)
+   (ld-@imm8-a-instr-specs)))
+
+;; set-instr-spec!: instr-spec gets added to *instr-specs* as defined by programmer
+;; define-instrs!: each instr-spec gets instr-effects and disassemble-instr compiled; execute! is compiled
 
 (defun imm16 (addr memory)
   (combined-register (aref memory (1+ addr)) (aref memory addr)))
@@ -2014,8 +2100,6 @@ the carry bit stores the result in register A"
 	    :cycles cycles)
      (when instr-size
        (alist :pc `(+ ,pc-name ,instr-size)))))
-
-
 
   (defun alu-op-name (op-key operand)
     (cond
@@ -2408,9 +2492,38 @@ To Push: decrement SP, then copy byte to SP."
 		 (let* ((pc (cpu-pc cpu)))
 		   (not (<= #x98 pc #xa1))))
 
+
+(defun define-instrs! ()
+  ;; Define instr-effects and disassemble-instr for each instr-spec
+  (mapcar 'set-instr-spec! (ld-8bit-instr-specs))
+  (loop for % in *instr-specs* do
+    (set-instr-spec!
+     (amerge %
+	     (alist :instr-effects (eval (compile-instr-spec-effects %))
+		    :disassemble-instr (eval (compile-instr-spec-effects %))))))
+  ;; TEMP: Add all single-byte instr-specs to instrs
+  (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
+  ;; TEMP: add all 2-byte instr-specs to instrs
+  (mapcar (fn (asetq (aval :opcode %) % *long-instrs*)) (remove-if-not (fn (aval :long? %)) *instr-specs*))
+  ;; Recompile the execute! function
+  (eval (compile-execute)))
+
 ;; recompile execute! definition
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (eval (compile-execute)))
+  (define-instrs!))
 
 ;; focus: the memory address that was last modified
 ;; add cycles
+
+
+
+;; Code Smells:
+;;   #1 eval-when everywhere
+;;   #2 complicated macro expansion: macrolet???!???
+;;   #3 can combine some of the alu opcodes: hl and registers hl is code #b110
+;;   #4 alu-8bit-instr-spec have a lot of similarities
+;; imm8-instr-spec, ld-8bit-instr-spec are setting/assuming too many variables names
+
+;; GOAL #1:
+;;   replace macros with function calls; should take care of #2
+;;   create instructions inside of a function. should take care of #1
