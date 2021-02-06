@@ -1001,7 +1001,6 @@ Test-fn and handle-fn are both functions of event."
 	    do (setf (aref array i) (read-byte stream)))
       array)))
 
-(defparameter *rom* (read-rom-file! "gb_bios.bin"))
 (defvar *memory* (make-array (list (1+ #xffff))
 			     :element-type 'unsigned-byte
 			     :initial-element 0))
@@ -1137,12 +1136,12 @@ Test-fn and handle-fn are both functions of event."
 	  (register16-text (cpu-pc cpu))
 	  (disassemble-instr cpu memory)))
 (defparameter *register-keys*
-  '(:a :b :c :d :e :f :h :l :af :bc :de :hl))
+  '(:a :b :c :d :e :f :h :l :af :bc :de :hl :sp :pc))
 (defparameter *flag-keys*
   '(:zero? :subtraction? :half-carry? :carry?))
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defparameter *register8-keys* '(:a :b :c :d :e :f :h :l)))
-(defparameter *register16-keys* '(:af :bc :de :hl))
+(defparameter *register16-keys* '(:af :bc :de :hl :sp :pc))
 
 (defun instr-affected-keys (instr-effects)
   (let* ((keys (akeys instr-effects)))
@@ -1588,6 +1587,7 @@ Test-fn and handle-fn are both functions of event."
   (cond
     ((member key *register-keys*) key)
     ((eql key :imm8) "the 8-bit immediate operand")
+    ((eql key :imm16) "the 16-bit immediate operand")
     ((eql key :@imm8) "the memory @(imm8 + #xFF00)")
     ((eql key :@imm16) "the memory @imm16")
     ((eql key :@bc) "the memory @BC")
@@ -1596,7 +1596,8 @@ Test-fn and handle-fn are both functions of event."
     ((eql key :@hl) "the memory @HL")
     ((eql key :@c) "the memory @(C + #xFF00)")
     ((eql key :@hli) "the memory @HL (simultaneously post-incrementing HL)")
-    ((eql key :@hld) "the memory @HL (simultaneously post-decrementing HL)")))
+    ((eql key :@hld) "the memory @HL (simultaneously post-decrementing HL)")
+    (t (error "unimplemented ~A" key))))
 (defun ld-description (contents into)
   (format nil "Load the contents of ~A into ~A." (key-description contents) (key-description into)))
 
@@ -1610,13 +1611,16 @@ Test-fn and handle-fn are both functions of event."
     ((eql key :@de) `(aref ,memory-name (cpu-de ,cpu-name)))
     ((eql key :@af) `(aref ,memory-name (cpu-af ,cpu-name)))
     ((member key '(:@hl :@hli :@hld)) `(aref ,memory-name (cpu-hl ,cpu-name)))
-    ((eql key :@c) `(aref ,memory-name (+ #xff00 (cpu-c ,cpu-name))))))
+    ((eql key :@c) `(aref ,memory-name (+ #xff00 (cpu-c ,cpu-name))))
+    ((eql key :imm16) imm16-name)
+    (t (error "unimplemented ~A" key))))
 (defun key-set-instr-spec (key value-form &key (cpu-name 'cpu) (imm8-name 'imm8) (imm16-name 'imm16))
   (let ((@hl-form `(((cpu-hl ,cpu-name) ,value-form))))
     (cond
       ((member key *register-keys*) (alist key value-form))
       ((eql key :@imm8) (alist :memory `(((+ #xff00 ,imm8-name) ,value-form))))
-      ((eql key :@imm16) (alist :memory `((,imm16-name ,value-form))))
+      ((eql key :@imm16) (alist :memory `((,imm16-name (lo-byte ,value-form))
+					  ((1+ ,imm16-name) (hi-byte ,value-form)))))
       ((eql key :@bc) (alist :memory `(((cpu-bc ,cpu-name) ,value-form))))
       ((eql key :@de) (alist :memory `(((cpu-de ,cpu-name) ,value-form))))
       ((eql key :@af) (alist :memory `(((cpu-af ,cpu-name) ,value-form))))
@@ -1625,7 +1629,8 @@ Test-fn and handle-fn are both functions of event."
       ((eql key :@hli) (alist :memory @hl-form
 			      :hl `(1+ (cpu-hl ,cpu-name))))
       ((eql key :@hld) (alist :memory @hl-form
-			      :hl `(1- (cpu-hl ,cpu-name)))))))
+			      :hl `(1- (cpu-hl ,cpu-name))))
+      (t (error "unimplemented ~A" key)))))
 
 (defun imm8-instr-spec2 (&key (pc-name 'pc) (memory-name 'memory) (imm8-name 'imm8))
   (alist
@@ -1651,22 +1656,23 @@ Test-fn and handle-fn are both functions of event."
 (defun ld-8bit-cycles (contents-key into-key)
   (+ 1
      (if (member contents-key *1+-cycle-keys*) 1 0)
+     (if (member contents-key *register16-keys*) 1 0)
      (if (member into-key *1+-cycle-keys*) 1 0)
-     (if (eql contents-key :@imm8) 2 0)
-     (if (eql into-key :@imm8) 2 0)
+     (if (member contents-key '(:imm16 :@imm8)) 2 0)
+     (if (member into-key '(:imm16 :@imm8)) 2 0)
      (if (eql contents-key :@imm16) 3 0)
      (if (eql into-key :@imm16) 3 0)))
 
-(defun ld-8bit-instr-spec (opcode contents-key into-key &key 
-							  (pc-name 'pc)
-							  (cpu-name 'cpu)
-							  (imm8-name 'imm8)
-							  (imm16-name 'imm16)
-							  (memory-name 'memory))
+(defun ld-instr-spec (opcode contents-key into-key &key 
+						     (pc-name 'pc)
+						     (cpu-name 'cpu)
+						     (imm8-name 'imm8)
+						     (imm16-name 'imm16)
+						     (memory-name 'memory))
   (let* ((imm8? (or (member into-key '(:imm8 :@imm8))
 		    (member contents-key '(:imm8 :@imm8))))
-	 (imm16? (or (member into-key '(:@imm16))
-		     (member contents-key '(:@imm16))))
+	 (imm16? (or (member into-key '(:imm16 :@imm16))
+		     (member contents-key '(:imm16 :@imm16))))
 	 (cycles (ld-8bit-cycles contents-key into-key))
 	 (instr-size (cond
 		       (imm16? 3)
@@ -1703,108 +1709,134 @@ Test-fn and handle-fn are both functions of event."
 ;; S 2.1
 (defun ld-8bit-instr-specs ()
   (append
+   ;; LD r, r'
    (ld-8bit-class-instr-specs
     #b01000000 (alist 3 *register-codes*
 		      0 *register-codes*)
     (lambda (opcode from-register into-register)
-      (ld-8bit-instr-spec opcode from-register into-register)))
+      (ld-instr-spec opcode from-register into-register)))
 
+   ;; LD r, imm8
    (ld-8bit-class-instr-specs
     #b00000110 (alist 3 *register-codes*)
     (lambda (opcode register)
-      (ld-8bit-instr-spec opcode :imm8 register)))
+      (ld-instr-spec opcode :imm8 register)))
 
+   ;; LD r, (HL)
    (ld-8bit-class-instr-specs
     #b01000110 (alist 3 *register-codes*)
     (lambda (opcode register)
-      (ld-8bit-instr-spec opcode :@hl register)))
+      (ld-instr-spec opcode :@hl register)))
 
+   ;; LD (HL), r
    (ld-8bit-class-instr-specs
     #b01110000 (alist 0 *register-codes*)
     (lambda (opcode register)
-      (ld-8bit-instr-spec opcode register :@hl)))
+      (ld-instr-spec opcode register :@hl)))
 
    (list
-    (ld-8bit-instr-spec #b00110110 :imm8 :@hl)
-    (ld-8bit-instr-spec #b00001010 :@bc :a)
-    (ld-8bit-instr-spec #b00011010 :@de :a)
-    (ld-8bit-instr-spec #b11110010 :@c :a)
-    (ld-8bit-instr-spec #b11100010 :a :@c)
-    (ld-8bit-instr-spec #b11110000 :@imm8 :a)
-    (ld-8bit-instr-spec #b11100000 :a :@imm8)
+    (ld-instr-spec #b00110110 :imm8 :@hl)
+    (ld-instr-spec #b00001010 :@bc :a)
+    (ld-instr-spec #b00011010 :@de :a)
+    (ld-instr-spec #b11110010 :@c :a)
+    (ld-instr-spec #b11100010 :a :@c)
+    (ld-instr-spec #b11110000 :@imm8 :a)
+    (ld-instr-spec #b11100000 :a :@imm8)
     
-    (ld-8bit-instr-spec #b11111010 :@imm16 :a)
-    (ld-8bit-instr-spec #b11101010 :a :@imm16)
+    (ld-instr-spec #b11111010 :@imm16 :a)
+    (ld-instr-spec #b11101010 :a :@imm16)
 
     ;; TODO: create HL binding to optimize
-    (ld-8bit-instr-spec #b00101010 :@hli :a)
-    (ld-8bit-instr-spec #b00111010 :@hld :a)
+    (ld-instr-spec #b00101010 :@hli :a)
+    (ld-instr-spec #b00111010 :@hld :a)
 
-    (ld-8bit-instr-spec #b00000010 :a :@bc)
-    (ld-8bit-instr-spec #b00010010 :a :@de)
+    (ld-instr-spec #b00000010 :a :@bc)
+    (ld-instr-spec #b00010010 :a :@de)
 
-    (ld-8bit-instr-spec #b00100010 :a :@hli)
-    (ld-8bit-instr-spec #b00110010 :a :@hld))))
+    (ld-instr-spec #b00100010 :a :@hli)
+    (ld-instr-spec #b00110010 :a :@hld))))
 
 (defun imm16 (addr memory)
   (combined-register (aref memory (1+ addr)) (aref memory addr)))
 
 ;; S2.2
-;; Load 16-bit immediate into 16-bit register
-(definstr-class (#b00000001 (register-pair *register-pair-codes* 4)) (cpu memory)
-  (let* ((register-key (dd-register-pair-key register-pair)))
-    `(((pc (cpu-pc cpu))
-       (d16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc)))))
-      :name ,(list :ld register-key :imm16)
-      :description ,(format nil "Load the 2 bytes of immediate data into register pair ~A.
+(defun ld-16bit-instr-specs ()
+  (append
+   ;; LD dd, nn
+   (map-opcodes
+    (lambda (opcode register-pair)
+      (ld-instr-spec opcode :imm16 (dd-register-pair-key register-pair)))
+    #b00000001 (alist 4 *register-pair-codes*))
+   
+   (list
+    ;; LD SP, HL
+    (ld-instr-spec #b11111001 :hl :sp))
 
-The first byte of immediate data is the lower byte,
-and the second byte of immediate data is the higher byte." register-key)
-      :disassembly (alist :d16 (hex16-text d16))
-      ,register-key d16
-      :pc (+ 3 pc)
-      :cycles 3)))
+   ;; PUSH qq
+   (map-opcodes
+    (lambda (opcode register-pair)
+      (let* ((combined-key (qq-register-pair-key register-pair)))
+	(merge-instr-specs
+	 (instr-spec-defaults)
+	 (push-instr-spec combined-key)
+	 (alist :opcode opcode
+		:name (list :push combined-key)
+		:description (format nil "Push the contents of register pair ~A onto the stack." combined-key)
+		:pc '(1+ pc)
+		:cycles 4))))
+    #b11000101 (alist 4 *register-pair-codes*))
 
-;; LD SP, HL
-(definstr #b11111001 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-sp-hl
-	  :description "Copy register HL into SP."
-	  :sp (cpu-hl cpu)
-	  :pc (1+ pc)
-	  :cycles 2)
+   ;; POP qq
+   (map-opcodes
+    (lambda (opcode register-pair)
+      (let* ((register-pair-key (qq-register-pair-key register-pair)))
+	(merge-instr-specs
+	 (instr-spec-defaults)
+	 (pop-instr-spec register-pair-key)
+	 (alist :opcode opcode
+		:name (list :pop register-pair-key)
+		:description (format nil "Pop the 16-bit value off the stack into register pair ~A." register-pair-key)
+		:pc '(1+ pc)
+		:cycles 3))))
+    #b11000001 (alist 4 *register-pair-codes*))
 
-;; Push 16-bit register onto stack
-(definstr-class (#b11000101 (register-pair *register-pair-codes* 4)) (cpu memory)
-  (let* ((combined-key (qq-register-pair-key register-pair)))
-    (destructuring-bind (hi-register-key lo-register-key)
-	(register8-keys-from-register-pair-key combined-key)
-      `(((pc (cpu-pc cpu))
-	 (sp (cpu-sp cpu))
-	 (sp-2 (- sp 2)))
-	:name ,(list :push combined-key)
-	:description ,(format nil "Push the contents of register pair ~A onto the stack." combined-key)
-	:memory (((1- sp) (,(cpu-register-accessor-name hi-register-key) cpu))
-		 (sp-2 (,(cpu-register-accessor-name lo-register-key) cpu)))
-	:sp sp-2
-	:pc (1+ pc)
-	:cycles 4))))
+   (list
+    ;; LDHL SP, s8
+    (merge-instr-specs
+     (instr-spec-defaults)
+     (alist :opcode #b11111000
+	    :name (list :ld :hl :sp+s8)
+	    :description "Add signed imm8 value to sp and store the
+result in HL."
+	    :bindings '((s8 (s8 (aref memory (1+ pc))))
+			(sp (cpu-sp cpu)))
+	    :disassembly '(alist :s8 (register8-text s8))
+	    :hl '(+ s8 sp)
+	    :pc '(+ 2 pc)
+	    :cycles 3
 
-;; Pop value off of stack into 16-bit register
-(definstr-class (#b11000001 (register-pair *register-pair-codes* 4)) (cpu memory)
-  (let* ((combined-key (qq-register-pair-key register-pair)))
-    (destructuring-bind (hi-register-key lo-register-key)
-	(register8-keys-from-register-pair-key combined-key)
-      `(((pc (cpu-pc cpu))
-	 (sp (cpu-sp cpu))
-	 (sp+ (1+ sp)))
-	:name ,(list :pop combined-key)
-	:description ,(format nil "Pop the 16-bit value off the stack 
-and into register pair ~A." combined-key)
-	:sp (+ sp 2)
-	,hi-register-key (aref memory sp+)
-	,lo-register-key (aref memory sp)
-	:pc (1+ pc)
-	:cycles 3))))
+	    ;; 16-bit addition flags?
+	    :zero? nil
+	    :subtraction? nil
+	    :half-carry? '(bit-carry? 11 sp s8)
+	    :carry? '(bit-carry? 15 sp s8)))
+    
+    (ld-instr-spec #b00001000 :sp :@imm16))))
+
+(defun push-instr-spec (register-pair-key &key (cpu-name 'cpu) (sp-name 'sp) (sp-2-name 'sp-2) (value-name 'value))
+  (alist :bindings `((,sp-name (cpu-sp ,cpu-name))
+		     (,sp-2-name (- ,sp-name 2))
+		     (,value-name (,(cpu-register-accessor-name register-pair-key) ,cpu-name)))
+	 :sp sp-2-name
+	 :memory `(((1- ,sp-name) (hi-byte ,value-name))
+		   (,sp-2-name (lo-byte ,value-name)))))
+
+(defun pop-instr-spec (register-pair-key &key (cpu-name 'cpu) (memory-name 'memory) (sp-name 'sp) (sp+-name 'sp+))
+  (alist :bindings `((,sp-name (cpu-sp ,cpu-name))
+		     (,sp+-name (1+ ,sp-name)))
+	 :sp `(+ ,sp-name 2)
+	 register-pair-key `(combined-register (aref ,memory-name ,sp+-name)
+					       (aref ,memory-name ,sp-name))))
 
 (defun bit-carry? (from-bit-index a b)
   (let* ((bit-index (1+ from-bit-index))
@@ -1812,36 +1844,6 @@ and into register pair ~A." combined-key)
     (not (zerop (logand (+ (logand mask a)
 			   (logand mask b))
 			(expt 2 bit-index))))))
-
-
-(definstr #b11111000 (cpu memory) ((pc (cpu-pc cpu))
-				   (e (s8 (aref memory (1+ pc))))
-				   (sp (cpu-sp cpu)))
-	  :name :ldhl-sp-e
-	  :description "Add signed imm8 value to sp and store the
-result in HL."
-	  :disassembly (alist :imm8 (register8-text e))
-	  :hl (+ e sp)
-	  :zero? nil
-	  :subtraction? nil
-	  :half-carry? (bit-carry? 11 sp e)
-	  :carry? (bit-carry? 15 sp e)
-	  :pc (+ 2 pc)
-	  :cycles 3)
-
-(definstr #b00001000 (cpu memory) ((pc (cpu-pc cpu))
-				   (imm16 (imm16 (1+ pc) memory))
-				   (sp (cpu-sp cpu))
-				   (spl (lo-byte sp))
-				   (sph (hi-byte sp)))
-	  :name :ld-@imm16-sp
-	  :description "Store the stack pointer at the memory location
-specified by the imm16 value."
-	  :disassembly (alist :imm16 imm16)
-	  :memory ((imm16 spl)
-		   ((1+ imm16) sph))
-	  :pc (+ 3 pc)
-	  :cycles 5)
 
 ;; S2.3
 ;; ADD
@@ -2017,8 +2019,8 @@ and ~A as the second.
 
   (defun imm8-instr-spec (opcode &optional (pc-name 'pc) (memory-name 'memory))
     (instr-spec opcode
-	:bindings `((imm8 (aref ,memory-name (1+ ,pc-name))))
-	:disassembly '(alist :imm8 (register8-text imm8)))))
+		:bindings `((imm8 (aref ,memory-name (1+ ,pc-name))))
+		:disassembly '(alist :imm8 (register8-text imm8)))))
 
 ;; SUB
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -2374,14 +2376,23 @@ To Push: decrement SP, then copy byte to SP."
 		   (not (<= #x98 pc #xa1))))
 
 
+(defun compile-disassemble-instr-spec (instr-spec)
+  (compile-disassemble-instr (aval :cpu-name instr-spec)
+			     (aval :memory-name instr-spec)
+			     (aval :bindings instr-spec)
+			     (aval :disassembly instr-spec)))
+
 (defun define-instrs! ()
   ;; Define instr-effects and disassemble-instr for each instr-spec
-  (setq *instr-specs* (ld-8bit-instr-specs))
-  (loop for % in *instr-specs* do
-    (set-instr-spec!
-     (amerge %
-	     (alist :instr-effects (eval (compile-instr-spec-effects %))
-		    :disassemble-instr (eval (compile-instr-spec-effects %))))))
+  (setq *instr-specs*
+	(mapcar (fn
+		  (amerge %
+			  (alist :instr-effects (eval (compile-instr-spec-effects %))
+				 :disassemble-instr (eval (compile-disassemble-instr-spec %)))))
+		(append
+		 (ld-8bit-instr-specs)
+		 (ld-16bit-instr-specs))))
+  
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
   ;; TEMP: add all 2-byte instr-specs to instrs
@@ -2390,12 +2401,13 @@ To Push: decrement SP, then copy byte to SP."
   (eval (compile-execute)))
 
 ;; recompile execute! definition
+#+nil
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (define-instrs!))
+
+
 ;; focus: the memory address that was last modified
 ;; add cycles
-
-
 
 ;; Code Smells:
 ;;   #1 eval-when everywhere
