@@ -1077,7 +1077,7 @@ Test-fn and handle-fn are both functions of event."
   (update-visualizations!))
 
 (defun split-lines (text)
-  (uiop:split-string text :separator '(#\newline)))
+  (word-wrap (remove-newlines text) 56))
 
 (defun initialize-description! (description)
   (let* ((lines (split-lines description)))
@@ -2401,10 +2401,7 @@ To Push: decrement SP, then copy byte to SP."
   (eval (compile-execute)))
 
 ;; recompile execute! definition
-#+nil
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (define-instrs!))
-
+(define-instrs!)
 
 ;; focus: the memory address that was last modified
 ;; add cycles
@@ -2419,3 +2416,30 @@ To Push: decrement SP, then copy byte to SP."
 ;; GOAL #1:
 ;;   replace macros with function calls; should take care of #2
 ;;   create instructions inside of a function. should take care of #1
+
+(defun remove-newlines (string)
+  (map 'string (fn (if (eql #\newline %)
+		       #\space
+		       %))
+       string))
+
+(defun split-line (string line-length)
+  (if (<= (length string) line-length)
+      (list string)
+      (let* ((split-index (position #\space string :from-end t :end line-length)))
+	(if split-index
+	    (list (subseq string 0 split-index)
+		  (subseq string (1+ split-index)))
+	    (let* ((split-index (position #\space string :start line-length)))
+	      (if split-index
+		  (list (subseq string 0 split-index)
+			(subseq string (1+ split-index)))
+		  (list string)))))))
+
+(defun word-wrap (string line-length)
+  (let* ((lines (split-line string line-length))
+	 (first (first lines))
+	 (second (second lines)))
+    (if second
+	(cons first (word-wrap second line-length))
+	lines)))
