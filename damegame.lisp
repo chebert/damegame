@@ -1594,7 +1594,9 @@ Test-fn and handle-fn are both functions of event."
     ((eql key :@de) "the memory @DE")
     ((eql key :@af) "the memory @AF")
     ((eql key :@hl) "the memory @HL")
-    ((eql key :@c) "the memory @(C + #xFF00)")))
+    ((eql key :@c) "the memory @(C + #xFF00)")
+    ((eql key :@hli) "the memory @HL (simultaneously post-incrementing HL)")
+    ((eql key :@hld) "the memory @HL (simultaneously post-decrementing HL)")))
 (defun ld-description (contents into)
   (format nil "Load the contents of ~A into ~A." (key-description contents) (key-description into)))
 
@@ -1607,18 +1609,23 @@ Test-fn and handle-fn are both functions of event."
     ((eql key :@bc) `(aref ,memory-name (cpu-bc ,cpu-name)))
     ((eql key :@de) `(aref ,memory-name (cpu-de ,cpu-name)))
     ((eql key :@af) `(aref ,memory-name (cpu-af ,cpu-name)))
-    ((eql key :@hl) `(aref ,memory-name (cpu-hl ,cpu-name)))
+    ((member key '(:@hl :@hli :@hld)) `(aref ,memory-name (cpu-hl ,cpu-name)))
     ((eql key :@c) `(aref ,memory-name (+ #xff00 (cpu-c ,cpu-name))))))
 (defun key-set-instr-spec (key value-form &key (cpu-name 'cpu) (imm8-name 'imm8) (imm16-name 'imm16))
-  (cond
-    ((member key *register-keys*) (alist key value-form))
-    ((eql key :@imm8) (alist :memory `(((+ #xff00 ,imm8-name) ,value-form))))
-    ((eql key :@imm16) (alist :memory `((,imm16-name ,value-form))))
-    ((eql key :@bc) (alist :memory `(((cpu-bc ,cpu-name) ,value-form))))
-    ((eql key :@de) (alist :memory `(((cpu-de ,cpu-name) ,value-form))))
-    ((eql key :@af) (alist :memory `(((cpu-af ,cpu-name) ,value-form))))
-    ((eql key :@hl) (alist :memory `(((cpu-hl ,cpu-name) ,value-form))))
-    ((eql key :@c) (alist :memory `(((+ #xff00 (cpu-c ,cpu-name)) ,value-form))))))
+  (let ((@hl-form `(((cpu-hl ,cpu-name) ,value-form))))
+    (cond
+      ((member key *register-keys*) (alist key value-form))
+      ((eql key :@imm8) (alist :memory `(((+ #xff00 ,imm8-name) ,value-form))))
+      ((eql key :@imm16) (alist :memory `((,imm16-name ,value-form))))
+      ((eql key :@bc) (alist :memory `(((cpu-bc ,cpu-name) ,value-form))))
+      ((eql key :@de) (alist :memory `(((cpu-de ,cpu-name) ,value-form))))
+      ((eql key :@af) (alist :memory `(((cpu-af ,cpu-name) ,value-form))))
+      ((eql key :@hl) (alist :memory @hl-form))
+      ((eql key :@c) (alist :memory `(((+ #xff00 (cpu-c ,cpu-name)) ,value-form))))
+      ((eql key :@hli) (alist :memory @hl-form
+			      :hl `(1+ (cpu-hl ,cpu-name))))
+      ((eql key :@hld) (alist :memory @hl-form
+			      :hl `(1- (cpu-hl ,cpu-name)))))))
 
 (defun imm8-instr-spec2 (&key (pc-name 'pc) (memory-name 'memory) (imm8-name 'imm8))
   (alist
@@ -1640,7 +1647,7 @@ Test-fn and handle-fn are both functions of event."
    (when cycles
      (alist :cycles cycles))))
 
-(defparameter *1+-cycle-keys* '(:imm8 :@c :@af :@bc :@de :@hl))
+(defparameter *1+-cycle-keys* '(:imm8 :@c :@af :@bc :@de :@hl :@hli :@hld))
 (defun ld-8bit-cycles (contents-key into-key)
   (+ 1
      (if (member contents-key *1+-cycle-keys*) 1 0)
@@ -1675,6 +1682,10 @@ Test-fn and handle-fn are both functions of event."
        (imm8-instr-spec2 :pc-name pc-name :memory-name memory-name :imm8-name imm8-name))
      (when imm16?
        (imm16-instr-spec :pc-name pc-name :memory-name memory-name :imm16-name imm16-name))
+     (when (member contents-key '(:@hli))
+       (alist :hl `(1+ (cpu-hl ,cpu-name))))
+     (when (member contents-key '(:@hld))
+       (alist :hl `(1- (cpu-hl ,cpu-name))))
      (alist
       :name (ld-name contents-key into-key)
       :description (ld-description contents-key into-key)
@@ -1689,6 +1700,7 @@ Test-fn and handle-fn are both functions of event."
    (lambda (opcode &rest register-codes)
      (apply fn opcode (mapcar 'register-key register-codes)))))
 
+;; S 2.1
 (defun ld-8bit-instr-specs ()
   (append
    (ld-8bit-class-instr-specs
@@ -1722,77 +1734,20 @@ Test-fn and handle-fn are both functions of event."
     (ld-8bit-instr-spec #b11100000 :a :@imm8)
     
     (ld-8bit-instr-spec #b11111010 :@imm16 :a)
-    (ld-8bit-instr-spec #b11101010 :a :@imm16))))
+    (ld-8bit-instr-spec #b11101010 :a :@imm16)
+
+    ;; TODO: create HL binding to optimize
+    (ld-8bit-instr-spec #b00101010 :@hli :a)
+    (ld-8bit-instr-spec #b00111010 :@hld :a)
+
+    (ld-8bit-instr-spec #b00000010 :a :@bc)
+    (ld-8bit-instr-spec #b00010010 :a :@de)
+
+    (ld-8bit-instr-spec #b00100010 :a :@hli)
+    (ld-8bit-instr-spec #b00110010 :a :@hld))))
 
 (defun imm16 (addr memory)
   (combined-register (aref memory (1+ addr)) (aref memory addr)))
-
-;; LD A, (HLI)
-(definstr #b00101010 (cpu memory) ((pc (cpu-pc cpu))
-				   (hl (cpu-hl cpu)))
-	  :name :ld-a-@hli
-	  :description "Store into register A the memory at the
-location specified by register pair HL,
-and simultaneously increment the contents of HL."
-	  :hl (1+ hl)
-	  :a (aref memory hl)
-	  :pc (+ pc 1)
-	  :cycles 2)
-
-
-;; LD A, (HLD)
-(definstr #b00111010 (cpu memory) ((pc (cpu-pc cpu))
-				   (hl (cpu-hl cpu)))
-	  :name :ld-a-@hld
-	  :description "Store into register A into the contents of
-memory location specified by register pair HL,
-and simultaneously decrement the contents of HL."
-	  :hl (1- hl)
-	  :a (aref memory hl)
-	  :pc (+ pc 1)
-	  :cycles 2)
-
-;; LD (BC), A
-(definstr #b00000010 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-@bc-a
-	  :description "Store contents of register A into
-memory location specified by register BC."
-	  :memory (((cpu-bc cpu) (cpu-a cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
-;; LD (DE), A
-(definstr #b00010010 (cpu memory) ((pc (cpu-pc cpu)))
-	  :name :ld-@de-a
-	  :description "Store contents of register A into
-memory location specified by register DE."
-	  :memory (((cpu-de cpu) (cpu-a cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
-
-;; LD (HLI), A
-(definstr #x22 (cpu memory) ((pc (cpu-pc cpu))
-			     (hl (cpu-hl cpu)))
-	  :name :ld-@hli-a
-	  :description "Store the contents of register A into the memory
-location specified by register pair HL,
-and simultaneously increment the contents of HL."
-	  :hl (1+ hl)
-	  :memory ((hl (cpu-a cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
-
-;; LD (HLD), A
-(definstr #x32 (cpu memory) ((pc (cpu-pc cpu))
-			     (hl (cpu-hl cpu)))
-	  :name :ld-@hld-a
-	  :description "Store the contents of register A into the memory
-location specified by register pair HL,
-and simultaneously decrement the contents of HL."
-	  :hl (1- hl)
-	  :memory ((hl (cpu-a cpu)))
-	  :pc (+ pc 1)
-	  :cycles 2)
-
 
 ;; S2.2
 ;; Load 16-bit immediate into 16-bit register
