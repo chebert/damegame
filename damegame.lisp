@@ -1867,13 +1867,12 @@ result in HL."
 		       :subtraction? nil))))
 
 ;; TODO: a data structure with the names?
-
-(defun alu-instr-spec (opcode alu-op-key contents-key &key 
-							(pc-name 'pc)
-							(cpu-name 'cpu)
-							(imm8-name 'imm8)
-							(imm16-name 'imm16)
-							(memory-name 'memory))
+(defun 8bit-alu-instr-spec (opcode alu-op-key contents-key &key 
+							     (pc-name 'pc)
+							     (cpu-name 'cpu)
+							     (imm8-name 'imm8)
+							     (imm16-name 'imm16)
+							     (memory-name 'memory))
   (let* ((imm8? (member contents-key '(:imm8 :@imm8)))
 	 (imm16? (member contents-key '(:imm16 :@imm16)))
 	 (memory-ref? (member contents-key '(:@imm8 :@imm16 :@hl)))
@@ -1908,27 +1907,69 @@ result in HL."
      (unless (eql :cp alu-op-key)
        (key-set-instr-spec :a 'result :cpu-name cpu-name :imm8-name imm8-name :imm16-name imm16-name)))))
 
-;; S2.3
-;; ADD
-(defun alu-op-instr-specs (alu-op-key r-opcode-template imm8-opcode @hl-opcode)
+(defun 8bit-inc-op-instr-spec (opcode inc-key contents-key &key 
+							     (pc-name 'pc)
+							     (cpu-name 'cpu)
+							     (memory-name 'memory))
+  (let* ((memory-ref? (member contents-key '(:@hl)))
+	 (cycles (+ 1
+		    (if memory-ref? 2 0)))
+	 (instr-size 1)
+	 (alu-op-key (ecase inc-key
+		       (:inc :add)
+		       (:dec :sub))))
+    (merge-instr-specs
+     (instr-spec-defaults :cpu-name cpu-name
+			  :memory-name memory-name
+			  :pc-name pc-name
+			  :opcode opcode
+			  :cycles cycles)
+     (alist
+      :bindings `((data ,(compile-key-accessor contents-key))
+		  (result ,(compile-alu-op alu-op-key 'data 1 nil)))
+      :name (list inc-key contents-key)
+      :description (format nil "~A the contents of ~A."
+			   (ecase inc-key
+			     (:inc "Increments")
+			     (:dec "Decrements"))
+			   (key-description contents-key))
+      :pc `(+ ,instr-size ,pc-name))
+     (aremove (alu-op-flags alu-op-key 'data 1 'cy 'result) :carry?)
+     (key-set-instr-spec contents-key 'result :cpu-name cpu-name))))
+
+(defun 8bit-alu-op-instr-specs (alu-op-key r-opcode-template imm8-opcode @hl-opcode)
   (append
    (map-opcodes
     (lambda (opcode register)
-      (alu-instr-spec opcode alu-op-key (register-key register)))
+      (8bit-alu-instr-spec opcode alu-op-key (register-key register)))
     r-opcode-template (alist 0 *register-codes*))
    (list
-    (alu-instr-spec imm8-opcode alu-op-key :imm8)
-    (alu-instr-spec @hl-opcode alu-op-key :@hl))))
-(defun alu-instr-specs ()
+    (8bit-alu-instr-spec imm8-opcode alu-op-key :imm8)
+    (8bit-alu-instr-spec @hl-opcode alu-op-key :@hl))))
+
+(defun 8bit-inc-op-instr-specs (inc-op-key r-opcode-template @hl-opcode)
   (append
-   (alu-op-instr-specs :add #b10000000 #b11000110 #b10000110)
-   (alu-op-instr-specs :adc #b10001000 #b11001110 #b10001110)
-   (alu-op-instr-specs :sub #b10010000 #b11010110 #b10010110)
-   (alu-op-instr-specs :sbc #b10011000 #b11011110 #b10011110)
-   (alu-op-instr-specs :and #b10100000 #b11100110 #b10100110)
-   (alu-op-instr-specs :or  #b10110000 #b11110110 #b10110110)
-   (alu-op-instr-specs :xor #b10101000 #b11101110 #b10101110)
-   (alu-op-instr-specs :cp  #b10111000 #b11111110 #b10111110)))
+   (map-opcodes
+    (lambda (opcode register)
+      (8bit-inc-op-instr-spec opcode inc-op-key (register-key register)))
+    r-opcode-template (alist 3 *register-codes*))
+   (list
+    (8bit-inc-op-instr-spec @hl-opcode inc-op-key :@hl))))
+
+;; S2.3
+(defun 8bit-alu-instr-specs ()
+  (append
+   (8bit-alu-op-instr-specs :add #b10000000 #b11000110 #b10000110)
+   (8bit-alu-op-instr-specs :adc #b10001000 #b11001110 #b10001110)
+   (8bit-alu-op-instr-specs :sub #b10010000 #b11010110 #b10010110)
+   (8bit-alu-op-instr-specs :sbc #b10011000 #b11011110 #b10011110)
+   (8bit-alu-op-instr-specs :and #b10100000 #b11100110 #b10100110)
+   (8bit-alu-op-instr-specs :or  #b10110000 #b11110110 #b10110110)
+   (8bit-alu-op-instr-specs :xor #b10101000 #b11101110 #b10101110)
+   (8bit-alu-op-instr-specs :cp  #b10111000 #b11111110 #b10111110)
+
+   (8bit-inc-op-instr-specs :inc #b00000100 #b00110100)
+   (8bit-inc-op-instr-specs :dec #b00000101 #b00110101)))
 
 (defun bit-carry-cy? (bit-index a b cy)
   ;; TODO: Check up on how to check for bit-carry?
@@ -1961,73 +2002,12 @@ result in HL."
   (or (bit-borrow? bit-index a b)
       (bit-borrow? bit-index (- a b) cy)))
 
-;; INC
-;; Increment 8-bit register
-(definstr-class (#b00000100 (register *register-codes* 3)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((data (,(cpu-register-accessor-name register-key) cpu))
-       (data+ (logand #xff (1+ data))))
-      :name ,(list :inc register-key)
-      :description ,(format nil "Increment the contents of register ~A by 1." register-key)
-      :zero? (zerop data+)
-      :subtraction? nil
-      :half-carry? (half-carry? data 1)
-      ,register-key data+
-      :pc (1+ (cpu-pc cpu))
-      :cycles 1)))
-
-(definstr #b00110100 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (hl (cpu-hl cpu))
-	   (data (aref memory hl))
-	   (result (logand #xff (1+ data))))
-	  :name :inc-@hl
-	  :description "Increment the contents of the memory specified by HL."
-	  :memory ((hl result))
-	  :subtraction? nil
-	  :zero? (zerop result)
-	  :half-carry? (bit-carry? 3 data 1)
-	  :carry? (bit-carry? 7 data 1)
-	  :pc (1+ pc)
-	  :cycles 3)
 
 (defun half-borrow? (a b)
   ;; TODO: check if this is right.
   (let* ((half-a (logand #xf a))
 	 (half-b (logand #xf b)))
     (< half-a half-b)))
-
-;; DEC
-;; decrement 8-bit register
-(definstr-class (#b00000101 (register *register-codes* 3)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((data (,(cpu-register-accessor-name register-key) cpu))
-       (data- (logand #xff (1- data))))
-      :name ,(list :dec register-key)
-      :description ,(format nil "decrement the contents of register ~A by 1." register-key)
-      :zero? (zerop data-)
-      :subtraction? t
-      :half-carry? (half-borrow? data 1)
-      ,register-key data-
-      :pc (1+ (cpu-pc cpu))
-      :cycles 1)))
-
-(definstr #b00110101 (cpu memory)
-	  ((pc (cpu-pc cpu))
-	   (hl (cpu-hl cpu))
-	   (data (aref memory hl))
-	   (result (logand #xff (- data 1))))
-
-	  :name :dec-@hl
-	  :description "Decrement the contents of the memory 
-specified by HL."
-	  :memory ((hl result))
-	  :carry? (bit-borrow? 8 data 1)
-	  :half-carry? (bit-borrow? 4 data 1)
-	  :subtraction? t
-	  :zero? (zerop result)
-	  :pc (+ pc 1)
-	  :cycles 3)
 
 ;; S2.4
 (definstr-class (#b00000011 (register-pair *register-pair-codes* 4)) (cpu memory)
@@ -2204,7 +2184,7 @@ To Push: decrement SP, then copy byte to SP."
 		(append
 		 (ld-8bit-instr-specs)
 		 (ld-16bit-instr-specs)
-		 (alu-instr-specs))))
+		 (8bit-alu-instr-specs))))
   
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
