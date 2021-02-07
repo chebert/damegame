@@ -2009,16 +2009,84 @@ result in HL."
 	 (half-b (logand #xf b)))
     (< half-a half-b)))
 
+(defun 16bit-add-instr-spec (opcode contents-key &key 
+						   (pc-name 'pc)
+						   (cpu-name 'cpu)
+						   (memory-name 'memory))
+  (merge-instr-specs
+   (instr-spec-defaults :cpu-name cpu-name
+			:memory-name memory-name
+			:pc-name pc-name
+			:opcode opcode
+			:cycles 2)
+   (alist
+    :bindings `((hl (cpu-hl ,cpu-name))
+		(data ,(compile-key-accessor contents-key))
+		(result (logand #xffff (+ hl data))))
+    :name (list :add :hl contents-key)
+    :description (format nil "Add HL to ~A. Store the result in HL."
+			 (key-description contents-key))
+    :pc `(+ 1 ,pc-name)
+    :hl 'result
+    :carry? `(bit-carry? 15 hl data)
+    :half-carry? `(bit-carry? 11 hl data)
+    :subtraction? nil)))
+
+(defun 16-bit-inc-op-instr-spec (opcode inc-op-key contents-key)
+  (merge-instr-specs
+   (instr-spec-defaults :opcode opcode
+			:cycles 2)
+   (alist :bindings `((data ,(compile-key-accessor contents-key))
+		      (result (logand #xffff (,(ecase inc-op-key
+						 (:inc '1+)
+						 (:dec '1-))
+					       data))))
+	  :name (list :inc contents-key)
+	  :decsription (format nil "~A the contents of ~A."
+			       (ecase inc-op-key
+				 (:inc "Increment")
+				 (:dec "Decrement"))
+			       (key-description contents-key))
+	  contents-key 'result
+	  :pc '(1+ pc))))
+
 ;; S2.4
-(definstr-class (#b00000011 (register-pair *register-pair-codes* 4)) (cpu memory)
-  (let* ((combined-key (dd-register-pair-key register-pair)))
-    `(((pc (cpu-pc cpu))
-       (data (,(cpu-register-accessor-name combined-key) cpu)))
-      :name ,(list :inc combined-key)
-      :description ,(format nil "Increment the contents of register pair ~A" combined-key)
-      ,combined-key (1+ data)
-      :pc (1+ pc)
-      :cycles 2)))
+(defun 16bit-alu-op-instr-specs ()
+  (append
+   ;; ADD HL, ss
+   (map-opcodes
+    (lambda (opcode register-pair)
+      (16bit-add-instr-spec opcode (dd-register-pair-key register-pair)))
+    #b00001001 (alist 4 *register-pair-codes*))
+   (list
+    ;; ADD SP, imm8
+    (merge-instr-specs
+     (instr-spec-defaults :opcode #b11101000
+			  :cycles 4)
+     (imm8-instr-spec)
+     (alist
+      :bindings `((sp (cpu-sp cpu))
+		  (result (logand #xffff (+ sp imm8))))
+      :name (list :add :sp :imm8)
+      :description "Add SP to the imm8 operand. Store the result in SP."
+      :pc '(+ 2 pc)
+      :sp 'result
+      :zero? nil
+      :carry? `(bit-carry? 15 sp imm8)
+      :half-carry? `(bit-carry? 11 sp imm8)
+      :subtraction? nil)))
+
+   ;; INC ss
+   (map-opcodes
+    (lambda (opcode register-pair)
+      (16-bit-inc-op-instr-spec opcode :inc (dd-register-pair-key register-pair)))
+    #b00000011 (alist 4 *register-pair-codes*))
+
+   ;; DEC ss
+   (map-opcodes
+    (lambda (opcode register-pair)
+      (16-bit-inc-op-instr-spec opcode :dec (dd-register-pair-key register-pair)))
+    #b00001011 (alist 4 *register-pair-codes*))))
 
 (defun bit7? (byte)
   (not (zerop (logand #x80 byte))))
@@ -2184,7 +2252,8 @@ To Push: decrement SP, then copy byte to SP."
 		(append
 		 (ld-8bit-instr-specs)
 		 (ld-16bit-instr-specs)
-		 (8bit-alu-instr-specs))))
+		 (8bit-alu-instr-specs)
+		 (16bit-alu-op-instr-specs))))
   
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
