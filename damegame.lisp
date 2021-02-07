@@ -2093,21 +2093,44 @@ result in HL."
 (defun cpu-carry-bit (cpu)
   (if (cpu-carry? cpu) 1 0))
 
-;; S2.5
-;; Rotate left contents of A
-(definstr #x17 (cpu memory) ((pc (cpu-pc cpu))
-			     (a (cpu-a cpu))
-			     (rla (rotate-left a (cpu-carry-bit cpu))))
-	  :name :rla
-	  :description "Rotate the contents of register A to the left,
-through the carry (CY) flag."
-	  :zero? nil
-	  :subtraction? nil
-	  :half-carry? nil
-	  :carry? (bit7? a)
-	  :cycles 1
-	  :a rla
-	  :pc (1+ pc))
+;; S 2.5
+(defun rotate-shift-instr-specs ()
+  ;; RLCA
+  (append
+   (list
+    (merge-instr-specs
+     (instr-spec-defaults :opcode #b00000111
+			  :cycles 1)
+     (alist :bindings '((a (cpu-a cpu))
+			(bit7? (bit7? a))
+			(bit7 (if bit7? 1 0))
+			(result (+ (ash a 1) bit7)))
+	    :name :rlca
+	    :description "Rotate the contents of A to the left 1 bit,
+placing the 7th bit of A in the 0th bit of A and the carry bit."
+	    :pc '(1+ pc)
+	    :carry? 'bit7?
+	    :half-carry? nil
+	    :a 'result
+	    :zero? nil
+	    :subtraction? nil)))
+
+   ;; RLA
+   (list
+    (merge-instr-specs
+     (instr-spec-defaults :opcode #b00010111
+			  :cycles 1)
+     (alist :bindings '((a (cpu-a cpu))
+			(result (+ (ash a 1) (cpu-carry-bit cpu))))
+	    :name :rlc
+	    :description "Rotate the contents of A to the left 1 bit,
+placing the carry bit in the 0th bit of A, and setting the carry bit to the 7th bit of A."
+	    :pc '(1+ pc)
+	    :carry? '(bit7? a)
+	    :half-carry? nil
+	    :a 'result
+	    :zero? nil
+	    :subtraction? nil)))))
 
 (definstr-class (#b00010000 (register *register-codes* 0)) (cpu memory)
   (let ((register-key (register-key register)))
@@ -2253,7 +2276,8 @@ To Push: decrement SP, then copy byte to SP."
 		 (ld-8bit-instr-specs)
 		 (ld-16bit-instr-specs)
 		 (8bit-alu-instr-specs)
-		 (16bit-alu-op-instr-specs))))
+		 (16bit-alu-op-instr-specs)
+		 (rotate-shift-instr-specs))))
   
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
