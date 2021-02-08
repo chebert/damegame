@@ -1606,12 +1606,22 @@ Test-fn and handle-fn are both functions of event."
    :bindings `((,imm16-name (combined-register (aref ,memory-name (+ 2 ,pc-name)) (aref ,memory-name (1+ ,pc-name)))))
    :disassembly `(alist :imm16 (register16-text ,imm16-name))))
 
-(defun instr-spec-defaults (&key (cpu-name 'cpu) (memory-name 'memory) (pc-name 'pc) opcode cycles)
+(defun instr-spec-defaults (&key name description instr-size long?
+			      (cpu-name 'cpu) (memory-name 'memory) (pc-name 'pc) opcode cycles disassembly)
   (amerge
    (alist
     :cpu-name cpu-name
     :memory-name memory-name
-    :bindings `((,pc-name (cpu-pc ,cpu-name))))
+    :bindings `((,pc-name (cpu-pc ,cpu-name)))
+    :long? long?)
+   (when instr-size
+     (alist :pc `(+ ,pc-name ,instr-size)))
+   (when name
+     (alist :name name))
+   (when description
+     (alist :description description))
+   (when disassembly
+     (alist :disassembly disassembly))
    (when opcode
      (alist :opcode opcode))
    (when cycles
@@ -2093,63 +2103,181 @@ result in HL."
 (defun cpu-carry-bit (cpu)
   (if (cpu-carry? cpu) 1 0))
 
-;; S 2.5
-(defun rotate-shift-instr-specs ()
-  ;; RLCA
+(defun a-binding (&key (cpu-name 'cpu) (a-name 'a))
+  (alist :bindings `((,a-name (cpu-a ,cpu-name)))))
+(defun pc-next-instr (&key (instr-size 1) (pc-name 'pc))
+  (alist :pc `(+ ,instr-size ,pc-name)))
+
+(defun rotate-flags (bit-set?-form &optional zero-form?)
+  (alist :carry? bit-set?-form
+	 :half-carry? nil
+	 :zero? zero-form?
+	 :subtraction? nil))
+(defun bit-set? (bit-index byte)
+  (not (zerop (logand (ash 1 bit-index) byte))))
+
+(defun rotate-bindings (bit-index &key bit-name (byte-name 'a) (bit?-name 'bit?))
+  (alist :bindings `((,bit?-name (bit-set? ,bit-index ,byte-name))
+		     ,@(when bit-name
+			 `((,bit-name (if ,bit?-name 1 0)))))))
+
+(defun rc-description (key direction)
+  (let* ((description (key-description key)))
+    (format nil "Rotate the contents of ~A to the ~A 1 bit,
+placing the ~Ath bit of ~A into the ~Ath bit of ~A and the into carry bit."
+	    description
+	    (ecase direction
+	      (:left "left")
+	      (:right "right"))
+	    (ecase direction
+	      (:left 7)
+	      (:right 0))
+	    description
+	    (ecase direction
+	      (:left 0)
+	      (:right 7))
+	    description)))
+(defun rotate-description (key direction)
+  (let* ((description (key-description key)))
+    (format nil "Rotate the contents of ~A to the ~A 1 bit,
+placing the carry bit in the ~Ath bit of ~A, and setting the carry bit to the ~Ath bit of ~A."
+	    description
+	    (ecase direction
+	      (:left "left")
+	      (:right "right"))
+	    (ecase direction
+	      (:left 0)
+	      (:right 7))
+	    description
+	    (ecase direction
+	      (:left 7)
+	      (:right 0))
+	    description)))
+
+(defun data-bindings (key &key (data-name 'data))
+  (alist :bindings `((,data-name ,(compile-key-accessor key)))))
+
+(defun result-bindings (form &key (result-name 'result))
+  (alist :bindings `((,result-name ,form))))
+
+(defun rlc-bindings (key &key (data-name 'data) (bit-name 'bit) (bit?-name 'bit?) (result-name 'result))
+  (merge-instr-specs
+   (data-bindings key :data-name data-name)
+   (rotate-bindings 7 :bit-name bit-name :bit?-name bit?-name :byte-name data-name)
+   (result-bindings `(logior (ash ,data-name 1) ,bit-name) :result-name result-name)))
+(defun rlc-instr-spec (key &optional zero?)
+  (merge-instr-specs
+   (alist :description (rc-description key :left))
+   (rlc-bindings key)
+   (key-set-instr-spec key 'result)
+   (rotate-flags 'bit? (when zero? '(zerop result)))))
+
+
+(defun rl-bindings (key &key (cpu-name 'cpu) (data-name 'data) (bit?-name 'bit?) (result-name 'result))
+  (merge-instr-specs
+   (data-bindings key :data-name data-name)
+   (rotate-bindings 7 :bit?-name bit?-name :byte-name data-name)
+   (result-bindings `(logior (ash ,data-name 1) (cpu-carry-bit ,cpu-name))
+		    :result-name result-name)))
+(defun rl-instr-spec (key &optional zero?)
+  (merge-instr-specs
+   (alist :description (rotate-description key :left))
+   (rl-bindings key)
+   (key-set-instr-spec key 'result)
+   (rotate-flags 'bit? (when zero? '(zerop result)))))
+
+
+
+(defun rrc-bindings (key &key (data-name 'data) (bit-name 'bit) (bit?-name 'bit?) (result-name 'result))
+  (merge-instr-specs
+   (data-bindings key :data-name data-name)
+   (rotate-bindings 0 :bit-name bit-name :bit?-name bit?-name :byte-name data-name)
+   (result-bindings `(logior (ash ,data-name -1) (ash ,bit-name 7)) :result-name result-name)))
+(defun rrc-instr-spec (key &optional zero?)
+  (merge-instr-specs
+   (alist :description (rc-description key :right))
+   (rrc-bindings key)
+   (key-set-instr-spec key 'result)
+   (rotate-flags 'bit? (when zero? '(zerop result)))))
+
+
+(defun rr-bindings (key &key (cpu-name 'cpu) (data-name 'data) (bit?-name 'bit?) (result-name 'result))
+  (merge-instr-specs
+   (data-bindings key :data-name data-name)
+   (rotate-bindings 0 :bit?-name bit?-name :byte-name data-name)
+   (result-bindings `(logior (ash ,data-name -1) (ash (cpu-carry-bit ,cpu-name) 7))
+		    :result-name result-name)))
+(defun rr-instr-spec (key &optional zero?)
+  (merge-instr-specs
+   (alist :description (rotate-description key :right))
+   (rr-bindings key)
+   (key-set-instr-spec key 'result)
+   (rotate-flags 'bit? (when zero? '(zerop result)))))
+
+(defun rotate-group-instr-specs (ra-name ra-opcode name r-opcode-template instr-spec-fn hl-opcode)
   (append
    (list
+    ;; R a
     (merge-instr-specs
-     (instr-spec-defaults :opcode #b00000111
-			  :cycles 1)
-     (alist :bindings '((a (cpu-a cpu))
-			(bit7? (bit7? a))
-			(bit7 (if bit7? 1 0))
-			(result (+ (ash a 1) bit7)))
-	    :name :rlca
-	    :description "Rotate the contents of A to the left 1 bit,
-placing the 7th bit of A in the 0th bit of A and the carry bit."
-	    :pc '(1+ pc)
-	    :carry? 'bit7?
-	    :half-carry? nil
-	    :a 'result
-	    :zero? nil
-	    :subtraction? nil)))
+     (instr-spec-defaults :opcode ra-opcode
+			  :cycles 1
+			  :name ra-name
+			  :instr-size 1)
+     (funcall instr-spec-fn :a)))
 
-   ;; RLA
+   ;; R r
+   (map-opcodes
+    (lambda (opcode register)
+      (let* ((key (register-key register)))
+	(merge-instr-specs
+	 (instr-spec-defaults
+	  :opcode opcode
+	  :cycles 2
+	  :name (list name key)
+	  :instr-size 2
+	  :long? t)
+	 (funcall instr-spec-fn key t))))
+    r-opcode-template (alist 0 *register-codes*))
+
    (list
-    (merge-instr-specs
-     (instr-spec-defaults :opcode #b00010111
-			  :cycles 1)
-     (alist :bindings '((a (cpu-a cpu))
-			(result (+ (ash a 1) (cpu-carry-bit cpu))))
-	    :name :rlc
-	    :description "Rotate the contents of A to the left 1 bit,
-placing the carry bit in the 0th bit of A, and setting the carry bit to the 7th bit of A."
-	    :pc '(1+ pc)
-	    :carry? '(bit7? a)
-	    :half-carry? nil
-	    :a 'result
-	    :zero? nil
-	    :subtraction? nil)))))
+    ;; R (HL)
+    (let* ((key :@hl))
+      (merge-instr-specs
+       (instr-spec-defaults
+	:opcode hl-opcode
+	:cycles 4
+	:name (list name key)
+	:instr-size 2
+	:long? t)
+       (funcall instr-spec-fn key t))))))
 
-(definstr-class (#b00010000 (register *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register)))
-    `(((pc (cpu-pc cpu))
-       (data (,(cpu-register-accessor-name register-key) cpu))
-       (result (rotate-left data (cpu-carry-bit cpu))))
-      :name ,(list :rl register-key)
-      :description ,(format nil "Rotate the contents of register ~A to the left. 
-That is, the contents of bit 0 are copied to bit 1,
-and the previous contents of bit 1 are copied to bit 2.
-The previous contents of the carry (CY) flag
-are copied to bit 0 of register ~A." register-key register-key)
-      :zero? (zerop result)
-      :carry? (bit7? data)
-      :subtraction? nil
-      :half-carry? nil
-      ,register-key result
-      :pc (+ pc 2)
-      :cycles 2)))
+;; S 2.5
+(defun rotate-shift-instr-specs ()
+  (append
+   ;; RLCA, RLC r, RLC (HL)
+   (rotate-group-instr-specs :rlca #b00000111
+			     :rlc #b00000000
+			     'rlc-instr-spec
+			     #b00000110)
+
+   ;; RLA, RL r, RL (HL)
+   (rotate-group-instr-specs :rla #b00010111
+			     :rl #b00010000
+			     'rl-instr-spec
+			     #b00010110)
+
+   ;; RRCA, RRC r, RRC (HL)
+   (rotate-group-instr-specs :rrca #b00001111
+			     :rrc #b00001000
+			     'rrc-instr-spec
+			     #b00001110)
+
+   ;; RRA, RR r, RR (HL)
+   (rotate-group-instr-specs :rra #b00011111
+			     :rr #b00011000
+			     'rr-instr-spec
+			     #b00011110)))
+
 
 ;; S2.6
 ;; Test complement of (bit of 8-bit register) into zero flag
@@ -2254,9 +2382,9 @@ To Push: decrement SP, then copy byte to SP."
 (defun break? (cpu memory)
   (some (fn (funcall % cpu memory)) (mapcar 'cdr *breakpoints*)))
 
-(defbreakpoint past-first-loop (cpu memory)
-  (let* ((pc (cpu-pc cpu)))
-    (< #x0a pc)))
+(undefbreakpoint past-first-loop (cpu memory)
+		 (let* ((pc (cpu-pc cpu)))
+		   (< #x0a pc)))
 
 
 (defun compile-disassemble-instr-spec (instr-spec)
