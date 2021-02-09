@@ -2350,21 +2350,69 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       (logand (- #xff (ash 1 bit-index)) byte)))
 
 ;; S2.6
-;; Test complement of (bit of 8-bit register) into zero flag
-;; Bit bit-index, r8
-(deflong-instr-class (#b01000000 (bit-index *bit-indices* 3) (register-code *register-codes* 0)) (cpu memory)
-  (let ((register-key (register-key register-code)))
-    `(((pc (cpu-pc cpu))
-       (bit-mask ,(expt 2 bit-index)))
+(defun map-bit-opcodes (fn opcode-template)
+  (map-opcodes 
+   (lambda (opcode bit-index register)
+     (let* ((key (register-key register)))
+       (funcall fn opcode bit-index key)))
+   opcode-template (alist 0 *register-and-@hl-codes*
+			  3 *bit-indices*)))
 
-      :name ,(list :bit bit-index register-key)
-      :description ,(format nil "Copy the complement of the contents of bit ~A in
-register ~A to the Zero flag." bit-index register-key)
-      :zero? (zerop (logand (,(cpu-register-accessor-name register-key) cpu) bit-mask))
-      :subtraction? nil
-      :half-carry? t
-      :pc (+ pc 2)
-      :cycles 2)))
+(defun bit-description (bit-index key)
+  (format nil "Copies the complement of bit ~A of ~A into the zero flag."
+	  bit-index (key-description key)))
+
+(defun set-description (bit-index key)
+  (format nil "Sets the bit ~A of ~A to be 1."
+	  bit-index (key-description key)))
+(defun res-description (bit-index key)
+  (format nil "Sets the bit ~A of ~A to be 0."
+	  bit-index (key-description key)))
+
+(defun bit-instr-spec (name description-fn opcode bit-index key)
+  (merge-instr-specs
+   (instr-spec-defaults
+    :opcode opcode
+    :name (list name bit-index key)
+    :description (funcall description-fn bit-index key))
+   (long-instr-size)
+   (data-bindings key)))
+
+(defun bit-set-instr-spec (name description-fn bit-value opcode bit-index key)
+  (merge-instr-specs
+   (instr-spec-defaults
+    :opcode opcode
+    :name (list name bit-index key)
+    :description (funcall description-fn bit-index key))
+   (long-instr-size)
+   (data-bindings key)
+   (alist :cycles (if (eql key :@hl) 4 2))
+   (key-set-instr-spec key `(bit-set ,bit-index data ,bit-value))))
+
+(defun bit-instr-specs ()
+  (append
+   ;; BIT b r, BIT b (HL)
+   (map-bit-opcodes
+    (lambda (opcode bit-index key)
+      (merge-instr-specs
+       (bit-instr-spec :bit 'bit-description opcode bit-index key)
+       (alist :cycles (if (eql key :@hl) 3 2))
+       (alist :half-carry? t
+	      :subtraction? nil
+	      :zero? `(not (logbitp ,bit-index data)))))
+    #b01000000)
+
+   ;; SET b r, SET b (HL)
+   (map-bit-opcodes
+    (lambda (opcode bit-index key)
+      (bit-set-instr-spec :res 'res-description 1 opcode bit-index key))
+    #b11000000)
+
+   ;; RES b r, RES b (HL)
+   (map-bit-opcodes
+    (lambda (opcode bit-index key)
+      (bit-set-instr-spec :res 'res-description 0 opcode bit-index key))
+    #b10000000)))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defparameter *condition-codes* '(0 1 2 3))
@@ -2475,7 +2523,8 @@ To Push: decrement SP, then copy byte to SP."
 		 (ld-16bit-instr-specs)
 		 (8bit-alu-instr-specs)
 		 (16bit-alu-op-instr-specs)
-		 (rotate-shift-instr-specs))))
+		 (rotate-shift-instr-specs)
+		 (bit-instr-specs))))
   
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
