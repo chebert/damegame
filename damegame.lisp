@@ -1465,7 +1465,8 @@ Test-fn and handle-fn are both functions of event."
       (#b010 :d)
       (#b011 :e)
       (#b100 :h)
-      (#b101 :l))))
+      (#b101 :l)
+      (#b110 :@hl))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun compile-definstr-class (deflong-instr-or-definstr opcode-template opcode-parameter-bindings cpu memory instr-spec)
@@ -2214,69 +2215,53 @@ placing the carry bit in the ~Ath bit of ~A, and setting the carry bit to the ~A
    (key-set-instr-spec key 'result)
    (rotate-flags 'bit? (when zero? '(zerop result)))))
 
-(defun rotate-group-instr-specs (ra-name ra-opcode name r-opcode-template instr-spec-fn hl-opcode)
-  (append
-   (list
-    ;; R a
-    (merge-instr-specs
-     (instr-spec-defaults :opcode ra-opcode
-			  :cycles 1
-			  :name ra-name
-			  :instr-size 1)
-     (funcall instr-spec-fn :a)))
+(defparameter *register-and-@hl-codes* (list* 6 *register-codes*))
 
-   ;; R r
-   (map-opcodes
-    (lambda (opcode register)
-      (let* ((key (register-key register)))
-	(merge-instr-specs
-	 (instr-spec-defaults
-	  :opcode opcode
-	  :cycles 2
-	  :name (list name key)
-	  :instr-size 2
-	  :long? t)
-	 (funcall instr-spec-fn key t))))
-    r-opcode-template (alist 0 *register-codes*))
+(defun concat (&rest things)
+  (with-output-to-string (s)
+    (loop for e in things do (format s "~A" e))))
 
-   (list
-    ;; R (HL)
-    (let* ((key :@hl))
+(defun rotate-group-instr-specs (name r-opcode-template instr-spec-fn)
+  (let* ((opcode-parameter-bindings (alist 0 *register-and-@hl-codes*))
+	 (ra-opcode (opcode-from-template r-opcode-template opcode-parameter-bindings '(7)))
+	 (ra-name (intern (concat name "A") :keyword)))
+    (append
+     (list
+      ;; R a
       (merge-instr-specs
-       (instr-spec-defaults
-	:opcode hl-opcode
-	:cycles 4
-	:name (list name key)
-	:instr-size 2
-	:long? t)
-       (funcall instr-spec-fn key t))))))
+       (instr-spec-defaults :opcode ra-opcode
+			    :cycles 1
+			    :name ra-name
+			    :instr-size 1)
+       (funcall instr-spec-fn :a)))
+
+     ;; R r, R (HL)
+     (map-opcodes
+      (lambda (opcode register)
+	(let* ((key (register-key register)))
+	  (merge-instr-specs
+	   (instr-spec-defaults
+	    :opcode opcode
+	    :cycles (if (eql key :@hl)
+			4
+			2)
+	    :name (list name key)
+	    :instr-size 2
+	    :long? t)
+	   (funcall instr-spec-fn key t))))
+      r-opcode-template opcode-parameter-bindings))))
 
 ;; S 2.5
 (defun rotate-shift-instr-specs ()
   (append
    ;; RLCA, RLC r, RLC (HL)
-   (rotate-group-instr-specs :rlca #b00000111
-			     :rlc #b00000000
-			     'rlc-instr-spec
-			     #b00000110)
-
+   (rotate-group-instr-specs :rlc #b00000000 'rlc-instr-spec)
    ;; RLA, RL r, RL (HL)
-   (rotate-group-instr-specs :rla #b00010111
-			     :rl #b00010000
-			     'rl-instr-spec
-			     #b00010110)
-
+   (rotate-group-instr-specs :rl #b00010000 'rl-instr-spec)
    ;; RRCA, RRC r, RRC (HL)
-   (rotate-group-instr-specs :rrca #b00001111
-			     :rrc #b00001000
-			     'rrc-instr-spec
-			     #b00001110)
-
+   (rotate-group-instr-specs :rrc #b00001000 'rrc-instr-spec)
    ;; RRA, RR r, RR (HL)
-   (rotate-group-instr-specs :rra #b00011111
-			     :rr #b00011000
-			     'rr-instr-spec
-			     #b00011110)))
+   (rotate-group-instr-specs :rr #b00011000 'rr-instr-spec)))
 
 
 ;; S2.6
