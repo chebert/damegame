@@ -2286,7 +2286,7 @@ Places the 0th bit of ~A into the carry-bit and leaves the 7th bit of ~A unchang
 Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 	    description description)))
 
-(defun shift-instr-specs (opcode-template name description-fn shift-bindings-fn result-form)
+(defun shift/swap-instr-specs (opcode-template name description-fn data-bindings-fn result-form flags)
   (map-rotate/shift-opcodes
    (lambda (opcode key)
      (merge-instr-specs
@@ -2294,11 +2294,14 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
        :opcode opcode
        :description (funcall description-fn key))
       (long-rotate/shift-instr-spec name key)
-      (funcall shift-bindings-fn key)
+      (funcall data-bindings-fn key)
       (result-bindings result-form)
       (key-set-instr-spec key 'result)
-      (rotate-flags 'bit? 'result)))
+      flags))
    opcode-template))
+
+(defun shift-instr-specs (opcode-template name description-fn shift-bindings-fn result-form)
+  (shift/swap-instr-specs opcode-template name description-fn shift-bindings-fn result-form (rotate-flags 'bit? 'result)))
 
 ;; S 2.5
 (defun rotate-shift-instr-specs ()
@@ -2318,12 +2321,28 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
    (shift-instr-specs #b00101000 :sra 'sra-description 'shift-right-bindings '(shift-right-arithmetic data))
 
    ;; SRL r, SRL (HL)
-   (shift-instr-specs #b00111000 :srl 'srl-description 'shift-right-bindings '(shift-right-logical data))))
+   (shift-instr-specs #b00111000 :srl 'srl-description 'shift-right-bindings '(shift-right-logical data))
+
+   ;; SWAP r, SWAP (HL)
+   (shift/swap-instr-specs #b00110000
+			   :swap
+			   (fn (format nil "Swaps the lower 4 bits with the upper 4 bits of ~A." (key-description %)))
+			   'data-bindings
+			   '(swap data)
+			   (alist :carry? nil
+				  :subtraction? nil
+				  :half-carry? nil
+				  :zero? '(zerop result)))))
 
 (defun shift-right-arithmetic (byte)
-  (logand #xff (bit-set 7 (ash byte -1) (bit-value byte 7))))
+  (bit-set 7 (ash byte -1) (bit-value byte 7)))
 (defun shift-right-logical (byte)
   (logand #x7f (ash byte -1)))
+
+(defun swap (byte)
+  (let* ((lo (logand #xf byte))
+	 (hi (ash (logand #xf0 byte) -4)))
+    (logior (ash lo 4) hi)))
 
 (defun bit-set (bit-index byte bit-value)
   (if (= 1 bit-value)
