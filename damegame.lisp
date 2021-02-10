@@ -1604,7 +1604,7 @@ Test-fn and handle-fn are both functions of event."
    :disassembly `(alist :imm8 (register8-text ,imm8-name))))
 (defun imm16-instr-spec (&key (pc-name 'pc) (memory-name 'memory) (imm16-name 'imm16))
   (alist
-   :bindings `((,imm16-name (combined-register (aref ,memory-name (+ 2 ,pc-name)) (aref ,memory-name (1+ ,pc-name)))))
+   :bindings `((,imm16-name ,(compile-16bit-memory-access `(1+ ,pc-name) :memory-name memory-name)))
    :disassembly `(alist :imm16 (register16-text ,imm16-name))))
 
 (defun instr-spec-defaults (&key name description instr-size long?
@@ -2405,7 +2405,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
    ;; SET b r, SET b (HL)
    (map-bit-opcodes
     (lambda (opcode bit-index key)
-      (bit-set-instr-spec :res 'res-description 1 opcode bit-index key))
+      (bit-set-instr-spec :set 'res-description 1 opcode bit-index key))
     #b11000000)
 
    ;; RES b r, RES b (HL)
@@ -2414,33 +2414,124 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       (bit-set-instr-spec :res 'res-description 0 opcode bit-index key))
     #b10000000)))
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defparameter *condition-codes* '(0 1 2 3))
-  (defun compile-condition-code-test (condition-code cpu-name)
-    (ecase condition-code
-      ((0 :nz) `(not (cpu-zero? ,cpu-name)))
-      ((1 :z) `(cpu-zero? ,cpu-name))
-      ((2 :c) `(cpu-carry? ,cpu-name))
-      ((3 :nc) `(not (cpu-carry? ,cpu-name))))))
+(defparameter *condition-codes* '(0 1 2 3))
+(defun condition-key (condition-code)
+  (ecase condition-code
+    (0 :not-zero?)
+    (1 :zero?)
+    (2 :carry?)
+    (3 :not-carry?)))
+(defun compile-condition-key-test (condition-key cpu-name)
+  (ecase condition-key
+    (:not-zero? `(not (cpu-zero? ,cpu-name)))
+    (:zero? `(cpu-zero? ,cpu-name))
+    (:carry? `(cpu-carry? ,cpu-name))
+    (:not-carry? `(not (cpu-carry? ,cpu-name)))))
+
+
+(defun condition-key-description (condition-key)
+  (ecase condition-key
+    (:zero? "the zero? flag is set")
+    (:not-zero? "the zero? flag is not set")
+    (:carry? "the carry? flag is set")
+    (:not-carry? "the carry? flag is not set")))
+
+(defun jump-conditionally-instr-spec (condition-key instr-size addr-form min-cycles)
+  (alist :bindings `((condition? ,(compile-condition-key-test condition-key 'cpu)))
+	 :pc `(if condition? ,addr-form (+ pc ,instr-size))
+	 :cycles `(+ ,min-cycles
+		     (if condition? 1 0))))
+
+(defun map-jump-conditional-opcodes (fn opcode-template)
+  (map-opcodes
+   (lambda (opcode condition-code)
+     (funcall fn opcode (condition-key condition-code)))
+   opcode-template (alist 3 *condition-codes*)))
+
+(defun compile-16bit-memory-access (addr-form &key (memory-name 'memory))
+  (let* ((addr (gensym)))
+    `(let* ((,addr ,addr-form))
+       (combined-register (aref ,memory-name (1+ ,addr)) (aref ,memory-name ,addr)))))
+(defun compile-imm16-access (&key (pc-name 'pc) (memory-name 'memory))
+  (compile-16bit-memory-access `(1+ ,pc-name) :memory-name memory-name))
+
+(defun relative-addr-instr-spec ()
+  (merge-instr-specs
+   (imm8-instr-spec)
+   (alist :bindings '((s8 (s8 imm8))
+		      (addr (+ 2 pc s8)))
+	  :disassembly '(alist :imm8 imm8
+			 :s8 s8
+			 :addr addr))))
 
 ;; S2.7
-;; Jump relative on condition
-(definstr-class (#b00100000 (condition-code *condition-codes* 3)) (cpu memory)
-  `(((pc (cpu-pc cpu))
-     (cc? ,(compile-condition-code-test condition-code 'cpu))
-     (offset (s8 (aref memory (1+ pc))))
-     (destination (+ 2 pc offset)))
-    :name ,(list :jr condition-code :s8)
-    :description ,(format nil "If the condition code ~A is true,
-jump s8 steps from the current address stored in PC.
-If not, the instruction following the current JP
-instruction is executed (as usual)." condition-code)
-    :disassembly (alist :s8 offset :addr (register16-text destination))
-    :jump? cc?
-    :pc (if cc?
-	    destination
-	    (+ 2 pc))
-    :cycles (if cc? 3 2)))
+(defun jump-instr-specs ()
+  (append
+   (list
+    ;; JP nn
+    (merge-instr-specs
+     (instr-spec-defaults
+      :name :jp-imm16
+      :description "Load the imm16 value into the PC."
+      :opcode #b11000011
+      :cycles 4)
+     (imm16-instr-spec)
+     (key-set-instr-spec :pc 'imm16)))
+
+   ;; JP cc, nn
+   (map-jump-conditional-opcodes
+    (lambda (opcode condition-key)
+      (merge-instr-specs
+       (instr-spec-defaults
+	:name (list :jp condition-key :imm16)
+	:description (format nil "Load the imm16 value into the PC if ~A."
+			     (condition-key-description condition-key))
+	:opcode opcode)
+       (alist :disassembly `(alist :imm16 ,(compile-imm16-access)))
+       (jump-conditionally-instr-spec condition-key 3 (compile-imm16-access) 3)))
+    #b11000010)
+
+   (list
+    ;; JR imm8
+    (merge-instr-specs
+     (instr-spec-defaults
+      :name :jr-imm8
+      :description "Load the signed imm8 value+PC+2 into the PC."
+      :opcode #b00011000
+      :cycles 3)
+     (relative-addr-instr-spec)
+     (alist :pc 'addr)))
+
+   ;; JR cc imm8
+   (map-jump-conditional-opcodes
+    (lambda (opcode condition-key)
+      (merge-instr-specs
+       (instr-spec-defaults
+	:name (list :jr condition-key :imm8)
+	:description (format nil "Load the signed imm8 value+PC+2 into PC if ~A."
+			     (condition-key-description condition-key))
+	:opcode opcode)
+       ;; TODO: optimize by only accessing memory if condition? is true
+       (relative-addr-instr-spec)
+       (jump-conditionally-instr-spec condition-key 2 'addr 2)))
+    #b00100000)
+
+   (list
+    ;; JP (HL)
+    (merge-instr-specs
+     (instr-spec-defaults
+      :name :jp-@hl
+      :description "Copy HL into PC."
+      :opcode #b11101001
+      :instr-size 1
+      :cycles 1)
+     (alist :pc '(cpu-hl cpu))))))
+
+
+;; TODO: use dynamic variables for names (instead of passing them in as parameters)
+;; TODO: make disassembly (alist key 'form key2 'form2) instead of '(alist key form key2 form2)
+;;   and let merge-instr-specs append to disassembly (instead of replacing) 
+
 
 ;; S2.8
 ;; Call immediate
