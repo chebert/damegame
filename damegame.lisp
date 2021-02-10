@@ -158,58 +158,57 @@ Removes events from the queue."
 	  vs)
     result))
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun alist (&rest plist)
-    "Create an association list ((id . value) (id2 . value2)...)
+(defun alist (&rest plist)
+  "Create an association list ((id . value) (id2 . value2)...)
 From the plist (id value id2 value2 ...)"
-    (nlet rec ((plist plist)
-	       (result ()))
-      (if plist
-	  (let ((key (first plist))
-		(value (second plist))
-		(rest (rest (rest plist))))
-	    (rec rest (acons key value result)))
-	  result)))
-  (defun aval (key alist &optional not-present)
-    "Get the value from the alist assuming it is there. Returns not-present if it isn't."
-    (let ((pair (assoc key alist)))
-      (if pair
-	  (cdr pair)
-	  not-present)))
-  (defun aremove (alist &rest keys)
-    "Return a new alist with keys removed from alist."
-    (remove-if (fn (member % keys))
-	       alist
-	       :key 'car))
-  (defun akeep (alist &rest keys)
-    (remove-if-not (fn (member % keys))
-		   alist
-		   :key 'car))
-  (defun aset (key value alist)
-    "Return a new alist with the value associated with key added or replaced."
-    (acons key value (aremove alist key)))
-  (defun akeys (alist)
-    "Return a list of all keys in alist."
-    (mapcar 'car alist))
-  (defun amerge (old &rest new-alists)
-    "Return a new alist with the keys of old and new, where conflicts favor the newer alist."
-    (if new-alists
-	(let* ((new (first new-alists)))
-	  (apply 'amerge
-		 
-		 ;; => ((:C . 3) (:B . 2) (:D . 5) (:A . 2) ((:E . 6) (:C . 4)))
-		 (nconc (apply 'aremove old (akeys new))
-			new)
-		 (rest new-alists)))
-	old))
-  (defun amap (fn alist)
-    "Apply fn to each key and value of alist returning a list of the results."
-    (mapcar (fn (funcall fn (car %) (cdr %)))
-	    alist))
-  (defun akey? (key alist)
-    (member key alist :key 'car))
-  (defmacro asetq (id value alist-name)
-    `(setq ,alist-name (aset ,id ,value ,alist-name))))
+  (nlet rec ((plist plist)
+	     (result ()))
+    (if plist
+	(let ((key (first plist))
+	      (value (second plist))
+	      (rest (rest (rest plist))))
+	  (rec rest (acons key value result)))
+	result)))
+(defun aval (key alist &optional not-present)
+  "Get the value from the alist assuming it is there. Returns not-present if it isn't."
+  (let ((pair (assoc key alist)))
+    (if pair
+	(cdr pair)
+	not-present)))
+(defun aremove (alist &rest keys)
+  "Return a new alist with keys removed from alist."
+  (remove-if (fn (member % keys))
+	     alist
+	     :key 'car))
+(defun akeep (alist &rest keys)
+  (remove-if-not (fn (member % keys))
+		 alist
+		 :key 'car))
+(defun aset (key value alist)
+  "Return a new alist with the value associated with key added or replaced."
+  (acons key value (aremove alist key)))
+(defun akeys (alist)
+  "Return a list of all keys in alist."
+  (mapcar 'car alist))
+(defun amerge (old &rest new-alists)
+  "Return a new alist with the keys of old and new, where conflicts favor the newer alist."
+  (if new-alists
+      (let* ((new (first new-alists)))
+	(apply 'amerge
+	       
+	       ;; => ((:C . 3) (:B . 2) (:D . 5) (:A . 2) ((:E . 6) (:C . 4)))
+	       (nconc (apply 'aremove old (akeys new))
+		      new)
+	       (rest new-alists)))
+      old))
+(defun amap (fn alist)
+  "Apply fn to each key and value of alist returning a list of the results."
+  (mapcar (fn (funcall fn (car %) (cdr %)))
+	  alist))
+(defun akey? (key alist)
+  (member key alist :key 'car))
+(defmacro asetq (id value alist-name)
+  `(setq ,alist-name (aset ,id ,value ,alist-name)))
 
 ;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
 ;; something like a binary tree may be better
@@ -1032,9 +1031,6 @@ Test-fn and handle-fn are both functions of event."
 	  (* 2 half-carry)
 	  carry))
 
-(defun half-carry? (a b)
-  (not (zerop (logand #x10 (+ (logand #xf a) (logand #xf b))))))
-
 (defun long-instr? (byte1)
   (eql byte1 #xcb))
 
@@ -1139,8 +1135,7 @@ Test-fn and handle-fn are both functions of event."
   '(:a :b :c :d :e :f :h :l :af :bc :de :hl :sp :pc))
 (defparameter *flag-keys*
   '(:zero? :subtraction? :half-carry? :carry?))
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defparameter *register8-keys* '(:a :b :c :d :e :f :h :l)))
+(defparameter *register8-keys* '(:a :b :c :d :e :f :h :l))
 (defparameter *register16-keys* '(:af :bc :de :hl :sp :pc))
 
 (defun instr-affected-keys (instr-effects)
@@ -1223,307 +1218,211 @@ Test-fn and handle-fn are both functions of event."
   (add-mouse-pos-drawing!))
 
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defvar *instrs* ())
-  (defvar *long-instrs* ())
+(defvar *instrs* ())
+(defvar *long-instrs* ())
 
-  (defun compile-instr-effects (instr-cpu-name instr-memory-name bindings effects)
-    `(lambda (,instr-cpu-name ,instr-memory-name)
-       (declare (ignorable ,instr-cpu-name ,instr-memory-name))
-       (let* ,bindings
-	 (alist ,@(apply 'nconc (amap (fn (list % %%)) (aremove effects :memory)))
-		,@(let ((memory (aval :memory effects)))
-		    (list :memory (cons 'list (mapcar (fn (cons 'list %)) memory))))))))
+(defun compile-instr-effects (instr-cpu-name instr-memory-name bindings effects)
+  `(lambda (,instr-cpu-name ,instr-memory-name)
+     (declare (ignorable ,instr-cpu-name ,instr-memory-name))
+     (let* ,bindings
+       (alist ,@(apply 'nconc (amap (fn (list % %%)) (aremove effects :memory)))
+	      ,@(let ((memory (aval :memory effects)))
+		  (list :memory (cons 'list (mapcar (fn (cons 'list %)) memory))))))))
 
-  (defun compile-disassemble-instr (instr-cpu-name instr-memory-name bindings disassembly)
-    (let ((cpu-name (gensym))
-	  (memory-name (gensym)))
-      `(lambda (,cpu-name ,memory-name)
-	 (let* ((,instr-cpu-name ,cpu-name)
-		(,instr-memory-name ,memory-name))
-	   (declare (ignorable ,instr-cpu-name ,instr-memory-name))
-	   (let* ,bindings
-	     (declare (ignorable ,@(mapcar 'first bindings) ))
-	     ,disassembly)))))
+(defun compile-disassemble-instr (instr-cpu-name instr-memory-name bindings disassembly)
+  (let ((cpu-name (gensym))
+	(memory-name (gensym)))
+    `(lambda (,cpu-name ,memory-name)
+       (let* ((,instr-cpu-name ,cpu-name)
+	      (,instr-memory-name ,memory-name))
+	 (declare (ignorable ,instr-cpu-name ,instr-memory-name))
+	 (let* ,bindings
+	   (declare (ignorable ,@(mapcar 'first bindings) ))
+	   ,disassembly)))))
 
-  (defun compile-definstr (whole byte cpu-name memory-name bindings cycles disassembly pc alist-name)
-    (unless pc
-      (warn "PC should be provided"))
-    (unless cycles
-      (warn "CYCLES should be provided"))
-    (let* ((properties (apply 'alist (rest (rest (rest (rest whole))))))
-	   (effects (aremove properties :name :description :disassembly)))
-      `(eval-when (:compile-toplevel :load-toplevel :execute)
-	 (asetq ',byte (alist :cpu-name ',cpu-name
-			      :memory-name ',memory-name
-			      :bindings ',bindings
-			      :byte ',byte
-			      :instr-effects ,(compile-instr-effects cpu-name memory-name bindings effects)
-			      :disassemble-instr ,(compile-disassemble-instr cpu-name memory-name bindings disassembly)
-			      ,@ (apply 'nconc (amap (fn `(,% ',%%)) properties)))
-		,alist-name))))
+(defun compile-execute ()
+  (let ((cpu-name (gensym "CPU"))
+	(memory-name (gensym "MEMORY"))
+	(pc-name (gensym "PC")))
+    `(defun execute! (,cpu-name ,memory-name)
+       (let ((,pc-name (cpu-pc ,cpu-name)))
+	 (ecase (aref ,memory-name ,pc-name)
+	   ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *instrs*)
+	   (#xcb
+	    ;; TODO: optimize pc-access
+	    (ecase (aref ,memory-name (1+ ,pc-name))
+	      ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *long-instrs*))))))))
 
-  (defun compile-execute ()
-    (let ((cpu-name (gensym "CPU"))
-	  (memory-name (gensym "MEMORY"))
-	  (pc-name (gensym "PC")))
-      `(defun execute! (,cpu-name ,memory-name)
-	 (let ((,pc-name (cpu-pc ,cpu-name)))
-	   (ecase (aref ,memory-name ,pc-name)
-	     ,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *instrs*)
-	     (#xcb
-	      ;; TODO: optimize pc-access
-	      (ecase (aref ,memory-name (1+ ,pc-name))
-		,@(amap (fn (list % (compile-instr-spec-for-execute cpu-name memory-name %%))) *long-instrs*))))))))
+(defun cpu-register-accessor-name (register-key)
+  (ecase register-key
+    (:a 'cpu-a)
+    (:b 'cpu-b)
+    (:c 'cpu-c)
+    (:d 'cpu-d)
+    (:e 'cpu-e)
+    (:f 'cpu-f)
+    (:h 'cpu-h)
+    (:l 'cpu-l)
+    (:sp 'cpu-sp)
+    (:pc 'cpu-pc)
+    (:af 'cpu-af)
+    (:bc 'cpu-bc)
+    (:de 'cpu-de)
+    (:hl 'cpu-hl)))
 
-  (defun cpu-register-accessor-name (register-key)
-    (ecase register-key
-      (:a 'cpu-a)
-      (:b 'cpu-b)
-      (:c 'cpu-c)
-      (:d 'cpu-d)
-      (:e 'cpu-e)
-      (:f 'cpu-f)
-      (:h 'cpu-h)
-      (:l 'cpu-l)
-      (:sp 'cpu-sp)
-      (:pc 'cpu-pc)
-      (:af 'cpu-af)
-      (:bc 'cpu-bc)
-      (:de 'cpu-de)
-      (:hl 'cpu-hl)))
+(defun compile-register-set (key instr-spec)
+  (let ((value (aval key instr-spec)))
+    (when value `((,(cpu-register-accessor-name key) ,(aval :cpu-name instr-spec)) ,value))))
 
-  (defun compile-register-set (key instr-spec)
-    (let ((value (aval key instr-spec)))
-      (when value `((,(cpu-register-accessor-name key) ,(aval :cpu-name instr-spec)) ,value))))
+(defun compile-register-sets (instr-spec)
+  (apply 'nconc
+	 (mapcar (fn (compile-register-set % instr-spec))
+		 '(:a :b :c :d :e :f :h :l :sp :pc))))
 
-  (defun compile-register-sets (instr-spec)
-    (apply 'nconc
-	   (mapcar (fn (compile-register-set % instr-spec))
-		   '(:a :b :c :d :e :f :h :l :sp :pc))))
+(defun compile-combined-register-set (instr-spec combined-key lo-key hi-key)
+  (let ((combined-value (aval combined-key instr-spec))
+	(cpu-name (aval :cpu-name instr-spec))
+	(combined-name (gensym)))
+    (when combined-value
+      `(let ((,combined-name ,combined-value))
+	 (setf (,(cpu-register-accessor-name lo-key) ,cpu-name) (lo-byte ,combined-name)
+	       (,(cpu-register-accessor-name hi-key) ,cpu-name) (hi-byte ,combined-name))))))
 
-  (defun compile-combined-register-set (instr-spec combined-key lo-key hi-key)
-    (let ((combined-value (aval combined-key instr-spec))
-	  (cpu-name (aval :cpu-name instr-spec))
-	  (combined-name (gensym)))
-      (when combined-value
-	`(let ((,combined-name ,combined-value))
-	   (setf (,(cpu-register-accessor-name lo-key) ,cpu-name) (lo-byte ,combined-name)
-		 (,(cpu-register-accessor-name hi-key) ,cpu-name) (hi-byte ,combined-name))))))
+(defun compile-combined-register-sets (instr-spec)
+  (remove 'nil (mapcar (fn (apply 'compile-combined-register-set instr-spec %))
+		       '((:af :f :a)
+			 (:bc :c :b)
+			 (:de :e :d)
+			 (:hl :l :h)))))
+(defun compile-set-flag (cpu-flag-name flag-key bit-index instr-spec)
+  (if (akey? flag-key instr-spec)
+      `(if ,(aval flag-key instr-spec) 1 0)
+      `(bit-value ,cpu-flag-name ,bit-index)))
 
-  (defun compile-combined-register-sets (instr-spec)
-    (remove 'nil (mapcar (fn (apply 'compile-combined-register-set instr-spec %))
-			 '((:af :f :a)
-			   (:bc :c :b)
-			   (:de :e :d)
-			   (:hl :l :h)))))
-  (defun compile-set-flag (cpu-flag-name flag-key bit-index instr-spec)
-    (if (akey? flag-key instr-spec)
-	`(if ,(aval flag-key instr-spec) 1 0)
-	`(bit-value ,cpu-flag-name ,bit-index)))
-  
-  (defun compile-set-flags (instr-spec)
-    (when (some (fn (akey? % instr-spec)) '(:zero? :subtraction? :half-carry? :carry?))
-      (let ((cpu-flag-name (gensym))
-	    (cpu-name (aval :cpu-name instr-spec)))
-	`((cpu-flag ,(aval :cpu-name instr-spec))
-	  (let ((,cpu-flag-name (cpu-flag ,cpu-name)))
-	    (declare (ignorable ,cpu-flag-name))
-	    (flag ,(compile-set-flag cpu-flag-name :zero? 3 instr-spec)
-		  ,(compile-set-flag cpu-flag-name :subtraction? 2 instr-spec)
-		  ,(compile-set-flag cpu-flag-name :half-carry? 1 instr-spec)
-		  ,(compile-set-flag cpu-flag-name :carry? 0 instr-spec)))))))
+(defun compile-set-flags (instr-spec)
+  (when (some (fn (akey? % instr-spec)) '(:zero? :subtraction? :half-carry? :carry?))
+    (let ((cpu-flag-name (gensym))
+	  (cpu-name (aval :cpu-name instr-spec)))
+      `((cpu-flag ,(aval :cpu-name instr-spec))
+	(let ((,cpu-flag-name (cpu-flag ,cpu-name)))
+	  (declare (ignorable ,cpu-flag-name))
+	  (flag ,(compile-set-flag cpu-flag-name :zero? 3 instr-spec)
+		,(compile-set-flag cpu-flag-name :subtraction? 2 instr-spec)
+		,(compile-set-flag cpu-flag-name :half-carry? 1 instr-spec)
+		,(compile-set-flag cpu-flag-name :carry? 0 instr-spec)))))))
 
-  (defun compile-set-memory (instr-spec)
-    (let ((memory (aval :memory instr-spec)))
-      (apply 'concatenate 'list (mapcar (fn `((aref ,(aval :memory-name instr-spec) ,(first %)) ,(second %))) memory))))
+(defun compile-set-memory (instr-spec)
+  (let ((memory (aval :memory instr-spec)))
+    (apply 'concatenate 'list (mapcar (fn `((aref ,(aval :memory-name instr-spec) ,(first %)) ,(second %))) memory))))
 
-  (defun compile-instr-spec-for-execute (cpu-name memory-name instr-spec)
-    `(let* ((,(aval :cpu-name instr-spec) ,cpu-name)
-	    (,(aval :memory-name instr-spec) ,memory-name))
-       (declare (ignorable ,(aval :cpu-name instr-spec)
-			   ,(aval :memory-name instr-spec)))
-       (let* ,(aval :bindings instr-spec)
-	 ,@(compile-combined-register-sets instr-spec)
-	 (setf
-	  ,@(compile-set-memory instr-spec)
-	  ,@(compile-set-flags instr-spec)
-	  ,@(compile-register-sets instr-spec))))))
+(defun compile-instr-spec-for-execute (cpu-name memory-name instr-spec)
+  `(let* ((,(aval :cpu-name instr-spec) ,cpu-name)
+	  (,(aval :memory-name instr-spec) ,memory-name))
+     (declare (ignorable ,(aval :cpu-name instr-spec)
+			 ,(aval :memory-name instr-spec)))
+     (let* ,(aval :bindings instr-spec)
+       ,@(compile-combined-register-sets instr-spec)
+       (setf
+	,@(compile-set-memory instr-spec)
+	,@(compile-set-flags instr-spec)
+	,@(compile-register-sets instr-spec)))))
 
-(defmacro definstr (&whole whole byte (cpu-name memory-name)
-		      bindings &key
-				 name description
-				 disassembly
-				 ;; effects
-				 jump?
-				 zero? subtraction? half-carry? carry?
-				 a b c d e f h l
-				 af bc de hl
-				 pc sp
-				 cycles
-				 memory)
-  (declare (ignore name description jump?
-		   zero? subtraction? half-carry? carry?
-		   a b c d e f h l
-		   af bc de hl
-		   sp
-		   memory))
-  (compile-definstr whole byte cpu-name memory-name bindings cycles disassembly pc '*instrs*))
+(defparameter *bit-indices* '(0 1 2 3 4 5 6 7))
+(defparameter *register-codes* '(0 1 2 3 4 5 7))
 
-(defmacro deflong-instr (&whole whole byte (cpu-name memory-name)
-			   bindings &key
-				      name description
-				      disassembly
-				      ;; Effects
-				      jump?
-				      zero? subtraction? half-carry? carry?
-				      a b c d e f h l
-				      af bc de hl
-				      pc sp
-				      cycles
-				      memory)
-  (declare (ignore name description
-		   jump?
-		   zero? subtraction? half-carry? carry?
-		   a b c d e f h l
-		   af bc de hl
-		   sp
-		   memory))
-  (compile-definstr whole byte cpu-name memory-name bindings cycles disassembly pc '*long-instrs*))
-
-(defmacro undefinstr (byte &body ignored)
-  (declare (ignore ignored))
-  `(progn
-     (setq *instrs* (aremove *instrs* ,byte))))
-(defmacro undeflong-instr (byte &body ignored)
-  (declare (ignore ignored))
-  `(progn
-     (setq *long-instrs* (aremove *long-instrs* ,byte))))
+(defun for-each-cartesian (fn &rest sets)
+  (nlet rec ((sets sets)
+	     (arguments ()))
+    (if sets
+	;; TODO: optimize
+	(loop for element in (first sets) do
+	  (rec (rest sets) (cons element arguments)))
+	(funcall fn (reverse arguments)))))
 
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defparameter *bit-indices* '(0 1 2 3 4 5 6 7))
-  (defparameter *register-codes* '(0 1 2 3 4 5 7))
-
-  (defun for-each-cartesian (fn &rest sets)
-    (nlet rec ((sets sets)
-	       (arguments ()))
-      (if sets
-	  ;; TODO: optimize
-	  (loop for element in (first sets) do
-	    (rec (rest sets) (cons element arguments)))
-	  (funcall fn (reverse arguments)))))
+(defun map-cartesian (fn &rest sets)
+  (let ((result ()))
+    (apply 'for-each-cartesian (fn (push (funcall fn %) result)) sets)
+    result))
 
 
-  (defun map-cartesian (fn &rest sets)
-    (let ((result ()))
-      (apply 'for-each-cartesian (fn (push (funcall fn %) result)) sets)
-      result))
+;; TODO: figure out why there are two of these
+(defun opcode-from-template (opcode-template opcode-parameter-bindings opcode-arguments)
+  (let* ((opcode-parameters (mapcar (fn (cons (third %) %%))
+				    opcode-parameter-bindings
+				    opcode-arguments)))
+    (apply 'logior
+	   opcode-template
+	   (amap (fn (ash %% %)) opcode-parameters))))
+(defun opcode-from-template2 (opcode-template opcode-argument-indices opcode-arguments)
+  (let* ((opcode-parameters (mapcar (fn (cons % %%))
+				    opcode-argument-indices
+				    opcode-arguments)))
+    (apply 'logior
+	   opcode-template
+	   (amap (fn (ash %% %)) opcode-parameters))))
+
+(defun opcode-bindings (opcode-parameter-bindings opcode-arguments)
+  (mapcar (fn (list (first %) %%))
+	  opcode-parameter-bindings
+	  opcode-arguments))
 
 
-  (defun opcode-from-template (opcode-template opcode-parameter-bindings opcode-arguments)
-    (let* ((opcode-parameters (mapcar (fn (cons (third %) %%))
-				      opcode-parameter-bindings
-				      opcode-arguments)))
-      (apply 'logior
-	     opcode-template
-	     (amap (fn (ash %% %)) opcode-parameters))))
+(defun dd-register-pair-key (register-pair)
+  (ecase register-pair
+    (0 :bc)
+    (1 :de)
+    (2 :hl)
+    (3 :sp)))
+(defun qq-register-pair-key (register-pair)
+  (ecase register-pair
+    (0 :bc)
+    (1 :de)
+    (2 :hl)
+    (3 :af)))
 
-  (defun opcode-bindings (opcode-parameter-bindings opcode-arguments)
-    (mapcar (fn (list (first %) %%))
-	    opcode-parameter-bindings
-	    opcode-arguments))
+(defparameter *register-pair-codes* '(0 1 2 3))
 
-  
-  (defun dd-register-pair-key (register-pair)
-    (ecase register-pair
-      (0 :bc)
-      (1 :de)
-      (2 :hl)
-      (3 :sp)))
-  (defun qq-register-pair-key (register-pair)
-    (ecase register-pair
-      (0 :bc)
-      (1 :de)
-      (2 :hl)
-      (3 :af)))
+(defun register8-keys-from-register-pair-key (combined-key)
+  (ecase combined-key
+    (:af '(:a :f))
+    (:bc '(:b :c))
+    (:de '(:d :e))
+    (:hl '(:h :l))))
 
-  (defparameter *register-pair-codes* '(0 1 2 3))
+(defun register-key (code)
+  (ecase code
+    (#b111 :a)
+    (#b0 :b)
+    (#b1 :c)
+    (#b010 :d)
+    (#b011 :e)
+    (#b100 :h)
+    (#b101 :l)
+    (#b110 :@hl)))
 
-  (defun register8-keys-from-register-pair-key (combined-key)
-    (ecase combined-key
-      (:af '(:a :f))
-      (:bc '(:b :c))
-      (:de '(:d :e))
-      (:hl '(:h :l))))
+(defun map-opcodes (fn opcode-template opcode-list-parameters)
+  (let ((opcode-parameter-lists (mapcar 'cdr opcode-list-parameters))
+	(opcode-parameter-indices (mapcar 'car opcode-list-parameters)))
+    (apply 'map-cartesian
+	   (lambda (arguments)
+	     (let* ((opcode (opcode-from-template2 opcode-template opcode-parameter-indices arguments)))
+	       (apply fn opcode arguments)))
+	   opcode-parameter-lists)))
 
-  (defun register-key (code)
-    (ecase code
-      (#b111 :a)
-      (#b0 :b)
-      (#b1 :c)
-      (#b010 :d)
-      (#b011 :e)
-      (#b100 :h)
-      (#b101 :l)
-      (#b110 :@hl))))
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun compile-definstr-class (deflong-instr-or-definstr opcode-template opcode-parameter-bindings cpu memory instr-spec)
-    (let* ((opcode-parameter-lists (mapcar (fn (eval (second %))) opcode-parameter-bindings)))
-      `(progn
-	 ,@(apply
-	    'map-cartesian
-	    (lambda (opcode-arguments)
-	      `(,deflong-instr-or-definstr
-		   ,(opcode-from-template opcode-template opcode-parameter-bindings opcode-arguments) (,cpu ,memory)
-		 ;; TODO: can we get rid of this eval?
-		 ,@(eval `(let* ,(opcode-bindings opcode-parameter-bindings opcode-arguments)
-			    ,@instr-spec))))
-	    opcode-parameter-lists)))))
-
-(defmacro definstr-class ((opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
-  (compile-definstr-class 'definstr opcode-template opcode-parameter-bindings cpu memory
-			  instr-spec))
-
-(defmacro deflong-instr-class ((opcode-template &rest opcode-parameter-bindings) (cpu memory) &body instr-spec)
-  (compile-definstr-class 'deflong-instr opcode-template opcode-parameter-bindings cpu memory
-			  instr-spec))
+(defun merge-instr-specs (old &rest new-instr-specs)
+  (if new-instr-specs
+      (let* ((new (first new-instr-specs)))
+	(let* ((old-bindings (aval :bindings old))
+	       (new-bindings (aval :bindings new))
+	       (bindings (append old-bindings new-bindings)))
+	  (apply 'merge-instr-specs
+		 (aset :bindings bindings (amerge old new))
+		 (rest new-instr-specs))))
+      old))
 
 
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun opcode-from-template2 (opcode-template opcode-argument-indices opcode-arguments)
-    (let* ((opcode-parameters (mapcar (fn (cons % %%))
-				      opcode-argument-indices
-				      opcode-arguments)))
-      (apply 'logior
-	     opcode-template
-	     (amap (fn (ash %% %)) opcode-parameters))))
-
-  (defun map-opcodes (fn opcode-template opcode-list-parameters)
-    (let ((opcode-parameter-lists (mapcar 'cdr opcode-list-parameters))
-	  (opcode-parameter-indices (mapcar 'car opcode-list-parameters)))
-      (apply 'map-cartesian
-	     (lambda (arguments)
-	       (let* ((opcode (opcode-from-template2 opcode-template opcode-parameter-indices arguments)))
-		 (apply fn opcode arguments)))
-	     opcode-parameter-lists)))
-
-  (defun merge-instr-specs (old &rest new-instr-specs)
-    (if new-instr-specs
-	(let* ((new (first new-instr-specs)))
-	  (let* ((old-bindings (aval :bindings old))
-		 (new-bindings (aval :bindings new))
-		 (bindings (append old-bindings new-bindings)))
-	    (apply 'merge-instr-specs
-		   (aset :bindings bindings (amerge old new))
-		   (rest new-instr-specs))))
-	old)))
-
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defvar *instr-specs* ()))
+(defvar *instr-specs* ())
 
 (defun compile-instr-spec-effects (instr-spec)
   (compile-instr-effects (aval :cpu-name instr-spec)
@@ -1999,21 +1898,20 @@ result in HL."
     (< (logand a mask)
        (logand b mask))))
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun instr-spec (opcode &key name description (cpu-name 'cpu) (memory-name 'memory) (pc-name 'pc) cycles
-			      instr-size bindings disassembly)
-    (amerge
-     (alist :opcode opcode
-	    :cpu-name cpu-name
-	    :memory-name memory-name
-	    :bindings (append `((,pc-name (cpu-pc ,cpu-name)))
-			      bindings)
-	    :name name
-	    :description description
-	    :disassembly disassembly
-	    :cycles cycles)
-     (when instr-size
-       (alist :pc `(+ ,pc-name ,instr-size))))))
+(defun instr-spec (opcode &key name description (cpu-name 'cpu) (memory-name 'memory) (pc-name 'pc) cycles
+			    instr-size bindings disassembly)
+  (amerge
+   (alist :opcode opcode
+	  :cpu-name cpu-name
+	  :memory-name memory-name
+	  :bindings (append `((,pc-name (cpu-pc ,cpu-name)))
+			    bindings)
+	  :name name
+	  :description description
+	  :disassembly disassembly
+	  :cycles cycles)
+   (when instr-size
+     (alist :pc `(+ ,pc-name ,instr-size)))))
 
 (defun bit-borrow-cy? (bit-index a b cy)
   ;; TODO: Check up on how to check for bit-borrow?
@@ -2541,94 +2439,94 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 
 ;; S2.8
 (defun call-and-return-instr-specs ()
-  (list
-   ;; CALL imm16
-   (merge-instr-specs
-    (instr-spec-defaults
-     :name :call-imm16
-     :description "PUSH address of next instruction onto the stack. Jump to imm16."
-     :opcode #b11001101
-     :pc-name nil
-     :cycles 6)
-    (imm16-instr-spec)
-    (push-value-instr-spec '(+ pc 3))
-    (alist :pc 'imm16)))
+  (append
+   (list
+    ;; CALL imm16
+    (merge-instr-specs
+     (instr-spec-defaults
+      :name :call-imm16
+      :description "PUSH address of next instruction onto the stack. Jump to imm16."
+      :opcode #b11001101
+      :cycles 6)
+     (imm16-instr-spec)
+     (push-value-instr-spec '(+ pc 3))
+     (alist :pc 'imm16)))
 
-  ;; CALL cc imm16
-  (map-jump-conditional-opcodes
-   (lambda (opcode condition-key)
-     (merge-instr-specs
-      (instr-spec-defaults
-       :name (list :call condition-key :imm16)
-       :description (format nil "If ~A, PUSH address of next instruction onto the stack and Jump to imm16.
+   ;; CALL cc imm16
+   (map-jump-conditional-opcodes
+    (lambda (opcode condition-key)
+      (merge-instr-specs
+       (instr-spec-defaults
+	:name (list :call condition-key :imm16)
+	:description (format nil "If ~A, PUSH address of next instruction onto the stack and Jump to imm16.
 Otherwise, increment PC to the next instruction."
-			    (condition-key-description condition-key))
-       :opcode opcode)
-      ;; TODO: optimize by only accessing imm16 if condition? is true.
-      (imm16-instr-spec)
-      (condition?-bindings condition-key)
-      (alist
-       :bindings `((sp (cpu-sp cpu-name))
-		   (sp-1 (1- sp))
-		   (sp-2 (- sp 2))
-		   (pc+3 (+ pc 3)))
-       :sp '(if condition? sp-2 sp)
-       ;; TODO: optimize by not setting memory if condition? is false
-       :memory `((sp-1 (if condition? (hi-byte pc+3) (aref memory sp-1)))
-		 (sp-2 (if condition? (lo-byte pc+3) (aref memory sp-2))))
-       :pc '(if condition? imm16 pc+3)
-       :cycles '(if condition? 6 3))))
-   #b11000100)
+			     (condition-key-description condition-key))
+	:opcode opcode)
+       ;; TODO: optimize by only accessing imm16 if condition? is true.
+       (imm16-instr-spec)
+       (condition?-bindings condition-key)
+       (alist
+	:bindings `((sp (cpu-sp cpu))
+		    (sp-1 (1- sp))
+		    (sp-2 (- sp 2))
+		    (pc+3 (+ pc 3)))
+	:sp '(if condition? sp-2 sp)
+	;; TODO: optimize by not setting memory if condition? is false
+	:memory `((sp-1 (if condition? (hi-byte pc+3) (aref memory sp-1)))
+		  (sp-2 (if condition? (lo-byte pc+3) (aref memory sp-2))))
+	:pc '(if condition? imm16 pc+3)
+	:cycles '(if condition? 6 3))))
+    #b11000100)
 
-  (list
-   ;; RET
-   (merge-instr-specs
-    (instr-spec-defaults
-     :name :ret
-     :description "POP the value off the stack into the PC."
-     :pc-name nil
-     :opcode #b11001001
-     :cycles 4)
-    (pop-instr-spec :pc))
+   (list
+    ;; RET
+    (merge-instr-specs
+     (instr-spec-defaults
+      :name :ret
+      :description "POP the value off the stack into the PC."
+      :pc-name nil
+      :opcode #b11001001
+      :cycles 4)
+     (pop-instr-spec :pc))
 
-   ;; RETI TODO!
-   )
+    ;; RETI TODO!
+    )
 
-  ;; RET cc
-  (map-jump-conditional-opcodes
-   (lambda (opcode condition-key)
-     (merge-instr-specs
-      (instr-spec-defaults
-       :name (list :ret condition-key)
-       :description (format nil "If ~A, POP the value off the stack into the PC.
+   ;; RET cc
+   (map-jump-conditional-opcodes
+    (lambda (opcode condition-key)
+      (merge-instr-specs
+       (instr-spec-defaults
+	:name (list :ret condition-key)
+	:description (format nil "If ~A, POP the value off the stack into the PC.
 Otherwise increment PC to the next instruction."
-			    (condition-key-description condition-key))
-       :opcode opcode)
-      (condition?-bindings condition-key)
-      (alist :bindings `((sp (cpu-sp cpu))
-			 (sp+1 (1+ sp))
-			 (sp+2 (+ 2 sp)))
-	     :sp `(if condition? sp+2 sp)
-	     :pc `(if condition?
-		      (combined-register (aref memory sp+1) (aref memory sp))
-		      (+ pc 1))
-	     :cycles '(if condition? 5 2))))
-   #b11000000)
+			     (condition-key-description condition-key))
+	:opcode opcode)
+       (condition?-bindings condition-key)
+       (alist :bindings `((sp (cpu-sp cpu))
+			  (sp+1 (1+ sp))
+			  (sp+2 (+ 2 sp)))
+	      :sp `(if condition? sp+2 sp)
+	      :pc `(if condition?
+		       (combined-register (aref memory sp+1) (aref memory sp))
+		       (+ pc 1))
+	      :cycles '(if condition? 5 2))))
+    #b11000000)
 
-  ;; RST t
-  (map-opcodes
-   (lambda (opcode index)
-     (merge-instr-specs
-      (instr-spec-defaults
-       :name :rst-t
-       :description "Jump to a predefined address based on t (0-7): (#x0000 #x0008 #x0010 #x0018 #x0020 #x0028 #x0030 #x0038)."
-       :opcode opcode
-       :pc-name nil
-       :cycles 4
-       :disassembly `(alist :t ,index))
-      (push-instr-spec :pc)
-      (alist :pc (* index 8))))
-   #b11000111 (alist 3 '(0 1 2 3 4 5 6 7))))
+   ;; RST t
+   (map-opcodes
+    (lambda (opcode index)
+      (merge-instr-specs
+       (instr-spec-defaults
+	:name :rst-t
+	:description "Jump to a predefined address based on t (0-7): (#x0000 #x0008 #x0010 #x0018 #x0020 #x0028 #x0030 #x0038)."
+	:opcode opcode
+	:pc-name nil
+	:cycles 4
+	:disassembly `(alist :t ,index))
+       (push-instr-spec :pc)
+       (alist :pc (* index 8))))
+    #b11000111 (alist 3 '(0 1 2 3 4 5 6 7)))))
 
 ;; TODO: learn about interrupts
 ;; TODO: learn about interrupt service routines
