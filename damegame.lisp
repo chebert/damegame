@@ -1613,8 +1613,9 @@ Test-fn and handle-fn are both functions of event."
    (alist
     :cpu-name cpu-name
     :memory-name memory-name
-    :bindings `((,pc-name (cpu-pc ,cpu-name)))
     :long? long?)
+   (when pc-name
+     (alist :bindings`((,pc-name (cpu-pc ,cpu-name)))))
    (when instr-size
      (alist :pc `(+ ,pc-name ,instr-size)))
    (when name
@@ -1799,13 +1800,19 @@ result in HL."
     
     (ld-instr-spec #b00001000 :sp :@imm16))))
 
-(defun push-instr-spec (register-pair-key &key (cpu-name 'cpu) (sp-name 'sp) (sp-2-name 'sp-2) (value-name 'value))
+(defun push-value-instr-spec (value-form &key (cpu-name 'cpu) (sp-name 'sp) (sp-2-name 'sp-2) (value-name 'value))
   (alist :bindings `((,sp-name (cpu-sp ,cpu-name))
 		     (,sp-2-name (- ,sp-name 2))
-		     (,value-name (,(cpu-register-accessor-name register-pair-key) ,cpu-name)))
+		     (,value-name ,value-form))
 	 :sp sp-2-name
 	 :memory `(((1- ,sp-name) (hi-byte ,value-name))
 		   (,sp-2-name (lo-byte ,value-name)))))
+(defun push-instr-spec (register-pair-key &key (cpu-name 'cpu) (sp-name 'sp) (sp-2-name 'sp-2) (value-name 'value))
+  (push-value-instr-spec `(,(cpu-register-accessor-name register-pair-key) ,cpu-name)
+			 :cpu-name cpu-name
+			 :sp-name sp-name
+			 :sp-2-name sp-2-name
+			 :value-name value-name))
 
 (defun pop-instr-spec (register-pair-key &key (cpu-name 'cpu) (memory-name 'memory) (sp-name 'sp) (sp+-name 'sp+))
   (alist :bindings `((,sp-name (cpu-sp ,cpu-name))
@@ -2436,11 +2443,15 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
     (:carry? "the carry? flag is set")
     (:not-carry? "the carry? flag is not set")))
 
+(defun condition?-bindings (condition-key)
+  (alist :bindings `((condition? ,(compile-condition-key-test condition-key 'cpu)))))
+
 (defun jump-conditionally-instr-spec (condition-key instr-size addr-form min-cycles)
-  (alist :bindings `((condition? ,(compile-condition-key-test condition-key 'cpu)))
-	 :pc `(if condition? ,addr-form (+ pc ,instr-size))
-	 :cycles `(+ ,min-cycles
-		     (if condition? 1 0))))
+  (merge-instr-specs
+   (condition?-bindings condition-key)
+   (alist :pc `(if condition? ,addr-form (+ pc ,instr-size))
+	  :cycles `(+ ,min-cycles
+		      (if condition? 1 0)))))
 
 (defun map-jump-conditional-opcodes (fn opcode-template)
   (map-opcodes
@@ -2524,45 +2535,108 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :description "Copy HL into PC."
       :opcode #b11101001
       :instr-size 1
-      :cycles 1)
+      :cycles 1
+      :pc-name nil)
      (alist :pc '(cpu-hl cpu))))))
 
+;; S2.8
+(defun call-and-return-instr-specs ()
+  (list
+   ;; CALL imm16
+   (merge-instr-specs
+    (instr-spec-defaults
+     :name :call-imm16
+     :description "PUSH address of next instruction onto the stack. Jump to imm16."
+     :opcode #b11001101
+     :pc-name nil
+     :cycles 6)
+    (imm16-instr-spec)
+    (push-value-instr-spec '(+ pc 3))
+    (alist :pc 'imm16)))
 
+  ;; CALL cc imm16
+  (map-jump-conditional-opcodes
+   (lambda (opcode condition-key)
+     (merge-instr-specs
+      (instr-spec-defaults
+       :name (list :call condition-key :imm16)
+       :description (format nil "If ~A, PUSH address of next instruction onto the stack and Jump to imm16.
+Otherwise, increment PC to the next instruction."
+			    (condition-key-description condition-key))
+       :opcode opcode)
+      ;; TODO: optimize by only accessing imm16 if condition? is true.
+      (imm16-instr-spec)
+      (condition?-bindings condition-key)
+      (alist
+       :bindings `((sp (cpu-sp cpu-name))
+		   (sp-1 (1- sp))
+		   (sp-2 (- sp 2))
+		   (pc+3 (+ pc 3)))
+       :sp '(if condition? sp-2 sp)
+       ;; TODO: optimize by not setting memory if condition? is false
+       :memory `((sp-1 (if condition? (hi-byte pc+3) (aref memory sp-1)))
+		 (sp-2 (if condition? (lo-byte pc+3) (aref memory sp-2))))
+       :pc '(if condition? imm16 pc+3)
+       :cycles '(if condition? 6 3))))
+   #b11000100)
+
+  (list
+   ;; RET
+   (merge-instr-specs
+    (instr-spec-defaults
+     :name :ret
+     :description "POP the value off the stack into the PC."
+     :pc-name nil
+     :opcode #b11001001
+     :cycles 4)
+    (pop-instr-spec :pc))
+
+   ;; RETI TODO!
+   )
+
+  ;; RET cc
+  (map-jump-conditional-opcodes
+   (lambda (opcode condition-key)
+     (merge-instr-specs
+      (instr-spec-defaults
+       :name (list :ret condition-key)
+       :description (format nil "If ~A, POP the value off the stack into the PC.
+Otherwise increment PC to the next instruction."
+			    (condition-key-description condition-key))
+       :opcode opcode)
+      (condition?-bindings condition-key)
+      (alist :bindings `((sp (cpu-sp cpu))
+			 (sp+1 (1+ sp))
+			 (sp+2 (+ 2 sp)))
+	     :sp `(if condition? sp+2 sp)
+	     :pc `(if condition?
+		      (combined-register (aref memory sp+1) (aref memory sp))
+		      (+ pc 1))
+	     :cycles '(if condition? 5 2))))
+   #b11000000)
+
+  ;; RST t
+  (map-opcodes
+   (lambda (opcode index)
+     (merge-instr-specs
+      (instr-spec-defaults
+       :name :rst-t
+       :description "Jump to a predefined address based on t (0-7): (#x0000 #x0008 #x0010 #x0018 #x0020 #x0028 #x0030 #x0038)."
+       :opcode opcode
+       :pc-name nil
+       :cycles 4
+       :disassembly `(alist :t ,index))
+      (push-instr-spec :pc)
+      (alist :pc (* index 8))))
+   #b11000111 (alist 3 '(0 1 2 3 4 5 6 7))))
+
+;; TODO: learn about interrupts
+;; TODO: learn about interrupt service routines
+;; TODO: learn about master interrupt flag
+;; TODO: Some way to leave memory unchanged?
 ;; TODO: use dynamic variables for names (instead of passing them in as parameters)
 ;; TODO: make disassembly (alist key 'form key2 'form2) instead of '(alist key form key2 form2)
 ;;   and let merge-instr-specs append to disassembly (instead of replacing) 
-
-
-;; S2.8
-;; Call immediate
-(definstr #xcd (cpu memory) ((pc (cpu-pc cpu))
-			     (return-value (+ pc 3))
-			     (a16 (combined-register (aref memory (+ 2 pc)) (aref memory (1+ pc))))
-			     (sp (cpu-sp cpu)))
-	  :name :call-a16
-	  :description "Return value is PC+3.
-Push hi-byte of return value. 
-Push the lo-byte of return value.
-Jump to A16.
-To Push: decrement SP, then copy byte to SP."
-	  :disassembly (alist :a16 (hex16-text a16))
-	  :jump? t
-	  :memory (((1- sp) (hi-byte return-value))
-		   ((- sp 2) (lo-byte return-value)))
-	  :sp (- sp 2)
-	  :pc a16
-	  :cycles 6)
-
-;; Return
-(definstr #xc9 (cpu memory) ((sp (cpu-sp cpu))
-			     (return-addr (combined-register (aref memory (1+ sp)) (aref memory sp))))
-	  :name :ret
-	  :description "Pops the 16-bit return value off the stack into the PC."
-	  :disassembly (alist :addr (hex16-text return-addr))
-	  :jump? t
-	  :sp (+ sp 2)
-	  :pc return-addr
-	  :cycles 4)
 
 (defun rotate-left (register carry-bit)
   (logior carry-bit (logand #xff (ash register 1))))
@@ -2615,7 +2689,9 @@ To Push: decrement SP, then copy byte to SP."
 		 (8bit-alu-instr-specs)
 		 (16bit-alu-op-instr-specs)
 		 (rotate-shift-instr-specs)
-		 (bit-instr-specs))))
+		 (bit-instr-specs)
+		 (jump-instr-specs)
+		 (call-and-return-instr-specs))))
   
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
