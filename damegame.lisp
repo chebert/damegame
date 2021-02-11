@@ -1308,7 +1308,7 @@ Test-fn and handle-fn are both functions of event."
 
 (defun compile-set-memory (instr-spec)
   (let ((memory (aval :memory instr-spec)))
-    (apply 'concatenate 'list (mapcar (fn `((aref ,(aval :memory-name instr-spec) ,(first %)) ,(second %))) memory))))
+    (apply 'concatenate 'list (mapcar (fn `((aref ,*memory-name* ,(first %)) ,(second %))) memory))))
 
 (defun compile-instr-spec-for-execute (instr-spec)
   `(let* ,(aval :bindings instr-spec)
@@ -1455,17 +1455,17 @@ Test-fn and handle-fn are both functions of event."
 (defun ld-description (contents into)
   (format nil "Load the contents of ~A into ~A." (key-description contents) (key-description into)))
 
-(defun compile-key-accessor (key &key (memory-name 'memory) (imm8-name 'imm8) (imm16-name 'imm16))
+(defun compile-key-accessor (key &key (imm8-name 'imm8) (imm16-name 'imm16))
   (cond
     ((member key *register-keys*) `(,(cpu-register-accessor-name key) ,*cpu-name*))
     ((eql key :imm8) imm8-name)
-    ((eql key :@imm8) `(aref ,memory-name (+ #xff00 ,imm8-name)))
-    ((eql key :@imm16) `(aref ,memory-name ,imm16-name))
-    ((eql key :@bc) `(aref ,memory-name (cpu-bc ,*cpu-name*)))
-    ((eql key :@de) `(aref ,memory-name (cpu-de ,*cpu-name*)))
-    ((eql key :@af) `(aref ,memory-name (cpu-af ,*cpu-name*)))
-    ((member key '(:@hl :@hli :@hld)) `(aref ,memory-name (cpu-hl ,*cpu-name*)))
-    ((eql key :@c) `(aref ,memory-name (+ #xff00 (cpu-c ,*cpu-name*))))
+    ((eql key :@imm8) `(aref ,*memory-name* (+ #xff00 ,imm8-name)))
+    ((eql key :@imm16) `(aref ,*memory-name* ,imm16-name))
+    ((eql key :@bc) `(aref ,*memory-name* (cpu-bc ,*cpu-name*)))
+    ((eql key :@de) `(aref ,*memory-name* (cpu-de ,*cpu-name*)))
+    ((eql key :@af) `(aref ,*memory-name* (cpu-af ,*cpu-name*)))
+    ((member key '(:@hl :@hli :@hld)) `(aref ,*memory-name* (cpu-hl ,*cpu-name*)))
+    ((eql key :@c) `(aref ,*memory-name* (+ #xff00 (cpu-c ,*cpu-name*))))
     ((eql key :imm16) imm16-name)
     (t (error "unimplemented ~A" key))))
 (defun key-set-instr-spec (key value-form &key (imm8-name 'imm8) (imm16-name 'imm16))
@@ -1486,21 +1486,19 @@ Test-fn and handle-fn are both functions of event."
 			      :hl `(1- (cpu-hl ,*cpu-name*))))
       (t (error "unimplemented ~A" key)))))
 
-(defun imm8-instr-spec (&key (pc-name 'pc) (memory-name 'memory) (imm8-name 'imm8))
+(defun imm8-instr-spec (&key (pc-name 'pc) (imm8-name 'imm8))
   (alist
-   :bindings `((,imm8-name (aref ,memory-name (1+ ,pc-name))))
+   :bindings `((,imm8-name (aref ,*memory-name* (1+ ,pc-name))))
    :disassembly `(alist :imm8 (register8-text ,imm8-name))))
-(defun imm16-instr-spec (&key (pc-name 'pc) (memory-name 'memory) (imm16-name 'imm16))
+(defun imm16-instr-spec (&key (pc-name 'pc) (imm16-name 'imm16))
   (alist
-   :bindings `((,imm16-name ,(compile-16bit-memory-access `(1+ ,pc-name) :memory-name memory-name)))
+   :bindings `((,imm16-name ,(compile-16bit-memory-access `(1+ ,pc-name))))
    :disassembly `(alist :imm16 (register16-text ,imm16-name))))
 
 (defun instr-spec-defaults (&key name description instr-size long?
-			      (memory-name 'memory) (pc-name 'pc) opcode cycles disassembly)
+			      (pc-name 'pc) opcode cycles disassembly)
   (amerge
-   (alist
-    :memory-name memory-name
-    :long? long?)
+   (alist :long? long?)
    (when pc-name
      (alist :bindings`((,pc-name (cpu-pc ,*cpu-name*)))))
    (when instr-size
@@ -1530,8 +1528,7 @@ Test-fn and handle-fn are both functions of event."
 (defun ld-instr-spec (opcode contents-key into-key &key 
 						     (pc-name 'pc)
 						     (imm8-name 'imm8)
-						     (imm16-name 'imm16)
-						     (memory-name 'memory))
+						     (imm16-name 'imm16))
   (let* ((imm8? (or (member into-key '(:imm8 :@imm8))
 		    (member contents-key '(:imm8 :@imm8))))
 	 (imm16? (or (member into-key '(:imm16 :@imm16))
@@ -1542,14 +1539,13 @@ Test-fn and handle-fn are both functions of event."
 		       (imm8? 2)
 		       (t 1))))
     (merge-instr-specs
-     (instr-spec-defaults :memory-name memory-name
-			  :pc-name pc-name
+     (instr-spec-defaults :pc-name pc-name
 			  :opcode opcode
 			  :cycles cycles)
      (when imm8?
-       (imm8-instr-spec :pc-name pc-name :memory-name memory-name :imm8-name imm8-name))
+       (imm8-instr-spec :pc-name pc-name :imm8-name imm8-name))
      (when imm16?
-       (imm16-instr-spec :pc-name pc-name :memory-name memory-name :imm16-name imm16-name))
+       (imm16-instr-spec :pc-name pc-name :imm16-name imm16-name))
      (when (member contents-key '(:@hli))
        (alist :hl `(1+ (cpu-hl ,*cpu-name*))))
      (when (member contents-key '(:@hld))
@@ -1698,12 +1694,12 @@ result in HL."
 			 :sp-2-name sp-2-name
 			 :value-name value-name))
 
-(defun pop-instr-spec (register-pair-key &key (memory-name 'memory) (sp-name 'sp) (sp+-name 'sp+))
+(defun pop-instr-spec (register-pair-key &key (sp-name 'sp) (sp+-name 'sp+))
   (alist :bindings `((,sp-name (cpu-sp ,*cpu-name*))
 		     (,sp+-name (1+ ,sp-name)))
 	 :sp `(+ ,sp-name 2)
-	 register-pair-key `(combined-register (aref ,memory-name ,sp+-name)
-					       (aref ,memory-name ,sp-name))))
+	 register-pair-key `(combined-register (aref ,*memory-name* ,sp+-name)
+					       (aref ,*memory-name* ,sp-name))))
 
 (defun bit-carry? (from-bit-index a b)
   (let* ((bit-index (1+ from-bit-index))
@@ -1772,8 +1768,7 @@ result in HL."
 (defun 8bit-alu-instr-spec (opcode alu-op-key contents-key &key 
 							     (pc-name 'pc)
 							     (imm8-name 'imm8)
-							     (imm16-name 'imm16)
-							     (memory-name 'memory))
+							     (imm16-name 'imm16))
   (let* ((imm8? (member contents-key '(:imm8 :@imm8)))
 	 (imm16? (member contents-key '(:imm16 :@imm16)))
 	 (memory-ref? (member contents-key '(:@imm8 :@imm16 :@hl)))
@@ -1787,14 +1782,13 @@ result in HL."
 		       (imm8? 2)
 		       (t 1))))
     (merge-instr-specs
-     (instr-spec-defaults :memory-name memory-name
-			  :pc-name pc-name
+     (instr-spec-defaults :pc-name pc-name
 			  :opcode opcode
 			  :cycles cycles)
      (when imm8?
-       (imm8-instr-spec :pc-name pc-name :memory-name memory-name :imm8-name imm8-name))
+       (imm8-instr-spec :pc-name pc-name  :imm8-name imm8-name))
      (when imm16?
-       (imm16-instr-spec :pc-name pc-name :memory-name memory-name :imm16-name imm16-name))
+       (imm16-instr-spec :pc-name pc-name  :imm16-name imm16-name))
      (alist
       :bindings `((a (cpu-a cpu))
 		  (data ,(compile-key-accessor contents-key))
@@ -1808,8 +1802,7 @@ result in HL."
        (key-set-instr-spec :a 'result :imm8-name imm8-name :imm16-name imm16-name)))))
 
 (defun 8bit-inc-op-instr-spec (opcode inc-key contents-key &key 
-							     (pc-name 'pc)
-							     (memory-name 'memory))
+							     (pc-name 'pc))
   (let* ((memory-ref? (member contents-key '(:@hl)))
 	 (cycles (+ 1
 		    (if memory-ref? 2 0)))
@@ -1818,10 +1811,10 @@ result in HL."
 		       (:inc :add)
 		       (:dec :sub))))
     (merge-instr-specs
-     (instr-spec-defaults :memory-name memory-name
-			  :pc-name pc-name
-			  :opcode opcode
-			  :cycles cycles)
+     (instr-spec-defaults 
+      :pc-name pc-name
+      :opcode opcode
+      :cycles cycles)
      (alist
       :bindings `((data ,(compile-key-accessor contents-key))
 		  (result ,(compile-alu-op alu-op-key 'data 1 nil)))
@@ -1892,13 +1885,12 @@ result in HL."
     (< half-a half-b)))
 
 (defun 16bit-add-instr-spec (opcode contents-key &key 
-						   (pc-name 'pc)
-						   (memory-name 'memory))
+						   (pc-name 'pc))
   (merge-instr-specs
-   (instr-spec-defaults :memory-name memory-name
-			:pc-name pc-name
-			:opcode opcode
-			:cycles 2)
+   (instr-spec-defaults 
+    :pc-name pc-name
+    :opcode opcode
+    :cycles 2)
    (alist
     :bindings `((hl (cpu-hl ,*cpu-name*))
 		(data ,(compile-key-accessor contents-key))
@@ -2321,12 +2313,13 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
      (funcall fn opcode (condition-key condition-code)))
    opcode-template (alist 3 *condition-codes*)))
 
-(defun compile-16bit-memory-access (addr-form &key (memory-name 'memory))
+;; TODO: Use this everywhere
+(defun compile-16bit-memory-access (addr-form)
   (let* ((addr (gensym)))
     `(let* ((,addr ,addr-form))
-       (combined-register (aref ,memory-name (1+ ,addr)) (aref ,memory-name ,addr)))))
-(defun compile-imm16-access (&key (pc-name 'pc) (memory-name 'memory))
-  (compile-16bit-memory-access `(1+ ,pc-name) :memory-name memory-name))
+       (combined-register (aref ,*memory-name* (1+ ,addr)) (aref ,*memory-name* ,addr)))))
+(defun compile-imm16-access (&key (pc-name 'pc))
+  (compile-16bit-memory-access `(1+ ,pc-name)))
 
 (defun relative-addr-instr-spec ()
   (merge-instr-specs
