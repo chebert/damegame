@@ -1221,11 +1221,14 @@ Test-fn and handle-fn are both functions of event."
 (defvar *instrs* ())
 (defvar *long-instrs* ())
 
+;; TODO ensure these are used instead of hard-coding values.
 (defparameter *cpu-name* 'cpu)
 (defparameter *memory-name* 'memory)
 (defparameter *pc-name* 'pc)
 (defparameter *imm8-name* 'imm8)
 (defparameter *imm16-name* 'imm16)
+(defparameter *s8-name* 's8)
+(defparameter *addr-name* 'addr)
 (defparameter *data-name* 'data)
 (defparameter *result-name* 'result)
 (defparameter *a-name* 'a)
@@ -1248,7 +1251,7 @@ Test-fn and handle-fn are both functions of event."
        (declare (ignorable ,*pc-name*))
        (let* ,bindings
 	 (declare (ignorable ,@(mapcar 'first bindings)))
-	 ,disassembly))))
+	 (alist ,@(apply 'append (amap (fn (list % %%)) disassembly)))))))
 
 (defun compile-execute ()
   `(defun execute! (,*cpu-name* ,*memory-name*)
@@ -1416,9 +1419,15 @@ Test-fn and handle-fn are both functions of event."
       (let* ((new (first new-instr-specs)))
 	(let* ((old-bindings (aval :bindings old))
 	       (new-bindings (aval :bindings new))
-	       (bindings (append old-bindings new-bindings)))
+	       (bindings (append old-bindings new-bindings))
+
+	       (old-disassembly (aval :disassembly old))
+	       (new-disassembly (aval :disassembly new))
+	       (disassembly (amerge old-disassembly new-disassembly)))
 	  (apply 'merge-instr-specs
-		 (aset :bindings bindings (amerge old new))
+		 (amerge (amerge old new)
+			 (alist :bindings bindings
+				:disassembly disassembly))
 		 (rest new-instr-specs))))
       old))
 
@@ -1499,11 +1508,16 @@ Test-fn and handle-fn are both functions of event."
 (defun imm8-instr-spec ()
   (alist
    :bindings `((,*imm8-name* (aref ,*memory-name* (1+ ,*pc-name*))))
-   :disassembly `(alist :imm8 (register8-text ,*imm8-name*))))
+   :disassembly (alist :imm8 `(register8-text ,*imm8-name*))))
+(defun s8-instr-spec ()
+  (merge-instr-specs
+   (imm8-instr-spec)
+   (alist :bindings `((,*s8-name* (s8 ,*imm8-name*)))
+	  :disassembly (alist :s8 *s8-name*))))
 (defun imm16-instr-spec ()
   (alist
    :bindings `((,*imm16-name* ,(compile-16bit-memory-access `(1+ ,*pc-name*))))
-   :disassembly `(alist :imm16 (register16-text ,*imm16-name*))))
+   :disassembly (alist :imm16 `(register16-text ,*imm16-name*))))
 
 (defun instr-spec-defaults (&key name description instr-size long?
 			      opcode cycles disassembly)
@@ -1638,10 +1652,10 @@ Test-fn and handle-fn are both functions of event."
 	(merge-instr-specs
 	 (instr-spec-defaults)
 	 (push-instr-spec combined-key)
+	 (pc-next-instr)
 	 (alist :opcode opcode
 		:name (list :push combined-key)
 		:description (format nil "Push the contents of register pair ~A onto the stack." combined-key)
-		:pc '(1+ pc)
 		:cycles 4))))
     #b11000101 (alist 4 *register-pair-codes*))
 
@@ -1652,27 +1666,26 @@ Test-fn and handle-fn are both functions of event."
 	(merge-instr-specs
 	 (instr-spec-defaults)
 	 (pop-instr-spec register-pair-key)
+	 (pc-next-instr)
 	 (alist :opcode opcode
 		:name (list :pop register-pair-key)
 		:description (format nil "Pop the 16-bit value off the stack into register pair ~A." register-pair-key)
-		:pc '(1+ pc)
 		:cycles 3))))
     #b11000001 (alist 4 *register-pair-codes*))
 
    (list
     ;; LDHL SP, s8
     (merge-instr-specs
-     (instr-spec-defaults)
-     (alist :opcode #b11111000
-	    :name (list :ld :hl :sp+s8)
-	    :description "Add signed imm8 value to sp and store the
+     (instr-spec-defaults
+      :opcode #b11111000
+      :name (list :ld :hl :sp+s8)
+      :description "Add signed imm8 value to sp and store the
 result in HL."
-	    :bindings '((s8 (s8 (aref memory (1+ pc))))
-			(sp (cpu-sp cpu)))
-	    :disassembly '(alist :s8 (register8-text s8))
+      :cycles 3)
+     (s8-instr-spec)
+     (pc-next-instr :instr-size 2)
+     (alist :bindings '((sp (cpu-sp cpu)))
 	    :hl '(+ s8 sp)
-	    :pc '(+ 2 pc)
-	    :cycles 3
 
 	    ;; 16-bit addition flags?
 	    :zero? nil
@@ -1871,6 +1884,7 @@ result in HL."
    (instr-spec-defaults 
     :opcode opcode
     :cycles 2)
+   (pc-next-instr)
    (alist
     :bindings `((hl (cpu-hl ,*cpu-name*))
 		(data ,(compile-key-accessor contents-key))
@@ -1878,7 +1892,6 @@ result in HL."
     :name (list :add :hl contents-key)
     :description (format nil "Add HL to ~A. Store the result in HL."
 			 (key-description contents-key))
-    :pc `(+ 1 ,*pc-name*)
     :hl 'result
     :carry? `(bit-carry? 15 hl data)
     :half-carry? `(bit-carry? 11 hl data)
@@ -1888,6 +1901,7 @@ result in HL."
   (merge-instr-specs
    (instr-spec-defaults :opcode opcode
 			:cycles 2)
+   (pc-next-instr)
    (alist :bindings `((data ,(compile-key-accessor contents-key))
 		      (result (logand #xffff (,(ecase inc-op-key
 						 (:inc '1+)
@@ -1899,8 +1913,7 @@ result in HL."
 				 (:inc "Increment")
 				 (:dec "Decrement"))
 			       (key-description contents-key))
-	  contents-key 'result
-	  :pc '(1+ pc))))
+	  contents-key 'result)))
 
 ;; S2.4
 (defun 16bit-alu-op-instr-specs ()
@@ -1916,12 +1929,12 @@ result in HL."
      (instr-spec-defaults :opcode #b11101000
 			  :cycles 4)
      (imm8-instr-spec)
+     (pc-next-instr :instr-size 2)
      (alist
       :bindings `((sp (cpu-sp cpu))
 		  (result (logand #xffff (+ sp imm8))))
       :name (list :add :sp :imm8)
       :description "Add SP to the imm8 operand. Store the result in SP."
-      :pc '(+ 2 pc)
       :sp 'result
       :zero? nil
       :carry? `(bit-carry? 15 sp imm8)
@@ -2181,9 +2194,13 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 (defun shift-right-logical (byte)
   (logand #x7f (ash byte -1)))
 
+(defun lo-nibble (byte)
+  (logand #xf byte))
+(defun hi-nibble (byte)
+  (ash (logand #xf0 byte) -4))
 (defun swap (byte)
-  (let* ((lo (logand #xf byte))
-	 (hi (ash (logand #xf0 byte) -4)))
+  (let* ((lo (lo-nibble byte))
+	 (hi (hi-nibble byte)))
     (logior (ash lo 4) hi)))
 
 (defun bit-set (bit-index byte bit-value)
@@ -2284,7 +2301,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 (defun jump-conditionally-instr-spec (condition-key instr-size addr-form min-cycles)
   (merge-instr-specs
    (condition?-bindings condition-key)
-   (alist :pc `(if condition? ,addr-form (+ pc ,instr-size))
+   (alist :pc `(if condition? ,addr-form (+ ,*pc-name* ,instr-size))
 	  :cycles `(+ ,min-cycles
 		      (if condition? 1 0)))))
 
@@ -2304,12 +2321,9 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 
 (defun relative-addr-instr-spec ()
   (merge-instr-specs
-   (imm8-instr-spec)
-   (alist :bindings '((s8 (s8 imm8))
-		      (addr (+ 2 pc s8)))
-	  :disassembly '(alist :imm8 imm8
-			 :s8 s8
-			 :addr addr))))
+   (s8-instr-spec)
+   (alist :bindings `((,*addr-name* (+ 2 ,*pc-name* ,*s8-name*)))
+	  :disassembly (alist :addr *addr-name*))))
 
 ;; S2.7
 (defun jump-instr-specs ()
@@ -2334,7 +2348,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 	:description (format nil "Load the imm16 value into the PC if ~A."
 			     (condition-key-description condition-key))
 	:opcode opcode)
-       (alist :disassembly `(alist :imm16 ,(compile-imm16-access)))
+       (alist :disassembly (alist :imm16 (compile-imm16-access)))
        (jump-conditionally-instr-spec condition-key 3 (compile-imm16-access) 3)))
     #b11000010)
 
@@ -2347,7 +2361,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :opcode #b00011000
       :cycles 3)
      (relative-addr-instr-spec)
-     (alist :pc 'addr)))
+     (alist :pc *addr-name*)))
 
    ;; JR cc imm8
    (map-jump-conditional-opcodes
@@ -2360,7 +2374,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 	:opcode opcode)
        ;; TODO: optimize by only accessing memory if condition? is true
        (relative-addr-instr-spec)
-       (jump-conditionally-instr-spec condition-key 2 'addr 2)))
+       (jump-conditionally-instr-spec condition-key 2 *addr-name* 2)))
     #b00100000)
 
    (list
@@ -2372,7 +2386,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :opcode #b11101001
       :instr-size 1
       :cycles 1)
-     (alist :pc '(cpu-hl cpu))))))
+     (alist :pc `(cpu-hl ,*cpu-name*))))))
 
 ;; S2.8
 (defun call-and-return-instr-specs ()
@@ -2386,7 +2400,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :opcode #b11001101
       :cycles 6)
      (imm16-instr-spec)
-     (push-value-instr-spec '(+ pc 3))
+     (push-value-instr-spec `(+ ,*pc-name* 3))
      (alist :pc 'imm16)))
 
    ;; CALL cc imm16
@@ -2458,7 +2472,7 @@ Otherwise increment PC to the next instruction."
 	:description "Jump to a predefined address based on t (0-7): (#x0000 #x0008 #x0010 #x0018 #x0020 #x0028 #x0030 #x0038)."
 	:opcode opcode
 	:cycles 4
-	:disassembly `(alist :t ,index))
+	:disassembly (alist :t index))
        (push-value-instr-spec '(1+ pc))
        (alist :pc (* index 8))))
     #b11000111 (alist 3 '(0 1 2 3 4 5 6 7)))))
@@ -2466,10 +2480,13 @@ Otherwise increment PC to the next instruction."
 ;; TODO: learn about interrupts
 ;; TODO: learn about interrupt service routines
 ;; TODO: learn about master interrupt flag
+;; TODO: learn about system clock
+;; TODO: learn about oscilator circuit
+;; TODO: learn about LCD controller
+;; TODO: learn about interrupt request flag
+;; TODO: learn about interrupt enable flag
+;; TODO: learn about RESET terminal: LOW status; reset normal mode
 ;; TODO: Some way to leave memory unchanged?
-
-;; TODO: make disassembly (alist key 'form key2 'form2) instead of '(alist key form key2 form2)
-;;   and let merge-instr-specs append to disassembly (instead of replacing) 
 
 (defun rotate-left (register carry-bit)
   (logior carry-bit (logand #xff (ash register 1))))
@@ -2484,6 +2501,135 @@ Otherwise increment PC to the next instruction."
     (if (zerop (logand bitmask value))
 	0
 	1)))
+
+(defun daa-carry? (subtraction? carry? half-carry? byte)
+  (and (not subtraction?)
+       (or carry?
+	   half-carry?
+	   (> byte #x99)
+	   (> (lo-nibble byte) #x09))))
+(defun daa (subtraction? carry? half-carry? byte)
+  (let* ((lo (lo-nibble byte))
+	 (adjustment 0))
+    (cond
+      (subtraction?
+       (when carry? (decf adjustment #x60))
+       (when half-carry? (decf adjustment #x06)))
+      (t
+       (when (or carry? (> byte #x99)) (incf adjustment #x60))
+       (when (or half-carry? (> lo #x09)) (incf adjustment #x06))))
+    (+ byte adjustment)))
+
+;; S2.9
+(defun general-purpose-arithmetic-instr-specs ()
+  (append
+   (list
+    ;; DAA
+    (merge-instr-specs
+     (alist
+      :name :daa
+      :description "Performs post-arithmetic adjustment for the binary coded decimal value in A."
+      :opcode #b00100111
+      :cycles 1)
+     (a-binding)
+     (alist :bindings '((n? (cpu-subtraction? cpu))
+			(cy? (cpu-carry? cpu))
+			(h? (cpu-half-carry? cpu))))
+     (result-bindings '(daa n? cy? h? a))
+     (alist
+      :a *result-name*
+      :carry? '(daa-carry? n? cy? h? a)
+      :zero? '(zerop result)
+      :half-carry? nil)
+     (pc-next-instr))
+    
+    ;; CPL
+    (merge-instr-specs
+     (alist
+      :name :cpl
+      :opcode #b00101111
+      :description "Takes the one's complement of the contents of register A."
+      :cycles 1
+      :half-carry? t
+      :subtraction? t)
+     (pc-next-instr)
+     (a-binding)
+     (result-bindings `(logxor #xff ,*a-name*))
+     (key-set-instr-spec :a *result-name*))
+
+    ;; NOP
+    (merge-instr-specs
+     (alist
+      :name :nop
+      :opcode #b00000000
+      :description "Advances the PC by 1 (no-op)."
+      :cycles 1)
+     (pc-next-instr))
+
+    ;; CCF
+    (merge-instr-specs
+     (alist
+      :name :ccf
+      :opcode #b00111111
+      :description "Stores the complement of the carry flag in the carry flag."
+
+      :half-carry? nil
+      :subtraction? nil
+      :carry? `(not (cpu-carry? ,*cpu-name*)))
+     (pc-next-instr))
+
+    ;; SCF
+    (merge-instr-specs
+     (alist
+      :name :scf
+      :opcode #b00110111
+      :description "Sets the carry flag to 1."
+
+      :half-carry? nil
+      :subtraction? nil
+      :carry? t)
+     (pc-next-instr))
+
+    ;; DI: TODO
+    #+nil
+    (merge-instr-specs
+     (alist
+      :name :di
+      :opcode #b11110011
+      :description "Disables maskable interrupts. Sets IME to 0."
+      :cycles 1)
+     (pc-next-instr))
+    
+    ;; EI: TODO
+    #+nil
+    (merge-instr-specs
+     (alist
+      :name :ei
+      :opcode #b11111011
+      :description "Enables maskable interrupts. Sets IME to 1."
+      :cycles 1)
+     (pc-next-instr))
+
+    ;; HALT: TODO
+    #+nil
+    (merge-instr-specs
+     (alist :name :halt
+	    :opcode #b01110110
+	    :description "Stops the system clock. Waits for interrupt request flag and corresponding interrupt enable flag to be set
+before resuming execution."
+	    :cycles 1)
+     (pc-next-instr))
+
+    ;; STOP: TODO
+    #+nil
+    (merge-instr-specs
+     (alist :name :stop
+	    :opcode #b00010000
+	    :description "Stops the system clock. Stops the oscillator circuit. 
+Waits for a reset signal."
+	    :cycles 1)
+     (pc-next-instr :instr-size 2)))))
+
 
 (defvar *breakpoints* ())
 (defmacro defbreakpoint (name (cpu memory) &body body)
@@ -2523,7 +2669,8 @@ Otherwise increment PC to the next instruction."
 		 (rotate-shift-instr-specs)
 		 (bit-instr-specs)
 		 (jump-instr-specs)
-		 (call-and-return-instr-specs))))
+		 (call-and-return-instr-specs)
+		 (general-purpose-arithmetic-instr-specs))))
   
   ;; TEMP: Add all single-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *instrs*)) (remove-if (fn (aval :long? %)) *instr-specs*))
