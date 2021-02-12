@@ -591,12 +591,12 @@ Test-fn and handle-fn are both functions of event."
   (draw-full-texture-id! texture-id (texture-right-alignment texture-id pos)))
 
 (defstruct cpu
-  a b c d e f h l sp pc flag)
+  a b c d e f h l sp pc flag ime?)
 
 (defun g1 (value) (* value *grid-size*))
 
 (defun cpu-initial ()
-  (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0 :flag 0))
+  (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0 :flag 0 :ime? nil))
 
 (defvar *cpus* (list (cpu-initial)))
 (defun cpu-current ()
@@ -1326,13 +1326,19 @@ Test-fn and handle-fn are both functions of event."
   (let ((memory (aval :memory instr-spec)))
     (apply 'concatenate 'list (mapcar (fn `((aref ,*memory-name* ,(first %)) ,(second %))) memory))))
 
+(defmacro when-let ((name condition-form) &body body)
+  `(let* ((,name ,condition-form))
+     ,@body))
+
 (defun compile-instr-spec-for-execute (instr-spec)
   `(let* ,(aval :bindings instr-spec)
      ,@(compile-combined-register-sets instr-spec)
      (setf
       ,@(compile-set-memory instr-spec)
       ,@(compile-set-flags instr-spec)
-      ,@(compile-register-sets instr-spec))))
+      ,@(compile-register-sets instr-spec)
+      ,@(when-let (ime? (aval :ime? instr-spec))
+	  `((cpu-ime? ,*cpu-name*) ,ime?)))))
 
 (defparameter *bit-indices* '(0 1 2 3 4 5 6 7))
 (defparameter *register-codes* '(0 1 2 3 4 5 7))
@@ -1436,7 +1442,8 @@ Test-fn and handle-fn are both functions of event."
 	  :sp :pc
 	  :memory
 	  :cycles
-	  :zero? :carry? :half-carry? :subtraction?)))
+	  :zero? :carry? :half-carry? :subtraction?
+	  :ime?)))
 (defun compile-instr-spec-disassemble-instr (instr-spec)
   (compile-disassemble-instr 
    (aval :bindings instr-spec)
@@ -2435,7 +2442,14 @@ Otherwise, increment PC to the next instruction."
      (pop-instr-spec :pc))
 
     ;; RETI TODO!
-    )
+    (merge-instr-specs
+     (alist :name :reti
+	    :description "Return from interrupt and sets the IME."
+	    :opcode #b11011001
+	    :cycles 4)
+     (alist :jump? t)
+     (pop-instr-spec :pc)
+     (alist :ime? t)))
 
    ;; RET cc
    (map-jump-conditional-opcodes
@@ -2471,15 +2485,6 @@ Otherwise increment PC to the next instruction."
        (pc-jump (* index 8))))
     #b11000111 (alist 3 '(0 1 2 3 4 5 6 7)))))
 
-;; TODO: learn about interrupts
-;; TODO: learn about interrupt service routines
-;; TODO: learn about master interrupt flag
-;; TODO: learn about system clock
-;; TODO: learn about oscilator circuit
-;; TODO: learn about LCD controller
-;; TODO: learn about interrupt request flag
-;; TODO: learn about interrupt enable flag
-;; TODO: learn about RESET terminal: LOW status; reset normal mode
 ;; TODO: Some way to leave memory unchanged?
 
 (defun rotate-left (register carry-bit)
@@ -2584,24 +2589,24 @@ Otherwise increment PC to the next instruction."
       :carry? t)
      (pc-next-instr))
 
-    ;; DI: TODO
-    #+nil
+    ;; DI
     (merge-instr-specs
      (alist
       :name :di
       :opcode #b11110011
       :description "Disables maskable interrupts. Sets IME to 0."
       :cycles 1)
+     (alist :ime? nil)
      (pc-next-instr))
     
-    ;; EI: TODO
-    #+nil
+    ;; EI
     (merge-instr-specs
      (alist
       :name :ei
       :opcode #b11111011
       :description "Enables maskable interrupts. Sets IME to 1."
       :cycles 1)
+     (alist :ime? t)
      (pc-next-instr))
 
     ;; HALT: TODO
@@ -2705,5 +2710,72 @@ Waits for a reset signal."
 	lines)))
 
 
+;; TODO: store flags individually in CPU
 ;; focus: the memory address that was last modified
 ;; add cycles
+
+;; S1.2
+;; Dot-matrix LCD
+;; 64-kbit SRAM for LCD
+;; 64-kbit SRAM working memory
+;; 32-pin connector for cartrdiges
+;; Sound amp
+;; keys for operation (buttons)
+;; Speaker
+
+
+;; Interrupt Flags
+;; IF (Interrupt Flag)                 #xFF0F
+;; IE (Interrupt Enable)               #xFFFF
+;; IME (Master Interrupt Enable)
+
+;; 4 maskable interrupts
+;;;  LCD Display Vertical Blanking
+;;;  Status interrupts from LCDC (4 modes)
+;;;  Timer Overflow Interrupt
+;;;  Serial Transfer Completion Interrupt
+;; 1 maskable external interrupt
+;;;  End of input signal for ports P10-P13
+
+
+;; DMA
+;;; 40x32-bit transfers from 0x8000-0xDFFF to OAM memory (sprite memory)
+;;; Horizontal-blanking DMA transfer: 16bytes per horizontal blanking automatically transferred
+;;;   from user program or external working memory to the LCD RAM area
+;;; General Purpose DMA transfer: 16-2048 bytes are transferred from user program
+;;;   or external working memory to LCD RAM area during the vertical blanking period
+
+;; Timer
+;;; TIMA (counter)
+;;; TMA (modulor register)
+;;; TAC (control register)
+
+;; Connections
+;;; P10-P13: Input ports
+;;; P14-P15: key matrix structure.
+
+;; S2.4.4
+;; IF (interrupt requested): xff0f
+;;  bits7-5: unused
+;;  bit4: P10-P13 terminal negative edge (button pressed?): #x0060
+;;  bit3: Serial I/O terminal completion: #x0058
+;;  bit2: timer overflow: #x0050
+;;  bit1: LCDC (?): #x0048
+;;  bit0: vertical blanking: #x0040
+
+;; IE (interrupt enabled): #xffff
+;; IME: Interrupt Master enabled
+
+;; Priority is from bit0->bit4
+
+;; process
+;; 1. IF flag is set
+;; 2. if IME and corresponding IE flag is set:
+;;    a. IME flag is reset (0)
+;;    b. Push PC onto the stack
+;;    c. Jump PC to starting address of interrupt.
+
+;; interrupt processing routine pushes the registers
+;; Return from interrupt using RETI and RET
+;; RETI sets IME
+;; Check for interrupts during the op-code fetch cycle of each instruction.
