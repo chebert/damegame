@@ -591,12 +591,13 @@ Test-fn and handle-fn are both functions of event."
   (draw-full-texture-id! texture-id (texture-right-alignment texture-id pos)))
 
 (defstruct cpu
-  a b c d e f h l sp pc flag ime?)
+  a b c d e f h l sp pc zero? half-carry? carry? subtraction? ime?)
 
 (defun g1 (value) (* value *grid-size*))
 
 (defun cpu-initial ()
-  (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0 :flag 0 :ime? nil))
+  (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0
+	    :zero? nil :half-carry? nil :subtraction? nil :ime? t))
 
 (defvar *cpus* (list (cpu-initial)))
 (defun cpu-current ()
@@ -975,15 +976,6 @@ Test-fn and handle-fn are both functions of event."
 (defun cpu-hl (cpu)
   (combined-register (cpu-h cpu) (cpu-l cpu)))
 
-(defun cpu-zero? (cpu)
-  (not (zerop (logand (cpu-flag cpu) #b1000))))
-(defun cpu-subtraction? (cpu)
-  (not (zerop (logand (cpu-flag cpu) #b0100))))
-(defun cpu-half-carry? (cpu)
-  (not (zerop (logand (cpu-flag cpu) #b0010))))
-(defun cpu-carry? (cpu)
-  (not (zerop (logand (cpu-flag cpu) #b0001))))
-
 #+nil
 (command!
   (let ((*number-base* :unsigned))
@@ -1023,12 +1015,6 @@ Test-fn and handle-fn are both functions of event."
 (deftest test-hi-and-lo-byte
   (let ((n #xfefa))
     (checkeql n (combined-register (hi-byte n) (lo-byte n)))))
-
-(defun flag (zero subtraction half-carry carry)
-  (logior (* 8 zero)
-	  (* 4 subtraction)
-	  (* 2 half-carry)
-	  carry))
 
 (defun long-instr? (byte1)
   (eql byte1 #xcb))
@@ -1281,11 +1267,15 @@ Test-fn and handle-fn are both functions of event."
     (:af 'cpu-af)
     (:bc 'cpu-bc)
     (:de 'cpu-de)
-    (:hl 'cpu-hl)))
+    (:hl 'cpu-hl)
+    (:zero? 'cpu-zero?)
+    (:half-carry? 'cpu-half-carry?)
+    (:carry? 'cpu-carry?)
+    (:subtraction? 'cpu-subtraction?)))
 
 (defun compile-register-set (key instr-spec)
-  (let ((value (aval key instr-spec)))
-    (when value `((,(cpu-register-accessor-name key) ,*cpu-name*) ,value))))
+  (when (akey? key instr-spec)
+    `((,(cpu-register-accessor-name key) ,*cpu-name*) ,(aval key instr-spec))))
 
 (defun compile-register-sets (instr-spec)
   (apply 'nconc
@@ -1306,21 +1296,11 @@ Test-fn and handle-fn are both functions of event."
 			 (:bc :c :b)
 			 (:de :e :d)
 			 (:hl :l :h)))))
-(defun compile-set-flag (cpu-flag-name flag-key bit-index instr-spec)
-  (if (akey? flag-key instr-spec)
-      `(if ,(aval flag-key instr-spec) 1 0)
-      `(bit-value ,cpu-flag-name ,bit-index)))
 
 (defun compile-set-flags (instr-spec)
-  (when (some (fn (akey? % instr-spec)) '(:zero? :subtraction? :half-carry? :carry?))
-    (let ((cpu-flag-name (gensym)))
-      `((cpu-flag ,*cpu-name*)
-	(let ((,cpu-flag-name (cpu-flag ,*cpu-name*)))
-	  (declare (ignorable ,cpu-flag-name))
-	  (flag ,(compile-set-flag cpu-flag-name :zero? 3 instr-spec)
-		,(compile-set-flag cpu-flag-name :subtraction? 2 instr-spec)
-		,(compile-set-flag cpu-flag-name :half-carry? 1 instr-spec)
-		,(compile-set-flag cpu-flag-name :carry? 0 instr-spec)))))))
+  (apply 'nconc
+	 (mapcar (fn (compile-register-set % instr-spec))
+		 '(:zero? :subtraction? :half-carry? :carry?))))
 
 (defun compile-set-memory (instr-spec)
   (let ((memory (aval :memory instr-spec)))
@@ -2677,7 +2657,7 @@ Waits for a reset signal."
   (mapcar (fn (asetq (aval :opcode %) % *long-instrs*)) (remove-if-not (fn (aval :long? %)) *instr-specs*))
   ;; Recompile the execute! function
   (eval (compile-execute-next-instr))
-  (eval `(defun interupt! (addr cpu memory)
+  (eval `(defun interrupt! (addr cpu memory)
 	   ,(compile-instr-spec-for-execute
 	     (merge-instr-specs
 	      (push-instr-spec :pc)
@@ -2727,6 +2707,6 @@ Waits for a reset signal."
 	lines)))
 
 
-;; TODO: store flags individually in CPU
+;; TODO: have execute return the number of cycles
 ;; focus: the memory address that was last modified
 ;; add cycles
