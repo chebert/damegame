@@ -965,7 +965,6 @@ Test-fn and handle-fn are both functions of event."
      (format nil "~d" register))))
 
 (defun combined-register (hi lo)
-  ;; TODO: determine if we use arithemtic shift or logical shift.
   (+ (ash hi 8) lo))
 (defun cpu-af (cpu)
   (combined-register (cpu-a cpu) (cpu-f cpu)))
@@ -1221,7 +1220,6 @@ Test-fn and handle-fn are both functions of event."
 (defvar *instrs* ())
 (defvar *long-instrs* ())
 
-;; TODO ensure these are used instead of hard-coding values.
 (defparameter *cpu-name* 'cpu)
 (defparameter *memory-name* 'memory)
 (defparameter *pc-name* 'pc)
@@ -1349,18 +1347,11 @@ Test-fn and handle-fn are both functions of event."
     (apply 'for-each-cartesian (fn (push (funcall fn %) result)) sets)
     result))
 
+;; TODO: optimize by adding type declarations to cpu registers
 
-;; TODO: figure out why there are two of these
 (defun opcode-from-template (opcode-template opcode-parameter-bindings opcode-arguments)
   (let* ((opcode-parameters (mapcar (fn (cons (third %) %%))
 				    opcode-parameter-bindings
-				    opcode-arguments)))
-    (apply 'logior
-	   opcode-template
-	   (amap (fn (ash %% %)) opcode-parameters))))
-(defun opcode-from-template2 (opcode-template opcode-argument-indices opcode-arguments)
-  (let* ((opcode-parameters (mapcar (fn (cons % %%))
-				    opcode-argument-indices
 				    opcode-arguments)))
     (apply 'logior
 	   opcode-template
@@ -1406,11 +1397,10 @@ Test-fn and handle-fn are both functions of event."
     (#b110 :@hl)))
 
 (defun map-opcodes (fn opcode-template opcode-list-parameters)
-  (let ((opcode-parameter-lists (mapcar 'cdr opcode-list-parameters))
-	(opcode-parameter-indices (mapcar 'car opcode-list-parameters)))
+  (let ((opcode-parameter-lists (mapcar 'cdr opcode-list-parameters)))
     (apply 'map-cartesian
 	   (lambda (arguments)
-	     (let* ((opcode (opcode-from-template2 opcode-template opcode-parameter-indices arguments)))
+	     (let* ((opcode (opcode-from-template opcode-template opcode-list-parameters arguments)))
 	       (apply fn opcode arguments)))
 	   opcode-parameter-lists)))
 
@@ -1619,7 +1609,7 @@ Test-fn and handle-fn are both functions of event."
     (ld-instr-spec #b11111010 :@imm16 :a)
     (ld-instr-spec #b11101010 :a :@imm16)
 
-    ;; TODO: create HL binding to optimize
+    ;; TODO: optimize create HL binding
     (ld-instr-spec #b00101010 :@hli :a)
     (ld-instr-spec #b00111010 :@hld :a)
 
@@ -1960,9 +1950,13 @@ result in HL."
 
 (defun a-binding ()
   (alist :bindings `((,*a-name* (cpu-a ,*cpu-name*)))))
-;; TODO: Use this everywhere
 (defun pc-next-instr (&key (instr-size 1))
   (alist :pc `(+ ,instr-size ,*pc-name*)))
+(defun pc-jump (addr-form &key condition-form instr-size)
+  (alist :pc (if condition-form
+		 `(if ,condition-form ,addr-form (+ ,instr-size ,*pc-name*))
+		 addr-form)
+	 :jump? t))
 
 (defun rotate-flags (bit-set?-form &optional zerop-result-name)
   (alist :carry? bit-set?-form
@@ -2301,8 +2295,8 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
 (defun jump-conditionally-instr-spec (condition-key instr-size addr-form min-cycles)
   (merge-instr-specs
    (condition?-bindings condition-key)
-   (alist :pc `(if condition? ,addr-form (+ ,*pc-name* ,instr-size))
-	  :cycles `(+ ,min-cycles
+   (pc-jump addr-form :condition-form 'condition? :instr-size instr-size)
+   (alist :cycles `(+ ,min-cycles
 		      (if condition? 1 0)))))
 
 (defun map-jump-conditional-opcodes (fn opcode-template)
@@ -2311,13 +2305,10 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
      (funcall fn opcode (condition-key condition-code)))
    opcode-template (alist 3 *condition-codes*)))
 
-;; TODO: Use this everywhere
 (defun compile-16bit-memory-access (addr-form)
-  (let* ((addr (gensym)))
-    `(let* ((,addr ,addr-form))
-       (combined-register (aref ,*memory-name* (1+ ,addr)) (aref ,*memory-name* ,addr)))))
-(defun compile-imm16-access ()
-  (compile-16bit-memory-access `(1+ ,*pc-name*)))
+  `(imm16 ,addr-form ,*memory-name*))
+(defun compile-imm16-access (&optional long-instruction?)
+  (compile-16bit-memory-access `(+ ,(if long-instruction? 2 1) ,*pc-name*)))
 
 (defun relative-addr-instr-spec ()
   (merge-instr-specs
@@ -2337,7 +2328,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :opcode #b11000011
       :cycles 4)
      (imm16-instr-spec)
-     (key-set-instr-spec :pc 'imm16)))
+     (pc-jump 'imm16)))
 
    ;; JP cc, nn
    (map-jump-conditional-opcodes
@@ -2361,7 +2352,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :opcode #b00011000
       :cycles 3)
      (relative-addr-instr-spec)
-     (alist :pc *addr-name*)))
+     (pc-jump *addr-name*)))
 
    ;; JR cc imm8
    (map-jump-conditional-opcodes
@@ -2386,7 +2377,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :opcode #b11101001
       :instr-size 1
       :cycles 1)
-     (alist :pc `(cpu-hl ,*cpu-name*))))))
+     (pc-jump '(cpu-hl cpu))))))
 
 ;; S2.8
 (defun call-and-return-instr-specs ()
@@ -2401,7 +2392,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
       :cycles 6)
      (imm16-instr-spec)
      (push-value-instr-spec `(+ ,*pc-name* 3))
-     (alist :pc 'imm16)))
+     (pc-jump 'imm16)))
 
    ;; CALL cc imm16
    (map-jump-conditional-opcodes
@@ -2425,8 +2416,8 @@ Otherwise, increment PC to the next instruction."
 	;; TODO: optimize by not setting memory if condition? is false
 	:memory `((sp-1 (if condition? (hi-byte pc+3) (aref memory sp-1)))
 		  (sp-2 (if condition? (lo-byte pc+3) (aref memory sp-2))))
-	:pc '(if condition? imm16 pc+3)
-	:cycles '(if condition? 6 3))))
+	:cycles '(if condition? 6 3))
+       (pc-jump 'imm16 :condition-form 'condition? :instr-size 3)))
     #b11000100)
 
    (list
@@ -2437,6 +2428,7 @@ Otherwise, increment PC to the next instruction."
       :description "POP the value off the stack into the PC."
       :opcode #b11001001
       :cycles 4)
+     (alist :jump? t)
      (pop-instr-spec :pc))
 
     ;; RETI TODO!
@@ -2454,13 +2446,12 @@ Otherwise increment PC to the next instruction."
 	:opcode opcode)
        (condition?-bindings condition-key)
        (alist :bindings `((sp (cpu-sp cpu))
-			  (sp+1 (1+ sp))
 			  (sp+2 (+ 2 sp)))
 	      :sp `(if condition? sp+2 sp)
-	      :pc `(if condition?
-		       (combined-register (aref memory sp+1) (aref memory sp))
-		       (+ pc 1))
-	      :cycles '(if condition? 5 2))))
+	      :cycles '(if condition? 5 2))
+       (pc-jump (compile-16bit-memory-access 'sp)
+		:condition-form 'condition?
+		:instr-size 1)))
     #b11000000)
 
    ;; RST t
@@ -2474,7 +2465,7 @@ Otherwise increment PC to the next instruction."
 	:cycles 4
 	:disassembly (alist :t index))
        (push-value-instr-spec '(1+ pc))
-       (alist :pc (* index 8))))
+       (pc-jump (* index 8))))
     #b11000111 (alist 3 '(0 1 2 3 4 5 6 7)))))
 
 ;; TODO: learn about interrupts
@@ -2644,10 +2635,9 @@ Waits for a reset signal."
 (defun break? (cpu memory)
   (some (fn (funcall % cpu memory)) (mapcar 'cdr *breakpoints*)))
 
-(undefbreakpoint past-first-loop (cpu memory)
-		 (let* ((pc (cpu-pc cpu)))
-		   (< #x0a pc)))
-
+(defbreakpoint wait-loop (cpu memory)
+  (let* ((pc (cpu-pc cpu)))
+    (= #x64 pc)))
 
 (defun compile-disassemble-instr-spec (instr-spec)
   (compile-disassemble-instr
