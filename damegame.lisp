@@ -1041,6 +1041,11 @@ Test-fn and handle-fn are both functions of event."
 	  (aval byte2 *long-instrs*))
 	(aval byte *instrs*))))
 
+(defun disassemble-instr-at-pc (pc cpu memory)
+  (let ((cpu2 (copy-cpu cpu)))
+    (setf (cpu-pc cpu2) pc)
+    (disassemble-instr cpu2 memory)))
+
 (defun disassemble-instr (cpu memory)
   (let* ((pc (cpu-pc cpu))
 	 (byte (aref memory pc)))
@@ -1350,12 +1355,10 @@ Test-fn and handle-fn are both functions of event."
 ;; TODO: optimize by adding type declarations to cpu registers
 
 (defun opcode-from-template (opcode-template opcode-parameter-bindings opcode-arguments)
-  (let* ((opcode-parameters (mapcar (fn (cons (third %) %%))
-				    opcode-parameter-bindings
-				    opcode-arguments)))
-    (apply 'logior
-	   opcode-template
-	   (amap (fn (ash %% %)) opcode-parameters))))
+  (apply 'logior opcode-template
+	 (mapcar (fn (ash % (car %%)))
+		 opcode-arguments
+		 opcode-parameter-bindings)))
 
 (defun opcode-bindings (opcode-parameter-bindings opcode-arguments)
   (mapcar (fn (list (first %) %%))
