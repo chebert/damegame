@@ -1256,8 +1256,8 @@ Test-fn and handle-fn are both functions of event."
 	 (declare (ignorable ,@(mapcar 'first bindings)))
 	 (alist ,@(apply 'append (amap (fn (list % %%)) disassembly)))))))
 
-(defun compile-execute ()
-  `(defun execute! (,*cpu-name* ,*memory-name*)
+(defun compile-execute-next-instr ()
+  `(defun execute-next-instr! (,*cpu-name* ,*memory-name*)
      (let ((,*pc-name* (cpu-pc ,*cpu-name*)))
        (ecase (aref ,*memory-name* ,*pc-name*)
 	 ,@(amap (fn (list % (compile-instr-spec-for-execute %%))) *instrs*)
@@ -1328,7 +1328,8 @@ Test-fn and handle-fn are both functions of event."
 
 (defmacro when-let ((name condition-form) &body body)
   `(let* ((,name ,condition-form))
-     ,@body))
+     (when ,name
+       ,@body)))
 
 (defun compile-instr-spec-for-execute (instr-spec)
   `(let* ,(aval :bindings instr-spec)
@@ -2675,12 +2676,28 @@ Waits for a reset signal."
   ;; TEMP: add all 2-byte instr-specs to instrs
   (mapcar (fn (asetq (aval :opcode %) % *long-instrs*)) (remove-if-not (fn (aval :long? %)) *instr-specs*))
   ;; Recompile the execute! function
-  (eval (compile-execute)))
+  (eval (compile-execute-next-instr))
+  (eval `(defun interupt! (addr cpu memory)
+	   ,(compile-instr-spec-for-execute
+	     (merge-instr-specs
+	      (push-instr-spec :pc)
+	      (pc-jump 'addr))))))
 
-(cons 'progn (mapcar 'compile-instr-spec-effects (8bit-alu-instr-specs)))
-
-;; recompile execute! definition
+;; recompile execute-next-instr! definition
 (define-instrs!)
+
+(defun execute! (cpu memory)
+  (when (cpu-ime? cpu)
+    (let* ((interrupt-flags (aref memory #xff0f))
+	   (interrupt-enable (aref memory #xffff))
+	   (interrupts (logand interrupt-flags interrupt-enable)))
+      (cond
+	((bit-set? 0 interrupts) (interrupt! #x0040 cpu memory))
+	((bit-set? 1 interrupts) (interrupt! #x0048 cpu memory))
+	((bit-set? 2 interrupts) (interrupt! #x0050 cpu memory))
+	((bit-set? 3 interrupts) (interrupt! #x0058 cpu memory))
+	((bit-set? 4 interrupts) (interrupt! #x0060 cpu memory)))))
+  (execute-next-instr! cpu memory))
 
 (defun remove-newlines (string)
   (map 'string (fn (if (eql #\newline %)
@@ -2713,69 +2730,3 @@ Waits for a reset signal."
 ;; TODO: store flags individually in CPU
 ;; focus: the memory address that was last modified
 ;; add cycles
-
-;; S1.2
-;; Dot-matrix LCD
-;; 64-kbit SRAM for LCD
-;; 64-kbit SRAM working memory
-;; 32-pin connector for cartrdiges
-;; Sound amp
-;; keys for operation (buttons)
-;; Speaker
-
-
-;; Interrupt Flags
-;; IF (Interrupt Flag)                 #xFF0F
-;; IE (Interrupt Enable)               #xFFFF
-;; IME (Master Interrupt Enable)
-
-;; 4 maskable interrupts
-;;;  LCD Display Vertical Blanking
-;;;  Status interrupts from LCDC (4 modes)
-;;;  Timer Overflow Interrupt
-;;;  Serial Transfer Completion Interrupt
-;; 1 maskable external interrupt
-;;;  End of input signal for ports P10-P13
-
-
-;; DMA
-;;; 40x32-bit transfers from 0x8000-0xDFFF to OAM memory (sprite memory)
-;;; Horizontal-blanking DMA transfer: 16bytes per horizontal blanking automatically transferred
-;;;   from user program or external working memory to the LCD RAM area
-;;; General Purpose DMA transfer: 16-2048 bytes are transferred from user program
-;;;   or external working memory to LCD RAM area during the vertical blanking period
-
-;; Timer
-;;; TIMA (counter)
-;;; TMA (modulor register)
-;;; TAC (control register)
-
-;; Connections
-;;; P10-P13: Input ports
-;;; P14-P15: key matrix structure.
-
-;; S2.4.4
-;; IF (interrupt requested): xff0f
-;;  bits7-5: unused
-;;  bit4: P10-P13 terminal negative edge (button pressed?): #x0060
-;;  bit3: Serial I/O terminal completion: #x0058
-;;  bit2: timer overflow: #x0050
-;;  bit1: LCDC (?): #x0048
-;;  bit0: vertical blanking: #x0040
-
-;; IE (interrupt enabled): #xffff
-;; IME: Interrupt Master enabled
-
-;; Priority is from bit0->bit4
-
-;; process
-;; 1. IF flag is set
-;; 2. if IME and corresponding IE flag is set:
-;;    a. IME flag is reset (0)
-;;    b. Push PC onto the stack
-;;    c. Jump PC to starting address of interrupt.
-
-;; interrupt processing routine pushes the registers
-;; Return from interrupt using RETI and RET
-;; RETI sets IME
-;; Check for interrupts during the op-code fetch cycle of each instruction.
