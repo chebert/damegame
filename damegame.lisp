@@ -1312,7 +1312,8 @@ Test-fn and handle-fn are both functions of event."
        ,@body)))
 
 (defun compile-instr-spec-for-execute (instr-spec)
-  (assert (akey? :cycles instr-spec))
+  (unless (akey? :cycles instr-spec)
+    (warn "No CYCLES specified for ~A" instr-spec))
   `(let* ,(aval :bindings instr-spec)
      ,@(compile-combined-register-sets instr-spec)
      (setf
