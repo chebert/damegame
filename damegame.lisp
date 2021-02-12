@@ -1312,6 +1312,7 @@ Test-fn and handle-fn are both functions of event."
        ,@body)))
 
 (defun compile-instr-spec-for-execute (instr-spec)
+  (assert (akey? :cycles instr-spec))
   `(let* ,(aval :bindings instr-spec)
      ,@(compile-combined-register-sets instr-spec)
      (setf
@@ -1319,7 +1320,8 @@ Test-fn and handle-fn are both functions of event."
       ,@(compile-set-flags instr-spec)
       ,@(compile-register-sets instr-spec)
       ,@(when-let (ime? (aval :ime? instr-spec))
-	  `((cpu-ime? ,*cpu-name*) ,ime?)))))
+	  `((cpu-ime? ,*cpu-name*) ,ime?)))
+     ,(aval :cycles instr-spec)))
 
 (defparameter *bit-indices* '(0 1 2 3 4 5 6 7))
 (defparameter *register-codes* '(0 1 2 3 4 5 7))
@@ -2553,6 +2555,7 @@ Otherwise increment PC to the next instruction."
       :opcode #b00111111
       :description "Stores the complement of the carry flag in the carry flag."
 
+      :cycles 1
       :half-carry? nil
       :subtraction? nil
       :carry? `(not (cpu-carry? ,*cpu-name*)))
@@ -2562,6 +2565,7 @@ Otherwise increment PC to the next instruction."
     (merge-instr-specs
      (alist
       :name :scf
+      :cycles 1
       :opcode #b00110111
       :description "Sets the carry flag to 1."
 
@@ -2660,6 +2664,7 @@ Waits for a reset signal."
   (eval `(defun interrupt! (addr cpu memory)
 	   ,(compile-instr-spec-for-execute
 	     (merge-instr-specs
+	      (alist :cycles 4)
 	      (push-instr-spec :pc)
 	      (pc-jump 'addr))))))
 
@@ -2667,17 +2672,18 @@ Waits for a reset signal."
 (define-instrs!)
 
 (defun execute! (cpu memory)
-  (when (cpu-ime? cpu)
-    (let* ((interrupt-flags (aref memory #xff0f))
-	   (interrupt-enable (aref memory #xffff))
-	   (interrupts (logand interrupt-flags interrupt-enable)))
-      (cond
-	((bit-set? 0 interrupts) (interrupt! #x0040 cpu memory))
-	((bit-set? 1 interrupts) (interrupt! #x0048 cpu memory))
-	((bit-set? 2 interrupts) (interrupt! #x0050 cpu memory))
-	((bit-set? 3 interrupts) (interrupt! #x0058 cpu memory))
-	((bit-set? 4 interrupts) (interrupt! #x0060 cpu memory)))))
-  (execute-next-instr! cpu memory))
+  (if (cpu-ime? cpu)
+      (let* ((interrupt-flags (aref memory #xff0f))
+	     (interrupt-enable (aref memory #xffff))
+	     (interrupts (logand interrupt-flags interrupt-enable)))
+	(cond
+	  ((bit-set? 0 interrupts) (interrupt! #x0040 cpu memory))
+	  ((bit-set? 1 interrupts) (interrupt! #x0048 cpu memory))
+	  ((bit-set? 2 interrupts) (interrupt! #x0050 cpu memory))
+	  ((bit-set? 3 interrupts) (interrupt! #x0058 cpu memory))
+	  ((bit-set? 4 interrupts) (interrupt! #x0060 cpu memory))
+	  (t (execute-next-instr! cpu memory))))
+      (execute-next-instr! cpu memory)))
 
 (defun remove-newlines (string)
   (map 'string (fn (if (eql #\newline %)
@@ -2706,7 +2712,7 @@ Waits for a reset signal."
 	(cons first (word-wrap second line-length))
 	lines)))
 
+;; TODO: determine when interrupt flags are reset
 
-;; TODO: have execute return the number of cycles
 ;; focus: the memory address that was last modified
 ;; add cycles
