@@ -1,13 +1,5 @@
 (in-package #:sdl-wrapper)
 
-(define-alien-routine ("NextEvent" next-event%!) int
-  (scancode int :out)
-  (mouse-button int :out)
-  (clicks int :out)
-  (mouse-x int :out)
-  (mouse-y int :out)
-  (text (* char)))
-
 (defstruct event-quit
   "Event that occurs when the user tries to close the window (e.g. Alt-F4 or clicking X in the top right)")
 (defstruct event-keydown
@@ -63,132 +55,15 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
       (7 (make-event-mousewheel :horizontal-scroll mouse-x :vertical-scroll mouse-y))
       (8 (make-event-mousemove :x mouse-x :y mouse-y)))))
 
-(define-alien-routine ("Delay" delay!) void
-  "Pauses the current thread for at least the given duration."
-  (milliseconds int))
-
-(define-alien-routine ("Start" start%!) int
-  (width int)
-  (height int)
-  (audio-frequency int)
-  (audio-channels (unsigned 8)))
-(define-alien-routine ("Quit" quit!) void
-  "Quits SDL. Does not destroy any textures or close any fonts (as far as I know).")
 (defun start! (width height audio-frequency audio-channels)
   "Starts SDL, setting up SDL_TTF, audio, and creates a single window."
   (start%! 0 0 audio-frequency audio-channels)
   (quit!)
   (start%! width height audio-frequency audio-channels))
 
-(define-alien-routine ("CreatePixelBufferTexture" create-pixel-buffer-texture!) system-area-pointer
-  "Creates a texture that can have its pixel buffer replaced using replace-pixel-buffer!"
-  (width int)
-  (height int))
-(define-alien-routine ("ReplacePixelBuffer" replace-pixel-buffer%!) boolean
-  "Replaces the pixel buffer of the texture created with create-pixel-buffer-texture!.
-Format of each pixel is 4 8-bit unsigned integers R,G,B,A, organized from left-to-right top-to-bottom."
-  (texture system-area-pointer)
-  (rgba-pixels (* (unsigned 8))))
-
 (defun replace-pixel-buffer! (texture rgba-pixels)
   (sb-sys:with-pinned-objects (rgba-pixels)
     (replace-pixel-buffer%! texture (sb-sys:vector-sap rgba-pixels))))
-
-(define-alien-routine ("LoadBMP" load-bmp!) system-area-pointer
-  "Load the BMP."
-  (path c-string))
-(define-alien-routine ("LoadBMPWithColorKey" load-bmp-with-color-key!) system-area-pointer
-  "Load a BMP treating all pixels matching color key as completely transparent."
-  (path c-string)
-  (r (unsigned 8))
-  (g (unsigned 8))
-  (b (unsigned 8)))
-(define-alien-routine ("FreeTexture" free-texture!) void
-  "Releases the texture memory."
-  (texture system-area-pointer))
-
-(define-alien-routine ("OpenFont" open-font!) system-area-pointer
-  "Opens the font-file at font with the given font-size."
-  (path c-string)
-  (point-size int))
-(define-alien-routine ("CloseFont" close-font!) void
-  "Closes the font-file."
-  (font system-area-pointer))
-
-(define-alien-routine ("CreateTextTexture" create-text-texture!) system-area-pointer
-  "Creates and renders to a texture with the given font and text."
-  (font system-area-pointer)
-  (text c-string))
-
-(define-alien-routine ("TextureWidth" texture-width) int
-  "Returns the width of the SDL_Texture"
-  (texture system-area-pointer))
-(define-alien-routine ("TextureHeight" texture-height) int
-  "Returns the height of the SDL_Texture"
-  (texture system-area-pointer))
-
-(define-alien-routine ("BufferedAudioBytes" buffered-audio-bytes!) (unsigned 32)
-  "Returns the number of audio bytes currently buffered.")
-(define-alien-routine ("BufferAudio" buffer-audio!) int
-  "Num-bytes are copied from the bytes array into the audio buffer queue."
-  (bytes (* (unsigned 8)))
-  (num-bytes (unsigned 32)))
-(define-alien-routine ("PauseAudio" pause-audio!) void
-  "Pauses audio playback.")
-(define-alien-routine ("PlayAudio" play-audio!) void
-  "Begins/resumes audio playback of the current audio buffer.")
-
-(define-alien-routine ("Clear" clear!) void
-  "Clears the screen to the current draw color.")
-(define-alien-routine ("SetDrawColor" set-draw-color!) void
-  "Sets the current draw color."
-  (r (unsigned 8))
-  (g (unsigned 8))
-  (b (unsigned 8))
-  (a (unsigned 8)))
-(define-alien-routine ("DrawRect" draw-rect!) void
-  "Draws a rectangular outline with the current draw color."
-  (x (signed 32))
-  (y (signed 32))
-  (w (signed 32))
-  (h (signed 32)))
-(define-alien-routine ("FillRect" fill-rect!) void
-  "Draws a filled rect with the current draw color."
-  (x (signed 32))
-  (y (signed 32))
-  (w (signed 32))
-  (h (signed 32)))
-(define-alien-routine ("DrawTexture" draw-texture!) void
-  "Renders the texture to the screen sx,sy,sw,sh is the rectangular portion of the texture
-to render, and dx,dy,dw,dh is the destination rectangle to draw to."
-  (texture system-area-pointer)
-  (sx (signed 32))
-  (sy (signed 32))
-  (sw (signed 32))
-  (sh (signed 32))
-  (dx (signed 32))
-  (dy (signed 32))
-  (dw (signed 32))
-  (dh (signed 32)))
-(define-alien-routine ("TextureColorMod" texture-color-mod!) void
-  "Modulates the color of the texture with the provided color."
-  (texture system-area-pointer)
-  (r (unsigned 8))
-  (g (unsigned 8))
-  (b (unsigned 8)))
-(define-alien-routine ("Present" present!) void
-  "Flips the display buffer.")
-
-(define-alien-routine ("ErrorString" error-string) void
-  "Gets the string representing the last error.")
-(define-alien-routine ("ScancodeName" scancode-name) c-string
-  "Returns the name of the scancode. Can be called at any time (even before start!)"
-  (scancode int))
-(define-alien-routine ("ScancodeFromName" scancode-from-name) int
-  "Returns the scancode. Can be called at any time (even before start!)."
-  (name c-string))
-(define-alien-routine ("ElapsedMilliseconds" elapsed-milliseconds) (unsigned 32)
-  "Returns the time elapsed since start was called in milliseconds.")
 
 (defparameter *pixel-array*
   (let* ((w 200)
@@ -270,13 +145,39 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
     (:int* "int*")
 
     (:scancode "SDL_Scancode")
+    (:event-type "enum EventType")
     (:texture "SDL_Texture*")
     (:font "TTF_Font*")))
+(defun key-alien-type (key)
+  (ecase key
+    (:u8 '(sb-alien:unsigned 8))
+    (:u16 '(sb-alien:unsigned 16))
+    (:u32 '(sb-alien:unsigned 32))
+    (:u64 '(sb-alien:unsigned 64))
+    (:s8 '(sb-alien:signed 8))
+    (:s16 '(sb-alien:signed 16))
+    (:s32 '(sb-alien:signed 32))
+    (:s64 '(sb-alien:signed 64))
+    ((:int :scancode :event-type) 'sb-alien:int)
+    (:void 'sb-alien:void)
+    (:char* 'sb-alien:c-string)
+    (:u8* '(sb-alien:* (sb-alien:unsigned 8)))
+    (:int* '(sb-alien:* sb-alien:int))
+
+    ((:texture :font) 'sb-alien:system-area-pointer)))
+
+(defun alien-type (type)
+  (cond
+    ((consp type) (alien-type (cdr type)))
+    (t (key-alien-type type))))
 
 (defun c-type (type)
-  (if (keywordp type)
-      (key-c-type type)
-      type))
+  (cond
+    ((keywordp type) (key-c-type type))
+    ((consp type)
+     (ecase (car type)
+       (:out (format nil "~A*" (key-c-type (cdr type))))))
+    (t type)))
 
 (defun c-include-relative (relative-path)
   (format nil "#include \"~A\"" relative-path))
@@ -299,9 +200,9 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
 		(format s "  ~A,~%" field)))
     (format s "}")))
 
-(defun c-parameter (c-parameter)
-  (let* ((type (car c-parameter))
-	 (c-name (cdr c-parameter)))
+(defun c-parameter (parameter)
+  (let* ((type (cdr (assoc :type parameter)))
+	 (c-name (cdr (assoc :c-name parameter))))
     (format nil "~A ~A" (c-type type) c-name)))
 
 (defun c-comment (text)
@@ -310,17 +211,17 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
       (loop for line in lines do
 	(format s "// ~A~%" line)))))
 
-(defun c-function-declaration (type c-name c-parameters c-specifiers &optional documentation)
+(defun c-function-declaration (type c-name parameters c-specifiers &optional documentation)
   (with-output-to-string (s)
     (when documentation
       (format s "~A" (c-comment documentation)))
     (loop for c-specifier in c-specifiers do (format s "~A " c-specifier))
     (format s "~A ~A(" (c-type type) c-name)
-    (loop for c-parameter in c-parameters
+    (loop for parameter in parameters
 	  for i from 0 do
-	    (if (= i (1- (length c-parameters)))
-		(format s "~A" (c-parameter c-parameter))
-		(format s "~A, " (c-parameter c-parameter))))
+	    (if (= i (1- (length parameters)))
+		(format s "~A" (c-parameter parameter))
+		(format s "~A, " (c-parameter parameter))))
     (format s ")")))
 
 (defun split-lines (text)
@@ -335,47 +236,77 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
 		  (format s "  ~A" line)
 		  (format s "  ~A~%" line))))))
 
-(defun c-function-definition (type c-name c-parameters c-body c-specifiers)
+(defun c-function-definition (type c-name parameters c-body c-specifiers)
   (with-output-to-string (s)
-    (format s "~A {~%" (c-function-declaration type c-name c-parameters c-specifiers))
+    (format s "~A {~%" (c-function-declaration type c-name parameters c-specifiers))
     (format s "~A" (indent c-body))
     (format s "~%}")))
 
-(defun c-function (type c-name c-parameters c-body &optional c-specifiers)
-  (list (cons :type type)
-	(cons :c-name c-name)
-	(cons :c-parameters c-parameters)
-	(cons :c-body c-body)
-	(cons :c-specifiers c-specifiers)))
-(defun c-exported-function (type c-name c-parameters documentation c-body)
+(defun c-exported-function (type c-name lisp-name parameters documentation c-body)
   (assert (stringp documentation))
-  (assert (listp c-parameters))
+  (assert (listp parameters))
   (assert (stringp c-name))
   (assert (stringp c-body))
+  (assert (symbolp lisp-name))
   (list (cons :type type)
 	(cons :c-name c-name)
-	(cons :c-parameters c-parameters)
+	(cons :lisp-name lisp-name)
+	(cons :parameters parameters)
 	(cons :c-body c-body)
 	(cons :documentation documentation)
 	(cons :c-specifiers '("DLL_EXPORT"))))
 
-(defun alist (&rest keys-and-values)
-  (labels ((rec (keys-and-values result)
-	     (if keys-and-values
-		 (let* ((key (first keys-and-values))
-			(value (second keys-and-values))
-			(rest (rest (rest keys-and-values))))
-		   (rec rest (acons key value result)))
+(defun alien-function-definition (type c-name lisp-name parameters documentation)
+  `(define-alien-routine (,c-name ,lisp-name) ,(alien-type type)
+     ,documentation
+     ,@(mapcar (lambda (parameter)
+		 (let* ((name (cdr (assoc :lisp-name parameter)))
+			(type (cdr (assoc :type parameter))))
+		   (if (and (consp type) (eql :out (car type)))
+		       `(,name ,(alien-type type) :out)
+		       `(,name ,(alien-type type)))))
+	       parameters)))
+
+(defun out-parameter-type (type)
+  (cons :out type))
+
+(defun parameter (type c-name lisp-name)
+  (assert (symbolp lisp-name))
+  (assert (stringp c-name))
+  (list (cons :type type)
+	(cons :c-name c-name)
+	(cons :lisp-name lisp-name)))
+
+(defun parameters (&rest types-and-c-names-and-lisp-names)
+  (labels ((rec (types-and-c-names-and-lisp-names result)
+	     (if types-and-c-names-and-lisp-names
+		 (let* ((type (first types-and-c-names-and-lisp-names))
+			(c-name (second types-and-c-names-and-lisp-names))
+			(lisp-name (third types-and-c-names-and-lisp-names))
+			(rest (rest (rest (rest types-and-c-names-and-lisp-names)))))
+		   (rec rest (cons (parameter type c-name lisp-name) result)))
 		 (nreverse result))))
-    (rec keys-and-values ())))
+    (rec types-and-c-names-and-lisp-names ())))
+
+(defun define-sdl-wrapper-alien-routines! ()
+  (eval (cons 'list (mapcar (lambda (spec)
+			      (alien-function-definition
+			       (cdr (assoc :type spec))
+			       (cdr (assoc :c-name spec))
+			       (cdr (assoc :lisp-name spec))
+			       (cdr (assoc :parameters spec))
+			       (cdr (assoc :documentation spec))))
+			    (sdl-wrapper-c-functions)))))
+
 
 (defun sdl-wrapper-c-functions ()
   (list
    (c-exported-function
-    :int "Start" (alist :int "window_width"
-			:int "window_height"
-			:int "audio_frequency"
-			:u8 "audio_channels")
+    :int "Start" 'start%!
+    (parameters :int "window_width" 'window-width
+		:int "window_height" 'window-height
+		:int "audio_frequency" 'audio-frequency
+		:u8 "audio_channels" 'audio-channels)
     "Starts SDL. Loads TTF. Creates a window/renderer.
 Returns a non-zero error code on failure."
     "#define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
@@ -398,7 +329,7 @@ if (!g_audio_device_id)
 return 0;")
 
    (c-exported-function
-    :void "Quit" ()
+    :void "Quit" 'quit! ()
     "Closes the window and renderer. Quits SDL and SDL_TTF."
     "SDL_DestroyRenderer(g_renderer);
 SDL_DestroyWindow(g_window);
@@ -407,13 +338,14 @@ TTF_Quit();
 SDL_Quit();")
 
    (c-exported-function
-    :char* "ErrorString" ()
+    :char* "ErrorString" 'error-string ()
     "Returns the error string for the last SDL error."
     "return SDL_GetError();")
 
    (c-exported-function
-    :texture "CreatePixelBufferTexture"
-    (alist :int "width" :int "height")
+    :texture "CreatePixelBufferTexture" 'create-pixel-buffer-texture!
+    (parameters :int "width" 'width
+		:int "height" 'height)
     "Creates a texture with a modifiable pixel buffer.
 Format of color is 4 u8's: R,G,B,A"
     "return SDL_CreateTexture(g_renderer,
@@ -422,8 +354,9 @@ Format of color is 4 u8's: R,G,B,A"
     width, height);")
 
    (c-exported-function
-    :int "ReplacePixelBuffer" (alist :texture "texture"
-				     :u8* "rgba_pixels")
+    :int "ReplacePixelBuffer" 'replace-pixel-buffer%!
+    (parameters :texture "texture" 'texture
+		:u8* "rgba_pixels" 'rgba-pixels)
     "Replaces the pixel buffer of a texture that hs been created with CreatePixelBufferTexture."
     "void *pixels;
 int *pitch;
@@ -438,7 +371,8 @@ SDL_UnlockTexture(texture);
 return 1;")
 
    (c-exported-function
-    :texture "LoadBMP" (alist :char* "path")
+    :texture "LoadBMP" 'load-bmp!
+    (parameters :char* "path" 'path)
     "Loads a BMP from path.
 Returns NULL on failure"
     "SDL_Surface *surface = SDL_LoadBMP(path);
@@ -448,10 +382,11 @@ SDL_FreeSurface(surface);
 return texture;")
 
    (c-exported-function
-    :texture "LoadBMPWithColorKey" (alist :char* "path"
-					  :u8 "r"
-					  :u8 "g"
-					  :u8 "b")
+    :texture "LoadBMPWithColorKey" 'load-bmp-with-color-key!
+    (parameters :char* "path" 'path
+		:u8 "r" 'r
+		:u8 "g" 'g
+		:u8 "b" 'b)
     "Loads a BMP from path, using pure black as a transparent pixel.
 Returns NULL on failure"
     "SDL_Surface *surface = SDL_LoadBMP(path);
@@ -463,20 +398,23 @@ SDL_FreeSurface(surface);
 return texture;")
 
    (c-exported-function
-    :texture "FreeTexture" (alist :texture "texture")
+    :texture "FreeTexture" 'free-texture!
+    (parameters :texture "texture" 'texture)
     "Frees the memory associated with texture."
     "SDL_DestroyTexture(texture);")
 
 
    (c-exported-function
-    :int "TextureWidth" (alist :texture "texture")
+    :int "TextureWidth" 'texture-width
+    (parameters :texture "texture" 'texture)
     "Return width of texture."
     "int width;
 SDL_QueryTexture(texture, 0, 0, &width, 0);
 return width;")
 
    (c-exported-function
-    :int "TextureHeight" (alist :texture "texture")
+    :int "TextureHeight" 'texture-height
+    (parameters :texture "texture" 'texture)
     "Return height of texture."
     "int height;
 SDL_QueryTexture(texture, 0, 0, 0, &height);
@@ -484,16 +422,21 @@ return height;")
 
 
    (c-exported-function
-    :font "OpenFont" (alist :char* "path" :int "point_size")
+    :font "OpenFont" 'open-font!
+    (parameters :char* "path" 'path
+		:int "point_size" 'point-size)
     "Open the font at path with the given point_size. Return NULL on failure."
     "return TTF_OpenFont(path, point_size);")
    (c-exported-function
-    :void "CloseFont" (alist :font "font")
+    :void "CloseFont" 'close-font!
+    (parameters :font "font" 'font)
     "Close the font."
     "TTF_CloseFont(font);")
 
    (c-exported-function
-    :texture "CreateTextTexture" (alist :font "font" :char* "text")
+    :texture "CreateTextTexture" 'create-text-texture!
+    (parameters :font "font" 'font
+		:char* "text" 'text)
     "Creates white text on a transparent background."
     "SDL_Color color = {.r = 255, .g = 255, .b = 255};
 SDL_Surface *surface = TTF_RenderUTF8_Solid(font, text, color);
@@ -502,29 +445,41 @@ SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
 SDL_FreeSurface(surface);
 return texture;")
 
-
    (c-exported-function
-    :void "Clear" ()
+    :void "Clear" 'clear! ()
     "Clears the screen to the current draw color."
     "SDL_RenderClear(g_renderer);")
    (c-exported-function
-    :void "SetDrawColor" (alist :u8 "r" :u8 "g" :u8 "b" :u8 "a")
+    :void "SetDrawColor" 'set-draw-color!
+    (parameters :u8 "r" 'r
+		:u8 "g" 'g
+		:u8 "b" 'b
+		:u8 "a" 'a)
     "Sets the current draw color."
     "SDL_SetRenderDrawColor(g_renderer, r, g, b, a);")
    (c-exported-function
-    :void "DrawRect" (alist :s32 "x" :s32 "y" :s32 "w" :s32 "h")
+    :void "DrawRect" 'draw-rect!
+    (parameters :s32 "x" 'x
+		:s32 "y" 'y
+		:s32 "w" 'w
+		:s32 "h" 'h)
     "Draws a rect outline with the current draw color."
     "SDL_Rect rect = { .x=x, .y=y, .w=w, .h=h };
 SDL_RenderDrawRect(g_renderer, &rect);")
    (c-exported-function
-    :void "FillRect" (alist :s32 "x" :s32 "y" :s32 "w" :s32 "h")
+    :void "FillRect" 'fill-rect!
+    (parameters :s32 "x" 'x
+		:s32 "y" 'y
+		:s32 "w" 'w
+		:s32 "h" 'h)
     "Draws a filled rect with the current draw color."
     "SDL_Rect rect = { .x=x, .y=y, .w=w, .h=h };
 SDL_RenderFillRect(g_renderer, &rect);")
    (c-exported-function
-    :void "DrawTexture" (alist :texture "texture"
-			       :int "sx" :int "sy" :int "sw" :int "sh"
-			       :int "dx" :int "dy" :int "dw" :int "dh")
+    :void "DrawTexture" 'draw-texture!
+    (parameters :texture "texture" 'texture
+		:int "sx" 'sx :int "sy" 'sy :int "sw" 'sw :int "sh" 'sh
+		:int "dx" 'dx :int "dy" 'dy :int "dw" 'dw :int "dh" 'dh)
     "Draws a portion of texture described by source rect to a section of the screen
 described by destination rect."
     "SDL_Rect src = { .x=sx, .y=sy, .w=sw, .h=sh };
@@ -532,46 +487,53 @@ SDL_Rect dest = { .x=dx, .y=dy, .w=dw, .h=dh };
 SDL_RenderCopy(g_renderer, texture, &src, &dest);")
 
    (c-exported-function
-    :void "TextureColorMod" (alist :texture "texture"
-				   :u8 "r"
-				   :u8 "g"
-				   :u8 "b")
+    :void "TextureColorMod" 'texture-color-mod!
+    (parameters :texture "texture" 'texture
+		:u8 "r" 'r
+		:u8 "g" 'g
+		:u8 "b" 'b)
     "Mod the texture's pixel colors with the provided color."
     "SDL_SetTextureColorMod(texture, r, g, b);")
    (c-exported-function
-    :void "Present" ()
+    :void "Present" 'present! ()
     "Flip the display buffer."
     "SDL_RenderPresent(g_renderer);")
 
    (c-exported-function
-    :u32 "BufferedAudioBytes" ()
+    :u32 "BufferedAudioBytes" 'buffered-audio-bytes! ()
     "Return the number of bytes currently buffered."
     "return SDL_GetQueuedAudioSize(g_audio_device_id);")
    (c-exported-function
-    :int "BufferAudio" (alist :u8* "bytes" :u32 "num_bytes")
+    :int "BufferAudio" 'buffer-audio!
+    (parameters :u8* "bytes" 'bytes
+		:u32 "num_bytes" 'num-bytes)
     "Fills the audio buffer with the provided bytes array.
 Returns non-zero on error."
     "return SDL_QueueAudio(g_audio_device_id, bytes, num_bytes);")
    (c-exported-function
-    :void "PauseAudio" ()
+    :void "PauseAudio" 'pause-audio!
+    ()
     "Pauses playback of the audio device."
     "SDL_PauseAudioDevice(g_audio_device_id, 1);")
    (c-exported-function
-    :void "PlayAudio" ()
+    :void "PlayAudio" 'play-audio!
+    ()
     "Resumes playback of the audio device."
     "SDL_PauseAudioDevice(g_audio_device_id, 0);")
    (c-exported-function
-    :void "Delay" (alist :int "milliseconds")
+    :void "Delay" 'delay!
+    (parameters :int "milliseconds" 'milliseconds)
     "Delay the thread for at least the provided number of milliseconds."
     "SDL_Delay(milliseconds);")
 
    (c-exported-function
-    "enum EventType" "NextEvent" (alist "SDL_Scancode*" "scancode"
-					:int* "mouse_button"
-					:int* "clicks"
-					:int* "mouse_x"
-					:int* "mouse_y"
-					:char* "text")
+    :event-type "NextEvent" 'next-event%!
+    (parameters (out-parameter-type :int) "scancode" 'scancode
+		(out-parameter-type :int) "mouse_button" 'mouse-button
+		(out-parameter-type :int) "clicks" 'clicks
+		(out-parameter-type :int) "mouse_x" 'mouse-x
+		(out-parameter-type :int) "mouse_y" 'mouse-y
+		:char* "text" 'text)
     "Polls for the next input event and returns the type of the event.
 If no events are left on the event queue, NO_EVENT is returned.
 The following out parameters will be filled based on the type:
@@ -623,17 +585,20 @@ while (SDL_PollEvent(&event)) {
 return NO_EVENT;")
 
    (c-exported-function
-    :char* "ScancodeName" (alist :scancode "scancode")
+    :char* "ScancodeName" 'scancode-name
+    (parameters :scancode "scancode" 'scancode)
     "Returns the name of the scancode."
     "return SDL_GetScancodeName(scancode);")
 
    (c-exported-function
-    "SDL_Scancode" "GetScancodeFromName" (alist :char* "name")
+    :scancode "GetScancodeFromName" 'scancode-from-name
+    (parameters :char* "name" 'name)
     "Returns the scancode with the given name."
     "return SDL_GetScancodeFromName(name);")
 
    (c-exported-function
-    :u32 "ElapsedMilliseconds" ()
+    :u32 "ElapsedMilliseconds" 'elapsed-milliseconds
+    ()
     "Number of milliseconds elapsed since the SDL timer subsytem started."
     "return SDL_GetTicks();")))
 
@@ -690,7 +655,7 @@ return NO_EVENT;")
 	       (c-function-declaration
 		(cdr (assoc :type c-function))
 		(cdr (assoc :c-name c-function))
-		(cdr (assoc :c-parameters c-function))
+		(cdr (assoc :parameters c-function))
 		(cdr (assoc :c-specifiers c-function))
 		(cdr (assoc :documentation c-function))))
 	     (sdl-wrapper-c-functions)))
@@ -700,7 +665,7 @@ return NO_EVENT;")
 	       (c-function-definition
 		(cdr (assoc :type c-function))
 		(cdr (assoc :c-name c-function))
-		(cdr (assoc :c-parameters c-function))
+		(cdr (assoc :parameters c-function))
 		(cdr (assoc :c-body c-function))
 		(cdr (assoc :c-specifiers c-function))))
 	     (sdl-wrapper-c-functions))))))
@@ -749,7 +714,7 @@ return NO_EVENT;")
   "Unloads sdl_wrapper.dll, reassembles the c-code, recompiles it, and reloads the resulting dll."
   (let* ((dll-fullname (merge-pathnames *default-pathname-defaults* *dll-filename*)))
     (unload-shared-object dll-fullname)
-    ;;(assemble-sdl-wrapper-c-code!)
+    (assemble-sdl-wrapper-c-code!)
     (let* ((success t)
 	   (error-string
 	     (with-output-to-string (s)
@@ -757,4 +722,5 @@ return NO_EVENT;")
 		 (error () (setq success nil))))))
       (unless success
 	(error "Could not make dll~%~S" error-string)))
-    (load-shared-object dll-fullname)))
+    (load-shared-object dll-fullname)
+    (define-sdl-wrapper-alien-routines!)))
