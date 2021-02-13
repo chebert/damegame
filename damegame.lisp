@@ -1563,6 +1563,9 @@ Test-fn and handle-fn are both functions of event."
    (lambda (opcode &rest register-codes)
      (apply fn opcode (mapcar 'register-key register-codes)))))
 
+(defun @imm8-disassembly-instr-spec ()
+  (alist :disassembly (alist :addr `(+ #xff00 ,*imm8-name*))))
+
 ;; S 2.1
 (defun ld-8bit-instr-specs ()
   (append
@@ -1597,8 +1600,13 @@ Test-fn and handle-fn are both functions of event."
     (ld-instr-spec #b00011010 :@de :a)
     (ld-instr-spec #b11110010 :@c :a)
     (ld-instr-spec #b11100010 :a :@c)
-    (ld-instr-spec #b11110000 :@imm8 :a)
-    (ld-instr-spec #b11100000 :a :@imm8)
+    (merge-instr-specs
+     (ld-instr-spec #b11110000 :@imm8 :a)
+     (@imm8-disassembly-instr-spec))
+
+    (merge-instr-specs
+     (ld-instr-spec #b11100000 :a :@imm8)
+     (@imm8-disassembly-instr-spec))
     
     (ld-instr-spec #b11111010 :@imm16 :a)
     (ld-instr-spec #b11101010 :a :@imm16)
@@ -2714,6 +2722,8 @@ Waits for a reset signal."
 	lines)))
 
 ;; TODO: determine when interrupt flags are reset
+;; TODO: visualize interrupt registers
+;; TODO: visualize control registers
 
 ;; focus: the memory address that was last modified
 ;; add cycles
