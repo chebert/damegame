@@ -216,13 +216,7 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
     (when documentation
       (format s "~A" (c-comment documentation)))
     (loop for c-specifier in c-specifiers do (format s "~A " c-specifier))
-    (format s "~A ~A(" (c-type type) c-name)
-    (loop for parameter in parameters
-	  for i from 0 do
-	    (if (= i (1- (length parameters)))
-		(format s "~A" (c-parameter parameter))
-		(format s "~A, " (c-parameter parameter))))
-    (format s ")")))
+    (format s "~A ~A~A" (c-type type) c-name (c-arguments (mapcar 'c-parameter parameters)))))
 
 (defun split-lines (text)
   (uiop:split-string text :separator '(#\newline)))
@@ -297,7 +291,15 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
 			       (cdr (assoc :parameters spec))
 			       (cdr (assoc :documentation spec))))
 			    (sdl-wrapper-c-functions)))))
-
+(defun comma-separated (strings)
+  (with-output-to-string (s)
+    (loop for string in strings
+	  for i from 0 do
+	    (if (= i (1- (length strings)))
+		(format s "~A" string)
+		(format s "~A, " string)))))
+(defun c-arguments (strings)
+  (format nil "(~A)" (comma-separated strings)))
 
 (defun sdl-wrapper-c-functions ()
   (list

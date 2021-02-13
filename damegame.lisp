@@ -821,16 +821,22 @@ Test-fn and handle-fn are both functions of event."
 	(draw-full-texture-id! (aval :hl cpu-visualization) (v2 c3 y)))
 
       (incf y *grid-size*)
-      (let ((column (+ (g1 11) (x cpu-pos))))
+      (let ((column (+ (g1 9) (x cpu-pos))))
 	(incf y (g1 1))
 	(draw-full-texture-id-right-aligned! :stack-pointer (v2 column y))
 	(set-texture-color! (aval :sp cpu-visualization) (aval :sp cpu-colors (white)))
 	(draw-full-texture-id! (aval :sp cpu-visualization) (v2 column y))
 
+	(draw-full-texture-id-right-aligned! :ime (v2 (+ (g1 18) (x cpu-pos)) y))
+
 	(incf y (g1 1))
 	(draw-full-texture-id-right-aligned! :program-counter (v2 column y))
 	(set-texture-color! (aval :pc cpu-visualization) (aval :pc cpu-colors (white)))
-	(draw-full-texture-id! (aval :pc cpu-visualization) (v2 column y))))))
+	(draw-full-texture-id! (aval :pc cpu-visualization) (v2 column y))
+
+	(let ((texture-id (flag-state-texture-id (cpu-ime? cpu))))
+	  (set-texture-color! texture-id (aval :ime? cpu-colors (white)))
+	  (draw-full-texture-id! texture-id (v2 (+ (g1 15) (x cpu-pos)) y)))))))
 
 (defun initialize-cpu-visualization! (id vis)
   (let ((drawing-id (gensym)))
@@ -853,6 +859,7 @@ Test-fn and handle-fn are both functions of event."
   (load-text-texture! :no :font "[No]")
   (load-text-texture! :yes :font "[Yes]")
   (load-text-texture! :zero :font "Zero? ")
+  (load-text-texture! :ime :font "IME? ")
   (load-text-texture! :subtraction :font "Subtraction? ")
   (load-text-texture! :half-carry :font "Half-carry? ")
   (load-text-texture! :carry :font "Carry? ")
@@ -2721,9 +2728,10 @@ Waits for a reset signal."
 	(cons first (word-wrap second line-length))
 	lines)))
 
-;; TODO: determine when interrupt flags are reset
 ;; TODO: visualize interrupt registers
 ;; TODO: visualize control registers
+
+;; TODO: determine when interrupt flags are reset
 
 ;; focus: the memory address that was last modified
 ;; add cycles
