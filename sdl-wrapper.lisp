@@ -190,19 +190,6 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
 (define-alien-routine ("ElapsedMilliseconds" elapsed-milliseconds) (unsigned 32)
   "Returns the time elapsed since start was called in milliseconds.")
 
-
-(defun recompile-sdl-wrapper-dll! ()
-  "Unloads sdl_wrapper.dll, recompiles it, and reloads it."
-  (unload-shared-object (merge-pathnames *default-pathname-defaults* "sdl_wrapper.dll"))
-  (let* ((success t)
-	 (error-string
-	   (with-output-to-string (s)
-	     (handler-case (uiop:run-program "sh ./make_dll.sh" :output s :error-output s)
-	       (error () (setq success nil))))))
-    (when (not success)
-      (error "Could not make dll~%~S" error-string)))
-  (load-shared-object (merge-pathnames *default-pathname-defaults* "sdl_wrapper.dll")))
-
 (defparameter *pixel-array*
   (let* ((w 200)
 	 (h 300)
@@ -251,3 +238,466 @@ to render, and dx,dy,dw,dh is the destination rectangle to draw to."
 			   event))
 	     (delay! 1)))
   (quit!))
+
+(defun concat (strings)
+  (apply 'concatenate 'string strings))
+
+(defun c-typedef (old-c-type new-c-type)
+  (format nil "typedef ~A ~A" old-c-type new-c-type))
+
+(defun c-statement (str)
+  (format nil "~A;" str))
+
+(defun lines (strs)
+  (concat (mapcar (lambda (str) (format nil "~A~%" str)) strs)))
+(defun c-statements (strs)
+  (lines (mapcar 'c-statement strs)))
+
+(defun key-c-type (key)
+  (ecase key
+    (:u8 "u8")
+    (:u16 "u16")
+    (:u32 "u32")
+    (:u64 "u64")
+    (:s8 "s8")
+    (:s16 "s16")
+    (:s32 "s32")
+    (:s64 "s64")
+    (:int "int")
+    (:void "void")
+    (:char* "char*")
+    (:u8* "u8*")
+
+    (:texture "SDL_Texture*")
+    (:font "TTF_Font*")))
+
+(defun c-type (type)
+  (if (keywordp type)
+      (key-c-type type)
+      type))
+
+(defun c-include-relative (relative-path)
+  (format nil "#include \"~A\"" relative-path))
+(defun c-include-system (system-path)
+  (format nil "#include <~A>" system-path))
+(defun c-constant (type c-name c-value)
+  (format nil "const ~A ~A = ~A" (c-type type) c-name c-value))
+(defun c-global (type c-name &optional c-value)
+  (if c-value
+      (format nil "static ~A ~A = ~A" (c-type type) c-name c-value)
+      (format nil "static ~A ~A" (c-type type) c-name)))
+
+(defun c-enum (c-enum-name c-enum-fields)
+  (with-output-to-string (s)
+    (format s "enum ~A {~%" c-enum-name)
+    (loop for field in c-enum-fields
+	  for i from 0 do
+	    (if (= i (1- (length c-enum-fields)))
+		(format s "  ~A~%" field)
+		(format s "  ~A,~%" field)))
+    (format s "}")))
+
+(defun c-parameter (c-parameter)
+  (let* ((type (car c-parameter))
+	 (c-name (cdr c-parameter)))
+    (format nil "~A ~A" (c-type type) c-name)))
+
+(defun c-function-declaration (type c-name c-parameters &optional c-specifiers)
+  (with-output-to-string (s)
+    (loop for c-specifier in c-specifiers do (format s "~A " c-specifier))
+    (format s "~A ~A(" (c-type type) c-name)
+    (loop for c-parameter in c-parameters
+	  for i from 0 do
+	    (if (= i (1- (length c-parameters)))
+		(format s "~A" (c-parameter c-parameter))
+		(format s "~A, " (c-parameter c-parameter))))
+    (format s ")")))
+
+(defun indent (c-code)
+  (with-output-to-string (s)
+    (let* ((lines (uiop:split-string c-code :separator '(#\newline))))
+      (loop for line in lines
+	    for i from 0 do
+	      (if (= i (1- (length lines)))
+		  (format s "  ~A" line)
+		  (format s "  ~A~%" line))))))
+
+(defun c-function-definition (type c-name c-parameters c-body &optional c-specifiers)
+  (with-output-to-string (s)
+    (format s "~A {~%" (c-function-declaration type c-name c-parameters c-specifiers))
+    (format s "~A" (indent c-body))
+    (format s "~%}")))
+
+(defun c-function (type c-name c-parameters c-body &optional c-specifiers)
+  (list (cons :type type)
+	(cons :c-name c-name)
+	(cons :c-parameters c-parameters)
+	(cons :c-body c-body)
+	(cons :c-specifiers c-specifiers)))
+(defun c-exported-function (type c-name c-parameters c-body)
+  (list (cons :type type)
+	(cons :c-name c-name)
+	(cons :c-parameters c-parameters)
+	(cons :c-body c-body)
+	(cons :c-specifiers '("DLL_EXPORT"))))
+
+(defun alist (&rest keys-and-values)
+  (labels ((rec (keys-and-values result)
+	     (if keys-and-values
+		 (let* ((key (first keys-and-values))
+			(value (second keys-and-values))
+			(rest (rest (rest keys-and-values))))
+		   (rec rest (acons key value result)))
+		 (nreverse result))))
+    (rec keys-and-values ())))
+
+(defun sdl-wrapper-c-functions ()
+  (list
+   (c-exported-function
+    :int "Start" (alist :int "window_width"
+			:int "window_height"
+			:int "audio_frequency"
+			:u8 "audio_channels")
+    "#define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
+CHECK(SDL_Init(SDL_INIT_EVERYTHING));
+CHECK(TTF_Init());
+CHECK(SDL_CreateWindowAndRenderer(window_width, window_height, 0, &g_window, &g_renderer));
+SDL_StartTextInput();
+
+SDL_AudioSpec desired;
+SDL_zero(desired);
+desired.freq = g_audio_frequency = audio_frequency;
+desired.format = AUDIO_FORMAT;
+desired.channels = g_audio_channels = audio_channels;
+desired.samples = AUDIO_FRAMES;
+desired.callback = NULL;
+g_audio_device_id = SDL_OpenAudioDevice(NULL, 0, &desired, &g_obtained_audio_spec, 0);
+if (!g_audio_device_id)
+  return -1;
+#undef CHECK
+return 0;")
+
+   (c-exported-function
+    :void "Quit" ()
+    "SDL_DestroyRenderer(g_renderer);
+SDL_DestroyWindow(g_window);
+SDL_CloseAudioDevice(g_audio_device_id);
+TTF_Quit();
+SDL_Quit();")
+
+   (c-exported-function
+    :char* "ErrorString" ()
+    "return SDL_GetError();")
+
+   (c-exported-function
+    :texture "CreatePixelBufferTexture"
+    (alist :int "width" :int "height")
+    "return SDL_CreateTexture(g_renderer,
+    SDL_PIXELFORMAT_ABGR8888,
+    SDL_TEXTUREACCESS_STREAMING, 
+    width, height);")
+
+   (c-exported-function
+    :int "ReplacePixelBuffer"
+    (alist :texture "texture"
+	   :u8* "rgba_pixels")
+    "void *pixels;
+int *pitch;
+int width, height;
+if (SDL_LockTexture(texture, NULL, &pixels, &pitch))
+return 0;
+
+SDL_QueryTexture(texture, 0, 0, &width, &height);
+
+memcpy(pixels, rgba_pixels, width * height * 4);
+SDL_UnlockTexture(texture);
+return 1;")
+
+   (c-exported-function
+    :texture "LoadBMP"
+    (alist :char* "path")
+    "SDL_Surface *surface = SDL_LoadBMP(path);
+if (!surface) return NULL;
+SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+SDL_FreeSurface(surface);
+return texture;")
+
+   (c-exported-function
+    :texture "LoadBMPWithColorKey" (alist :char* "path"
+					  :u8 "r"
+					  :u8 "g"
+					  :u8 "b")
+    "SDL_Surface *surface = SDL_LoadBMP(path);
+if (!surface) return NULL;
+// Enable color key.
+SDL_SetColorKey(surface, SDL_TRUE, SDL_MapRGB(surface->format, r, g, b));
+SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+SDL_FreeSurface(surface);
+return texture;")
+
+   (c-exported-function
+    :texture "FreeTexture"
+    (alist :texture "texture")
+    "SDL_DestroyTexture(texture);")
+
+
+   (c-exported-function
+    :int "TextureWidth"
+    (alist :texture "texture")
+    "int width;
+SDL_QueryTexture(texture, 0, 0, &width, 0);
+return width;")
+
+   (c-exported-function
+    :int "TextureHeight"
+    (alist :texture "texture")
+    "int height;
+SDL_QueryTexture(texture, 0, 0, 0, &height);
+return height;")
+
+
+   (c-exported-function
+    :font "OpenFont" (alist :char* "path" :int "point_size")
+    "return TTF_OpenFont(path, point_size);")
+   (c-exported-function
+    :void "CloseFont" (alist :font "font")
+    "TTF_CloseFont(font);")
+
+   (c-exported-function
+    :texture "CreateTextTexture" (alist :font "font" :char* "text")
+    "SDL_Color color = {.r = 255, .g = 255, .b = 255};
+SDL_Surface *surface = TTF_RenderUTF8_Solid(font, text, color);
+if (!surface) return NULL;
+SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+SDL_FreeSurface(surface);
+return texture;")
+
+
+   (c-exported-function
+    :void "Clear" ()
+    "SDL_RenderClear(g_renderer);")
+   (c-exported-function
+    :void "SetDrawColor" (alist :u8 "r" :u8 "g" :u8 "b" :u8 "a")
+    "SDL_SetRenderDrawColor(g_renderer, r, g, b, a);")
+   (c-exported-function
+    :void "DrawRect" (alist :s32 "x" :s32 "y" :s32 "w" :s32 "h")
+    "SDL_Rect rect = { .x=x, .y=y, .w=w, .h=h };
+SDL_RenderDrawRect(g_renderer, &rect);")
+   (c-exported-function
+    :void "FillRect" (alist :s32 "x" :s32 "y" :s32 "w" :s32 "h")
+    "SDL_Rect rect = { .x=x, .y=y, .w=w, .h=h };
+SDL_RenderFillRect(g_renderer, &rect);")
+   (c-exported-function
+    :void "DrawTexture" (alist :texture "texture"
+			       :int "sx" :int "sy" :int "sw" :int "sh"
+			       :int "dx" :int "dy" :int "dw" :int "dh")
+    "SDL_Rect src = { .x=sx, .y=sy, .w=sw, .h=sh };
+SDL_Rect dest = { .x=dx, .y=dy, .w=dw, .h=dh };
+SDL_RenderCopy(g_renderer, texture, &src, &dest);")
+
+   (c-exported-function
+    :void "TextureColorMod" (alist :texture "texture"
+				   :u8 "r"
+				   :u8 "g"
+				   :u8 "b")
+    "SDL_SetTextureColorMod(texture, r, g, b);")
+   (c-exported-function
+    :void "Present" ()
+    "SDL_RenderPresent(g_renderer);")
+
+   (c-exported-function
+    :u32 "BufferedAudioBytes" ()
+    "return SDL_GetQueuedAudioSize(g_audio_device_id);")
+   (c-exported-function
+    :int "BufferAudio" (alist :u8* "bytes" :u32 "num_bytes")
+    "return SDL_QueueAudio(g_audio_device_id, bytes, num_bytes);")
+   (c-exported-function
+    :void "PauseAudio" ()
+    "SDL_PauseAudioDevice(g_audio_device_id, 1);")
+   (c-exported-function
+    :void "PlayAudio" ()
+    "SDL_PauseAudioDevice(g_audio_device_id, 0);")
+   (c-exported-function
+    :void "Delay" (alist :int "milliseconds")
+    "SDL_Delay(milliseconds);")
+
+   (c-exported-function
+    "enum EventType" "NextEvent" (alist "SDL_Scancode*" "scancode"
+					"int*" "mouse_button"
+					"int*" "clicks"
+					"int*" "mouse_x"
+					"int*" "mouse_y"
+					:char* "text")
+    "SDL_Event event;
+while (SDL_PollEvent(&event)) {
+  switch (event.type) {
+    case SDL_QUIT:
+      return QUIT;
+    case SDL_KEYDOWN:
+      if (!event.key.repeat) {
+        *scancode = event.key.keysym.scancode;
+        return KEYDOWN;
+      }
+      break;
+    case SDL_KEYUP:
+      *scancode = event.key.keysym.scancode;
+      return KEYUP;
+    case  SDL_TEXTINPUT:
+      memcpy(text, event.text.text, sizeof(event.text.text));
+      return TEXTINPUT;
+    case SDL_MOUSEMOTION:
+      *mouse_x = event.motion.x;
+      *mouse_y = event.motion.y;
+      return MOUSEMOVE;
+    case SDL_MOUSEBUTTONDOWN:
+      *mouse_x = event.button.x;
+      *mouse_y = event.button.y;
+      *mouse_button = event.button.button;
+      *clicks = event.button.clicks;
+      return MOUSEDOWN;
+    case SDL_MOUSEBUTTONUP:
+      *mouse_x = event.button.x;
+      *mouse_y = event.button.y;
+      *mouse_button = event.button.button;
+      *clicks = event.button.clicks;
+      return MOUSEUP;
+    case  SDL_MOUSEWHEEL:
+      *mouse_x = event.wheel.x;
+      *mouse_y = event.wheel.y;
+      return MOUSEWHEEL;
+  }
+}
+return NO_EVENT;")
+
+   (c-exported-function
+    :char* "ScancodeName" (alist "SDL_Scancode" "scancode")
+    "return SDL_GetScancodeName(scancode);")
+
+   (c-exported-function
+    "SDL_Scancode" "GetScancodeFromName" (alist :char* "name")
+    "return SDL_GetScancodeFromName(name);")
+
+   (c-exported-function
+    :u32 "ElapsedMilliseconds" ()
+    "return SDL_GetTicks();")))
+
+;; Idea: writing C code in Lisp
+(defun sdl-wrapper-c-code ()
+  "The C Code for the SDL Wrapper."
+  (concat
+   (list
+    (lines
+     (list
+      (c-include-relative "SDL.h")
+      (c-include-relative "SDL_ttf.h")
+      (c-include-system "stdint.h")
+      "#define DLL_EXPORT __declspec(dllexport)"))
+
+    ;; Typedefs
+    (c-statements
+     (mapcar
+      (lambda (old-type new-type-key) (c-typedef old-type (key-c-type new-type-key)))
+      '("uint8_t" "uint16_t" "uint32_t" "uint64_t" "int8_t" "int16_t" "int32_t" "int64_t")
+      '(:u8 :u16 :u32 :u64 :s8 :s16 :s32 :s64)))
+
+    ;; Parameters
+    (c-statements
+     (list
+      (c-constant "SDL_AudioFormat" "AUDIO_FORMAT" "AUDIO_S16LSB")
+      ;; An audio frame is a collection of samples that make up a channel.
+      (c-constant :u16 "AUDIO_FRAMES" 4096)
+      (c-global :int "g_audio_frequency" 48000)
+      (c-global :u8 "g_audio_channels" 2)
+
+      ;; Globals
+      (c-global "SDL_Window*" "g_window")
+      (c-global "SDL_Renderer*" "g_renderer")
+      (c-global "SDL_AudioDeviceID" "g_audio_device_id")
+      (c-global "SDL_AudioSpec" "g_obtained_audio_spec")
+
+      ;; Data Structures
+      (c-enum
+       "EventType"
+       (list
+	"NO_EVENT"
+	"QUIT"
+	"KEYDOWN"
+	"KEYUP"
+	"TEXTINPUT"
+	"MOUSEDOWN"
+	"MOUSEUP"
+	"MOUSEWHEEL"
+	"MOUSEMOVE"))))
+
+    (c-statements
+     (mapcar (lambda (c-function)
+	       (c-function-declaration
+		(cdr (assoc :type c-function))
+		(cdr (assoc :c-name c-function))
+		(cdr (assoc :c-parameters c-function))
+		(cdr (assoc :c-specifiers c-function))))
+	     (sdl-wrapper-c-functions)))
+
+    (lines
+     (mapcar (lambda (c-function)
+	       (c-function-definition
+		(cdr (assoc :type c-function))
+		(cdr (assoc :c-name c-function))
+		(cdr (assoc :c-parameters c-function))
+		(cdr (assoc :c-body c-function))
+		(cdr (assoc :c-specifiers c-function))))
+	     (sdl-wrapper-c-functions))))))
+
+(defparameter *relative-include-dirs*
+  (list "SDL2_x64/include/SDL2"
+	"SDL2_ttf_x64/include/SDL2"))
+(defparameter *relative-lib-dirs*
+  (list "SDL2_x64/lib"
+	"SDL2_ttf_x64/lib"))
+(defun include-flags ()
+  (with-output-to-string (s)
+    (mapcar (lambda (path) (format s "-I./~A " path))
+	    *relative-include-dirs*)))
+(defun lib-flags ()
+  (with-output-to-string (s)
+    (mapcar (lambda (path) (format s "-L./~A " path))
+	    *relative-lib-dirs*)))
+(defun compile-flags ()
+  "-w -Wl,-subsystem,windows")
+(defun link-flags ()
+  "-lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf")
+(defparameter *c-filename* "sdl_wrapper.c")
+(defparameter *dll-filename* "sdl_wrapper.dll")
+
+(defun build-dll-command ()
+  (format nil "gcc -shared -o ~A ~A ~A ~A ~A ~A"
+	  *dll-filename*
+	  *c-filename*
+	  (include-flags)
+	  (lib-flags)
+	  (compile-flags)
+	  (link-flags)))
+
+(defun build-dll! (&key (output-stream *standard-output*)
+		     (error-output-stream *standard-output*))
+  (uiop:run-program (build-dll-command)
+		    :output output-stream
+		    :error-output-stream error-output-stream))
+
+(defun assemble-sdl-wrapper-c-code! ()
+  (with-open-file (stream *c-filename* :direction :output :if-exists :supersede)
+    (format stream "~A" (sdl-wrapper-c-code))))
+
+(defun recompile-sdl-wrapper-dll! ()
+  "Unloads sdl_wrapper.dll, reassembles the c-code, recompiles it, and reloads the resulting dll."
+  (let* ((dll-fullname (merge-pathnames *default-pathname-defaults* *dll-filename*)))
+    (unload-shared-object dll-fullname)
+    ;;(assemble-sdl-wrapper-c-code!)
+    (let* ((success t)
+	   (error-string
+	     (with-output-to-string (s)
+	       (handler-case (build-dll! :output-stream s :error-output-stream s)
+		 (error () (setq success nil))))))
+      (unless success
+	(error "Could not make dll~%~S" error-string)))
+    (load-shared-object dll-fullname)))
