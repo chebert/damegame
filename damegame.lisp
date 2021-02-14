@@ -1012,7 +1012,7 @@ Test-fn and handle-fn are both functions of event."
     (let* ((length (file-length stream)))
       (loop for i below length
 	    do (setf (aref *memory* (+ i start-addr)) (read-byte stream))))))
-
+(defparameter *cart-filename* "Legend of Zelda, The - Link's Awakening (USA, Europe).gb")
 
 (defun hi-byte (u16)
   (truncate (logand #xFF00 u16) 256))
@@ -2735,3 +2735,34 @@ Waits for a reset signal."
 
 ;; focus: the memory address that was last modified
 ;; add cycles
+
+;; Visualizations
+;;; Palettes
+;;;; Draw a small 4-color palette for each palette
+;;; Tile Data
+;;;; show grid of 8x8 tiles
+;;;;  button next, previous to cycle through
+;;;;  highlight which tiles are chosen by scan
+;;; Tile Maps
+;;;; Show full background tile map (drawn out) with scrolling
+;;;; Show full window tile map (drawn out)
+;;;;  write window-x, window-y
+;;; Sprites
+;;;; Show Sprite (based on 8x8 or 8x16 mode)
+;;;; Write position
+;;;; write priority
+;;;; show flipping
+;;;;  show grid; button next/prev
+;;; write List of interrupts: color green for enabled; red for disabled
+;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
+;;;; Serial Transfer Completion, End of input signal for ports P10-P13
+;;; LCD Status
+;;;   write Current Mode, Coincidence?, current-scanline (y coordinate), compare-y coordinate
+
+;; I want a way to group visualizations together and switch between them
+;;; Switch on & off drawings as groups
+;;; draw a nice rectangle around them.
+
+
+;; Be able to switch off the BIOS ROM and replace with CART ROM
+;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
