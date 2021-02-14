@@ -2,3 +2,5 @@ sdl_wrapper.c
 sdl_wrapper.dll
 *.swp
 *.fasl
+gb_bios.bin
+*.gb
