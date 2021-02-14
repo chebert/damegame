@@ -1,3 +1,4 @@
+sdl_wrapper.c
 sdl_wrapper.dll
 *.swp
 *.fasl
