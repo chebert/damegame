@@ -413,6 +413,9 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (when *tile-textures*
       (map nil 'free-texture! *tile-textures*)
       (setq *tile-textures* nil))
+    (when *tile-map-texture*
+      (free-texture! *tile-map-texture*)
+      (setq *tile-map-texture* nil))
     (quit!)))
 
 (defun event-matcher-font-opened (font-id)
@@ -2758,10 +2761,6 @@ Waits for a reset signal."
 ;;; Status
 
 ;; Visualizations
-;;; Tile Data
-;;;; show grid of 8x8 tiles
-;;;;  button next, previous to cycle through
-;;;;  highlight which tiles are chosen by scan
 ;;; Tile Maps
 ;;;; Show full background tile map (drawn out) with scrolling
 ;;;; Show full window tile map (drawn out)
@@ -2917,18 +2916,106 @@ Waits for a reset signal."
 
 (defun ensure-tile-textures! ()
   (unless *tile-textures*
-    (setq *tile-textures* (initialize-tile-data-block-textures!))
-    (add-drawing! :tile-data (drawing 1 (fn (draw-tile-data-textures! (g2 3 7)))))))
+    (setq *tile-textures* (initialize-tile-data-block-textures!))))
+
+(defun add-tile-data-drawing! ()
+  (add-drawing! :tile-data (drawing 1 (fn (draw-tile-data-textures! (g2 3 5))))))
+
+(defbutton tile-data-block0 (button "Blk0" 1 (g2 3 13) :font)
+  (fill-tile-data-textures! (tile-data-block0) t)
+  (add-tile-data-drawing!))
+(defbutton tile-data-block1 (button "Blk1" 1 (g2 6 13) :font)
+  (fill-tile-data-textures! (tile-data-block1) nil)
+  (add-tile-data-drawing!))
+(defbutton tile-data-block2 (button "Blk2" 1 (g2 9 13) :font)
+  (fill-tile-data-textures! (tile-data-block2) nil)
+  (add-tile-data-drawing!))
+
+;; Bg Tile Map
+;; 32x32
+(defvar *tile-map-texture*)
+
+(defun tile-addresses (tile-map 8000-addressing-mode?)
+  (loop for tile-byte across tile-map
+	collecting
+	(if 8000-addressing-mode?
+	    (+ tile-byte #x8000)
+	    (+ (s8 tile-byte) #x8800))))
+
+(defun copy-tile-map-pixels-from-tile-data! (rgba-pixels tile-map-index tile-data-colors)
+  (loop for tile-data-pixel-x below 8 do
+    (loop for tile-data-pixel-y below 8 do
+      (let* ((tiles/tile-map-row 32)
+	     (pixels/tile-row 8)
+
+	     (tile-map-x (mod tile-map-index tiles/tile-map-row))
+	     (tile-map-y (truncate tile-map-index tiles/tile-map-row))
+
+	     (tile-map-pixel-x (* pixels/tile-row tile-map-x))
+	     (tile-map-pixel-y (* pixels/tile-row tile-map-y))
+
+	     (pixel-x (+ tile-data-pixel-x tile-map-pixel-x))
+	     (pixel-y (+ tile-data-pixel-y tile-map-pixel-y))
+
+	     (pixels/tile-map-row (* tiles/tile-map-row pixels/tile-row))
+
+	     (pixel-index (+ (* pixel-y pixels/tile-map-row) pixel-x))
+	     (byte-index (* 4 pixel-index))
+
+	     (tile-data-pixel-index (+ tile-data-pixel-x (* tile-data-pixel-y pixels/tile-row)))
+	     (color (nth tile-data-pixel-index tile-data-colors)))
+	(setf (aref rgba-pixels (+ 0 byte-index)) (r color)
+	      (aref rgba-pixels (+ 1 byte-index)) (g color)
+	      (aref rgba-pixels (+ 2 byte-index)) (b color)
+	      (aref rgba-pixels (+ 3 byte-index)) (a color))))))
+
+(defun fill-tile-map-texture! (tile-map 8000-addressing-mode?)
+  (let* ((tile-addresses (tile-addresses tile-map 8000-addressing-mode?))
+	 (rgba-pixels (make-array (list (* 4 8 8 32 32)) :element-type '(unsigned-byte 8))))
+    (loop for addr in tile-addresses
+	  for i from 0 do
+	    (let* ((tile-data (subseq *memory* addr (+ addr 16)))
+		   (colors (tile-data-colors tile-data
+					     (default-palette-colors)
+					     nil)))
+	      (copy-tile-map-pixels-from-tile-data! rgba-pixels i colors)))
+    (replace-pixel-buffer! *tile-map-texture* rgba-pixels)))
+
+(defun background-tile-map ()
+  (subseq *memory* #x9800 #x9c00))
+(defun window-tile-map ()
+  (subseq *memory* #x9c00 #xa000))
+
+(defun lcdc-register ()
+  (aref *memory* #xff40))
+(defun 8000-addressing-mode? ()
+  (bit-set? 4 (lcdc-register)))
+(defun scroll-x ()
+  (aref *memory* #xff43))
+(defun scroll-y ()
+  (aref *memory* #xff42))
+
+(defun ensure-tile-map-texture! ()
+  (setq *tile-map-texture* (create-pixel-buffer-texture! 256 256))
+  (add-drawing! :tile-map-texture
+		(drawing 1 (fn (draw-full-texture! *tile-map-texture*
+						   (g1 3) (g1 14))))))
+
+(defbutton background (button "BG" 1 (g2 3 27) :font)
+  (ensure-tile-map-texture!)
+  (fill-tile-map-texture! (background-tile-map) (8000-addressing-mode?))
+  (add-drawing! :background-scroll (drawing 3 (fn
+						(set-color! (blue))
+						(draw-rect! (+ (g1 3) (scroll-x))
+							    (+ (g1 14) (scroll-y))
+							    160 144)))))
+(defbutton window (button "Window" 1 (g2 5 27) :font)
+  (ensure-tile-map-texture!)
+  (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
+  (remove-drawing! :background-scroll))
 
 #+nil
 (command!
-  (initialize-color-palette! "BG" (g2 3 3) #xff47 nil)
-  (initialize-color-palette! "OBJ0" (g2 3 4) #xff48 t)
-  (initialize-color-palette! "OBJ1" (g2 3 5) #xff49 t))
-
-(defbutton tile-data-block0 (button "Blk0" 1 (g2 3 15) :font)
-  (fill-tile-data-textures! (tile-data-block0) t))
-(defbutton tile-data-block1 (button "Blk1" 1 (g2 6 15) :font)
-  (fill-tile-data-textures! (tile-data-block1) nil))
-(defbutton tile-data-block2 (button "Blk2" 1 (g2 9 15) :font)
-  (fill-tile-data-textures! (tile-data-block2) nil))
+  (initialize-color-palette! "BG" (g2 3 1) #xff47 nil)
+  (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
+  (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t))
