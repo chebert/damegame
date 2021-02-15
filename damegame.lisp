@@ -413,6 +413,9 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (when *tile-textures*
       (map nil 'free-texture! *tile-textures*)
       (setq *tile-textures* nil))
+    (when *sprite-tile-textures*
+      (map nil 'free-texture! *sprite-tile-textures*)
+      (setq *sprite-tile-textures* nil))
     (when *tile-map-texture*
       (free-texture! *tile-map-texture*)
       (setq *tile-map-texture* nil))
@@ -2762,8 +2765,6 @@ Waits for a reset signal."
 
 ;; Visualizations
 ;;; Tile Maps
-;;;; Show full background tile map (drawn out) with scrolling
-;;;; Show full window tile map (drawn out)
 ;;;;  write window-x, window-y
 ;;; Sprites
 ;;;; Show Sprite (based on 8x8 or 8x16 mode)
@@ -2994,6 +2995,8 @@ Waits for a reset signal."
   (aref *memory* #xff43))
 (defun scroll-y ()
   (aref *memory* #xff42))
+(defun object-size-doubled? ()
+  (bit-set? 2 (lcdc-register)))
 
 (defun ensure-tile-map-texture! ()
   (setq *tile-map-texture* (create-pixel-buffer-texture! 256 256))
@@ -3004,6 +3007,7 @@ Waits for a reset signal."
 (defbutton background (button "BG" 1 (g2 3 27) :font)
   (ensure-tile-map-texture!)
   (fill-tile-map-texture! (background-tile-map) (8000-addressing-mode?))
+  ;; TODO: show the wrapped region of the background scroll
   (add-drawing! :background-scroll (drawing 3 (fn
 						(set-color! (blue))
 						(draw-rect! (+ (g1 3) (scroll-x))
@@ -3014,8 +3018,60 @@ Waits for a reset signal."
   (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
   (remove-drawing! :background-scroll))
 
+(defvar *sprite-tile-textures* nil)
+(defun ensure-sprite-tile-data-textures! ()
+  (unless *sprite-tile-textures*
+    (setq *sprite-tile-textures* (initialize-tile-data-block-textures!))))
+
+(defun draw-sprites! (pos)
+  (ensure-sprite-tile-data-textures!)
+  (let* ((object-size-doubled? (object-size-doubled?)))
+    (loop for x below 8 do
+      (loop for y below 5 do
+	(let* ((sprite-index (+ x (* 8 y)))
+	       (sprite-addr (+ #xfe00 (* 4 sprite-index)))
+	       (tile/pattern-number (aref *memory* (+ sprite-addr 2)))
+	       (flags (aref *memory* (+ sprite-addr 3)))
+	       (palette-index1? (bit-set? 4 flags))
+	       (palette-colors (palette-colors-from-color-palette-addr
+				(if palette-index1?
+				    #xff49
+				    #xff48)))
+	       (tile-data-block (tile-data-block0)))
+	  (if object-size-doubled?
+	      (let* ((top-tile-index (logand #xfe tile/pattern-number))
+		     (bottom-tile-index (logior #x01 tile/pattern-number))
+		     (top-dest (v+ pos (g2 x (* 2 y))))
+		     (bottom-dest (v+ pos (g2 x (1+ (* 2 y))))))
+		(fill-tile-data-texture! (aref *sprite-tile-textures* top-tile-index)
+					 (tile-data-from-block tile-data-block top-tile-index)
+					 palette-colors
+					 t)
+		(draw-texture! (aref *sprite-tile-textures* top-tile-index)
+			       0 0 8 8
+			       (x top-dest) (y top-dest) (g1 1) (g1 1))
+
+		(fill-tile-data-texture! (aref *sprite-tile-textures* bottom-tile-index)
+					 (tile-data-from-block tile-data-block bottom-tile-index)
+					 palette-colors
+					 t)
+		(draw-texture! (aref *sprite-tile-textures* bottom-tile-index)
+			       0 0 8 8
+			       (x bottom-dest) (y bottom-dest) (g1 1) (g1 1)))
+	      (let* ((tile-index tile/pattern-number))
+		(fill-tile-data-texture! (aref *sprite-tile-textures* tile-index)
+					 (tile-data-from-block tile-data-block tile-index)
+					 palette-colors
+					 t)
+		(draw-texture! (aref *sprite-tile-textures* tile-index)
+			       0 0 8 8
+			       (+ (x pos) (g1 x))
+			       (+ (y pos) (g1 y))
+			       (g1 1) (g1 1)))))))))
 #+nil
 (command!
   (initialize-color-palette! "BG" (g2 3 1) #xff47 nil)
   (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
-  (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t))
+  (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t)
+
+  (add-drawing! :sprites (drawing 1 (fn (draw-sprites! (g2 16 14))))))
