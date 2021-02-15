@@ -410,6 +410,9 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (clrhash *fonts*)
     (clrhash *textures*)
     (clrhash *event-handlers*)
+    (when *tile-textures*
+      (map nil 'free-texture! *tile-textures*)
+      (setq *tile-textures* nil))
     (quit!)))
 
 (defun event-matcher-font-opened (font-id)
@@ -2755,8 +2758,6 @@ Waits for a reset signal."
 ;;; Status
 
 ;; Visualizations
-;;; Palettes
-;;;; Draw a small 4-color palette for each palette
 ;;; Tile Data
 ;;;; show grid of 8x8 tiles
 ;;;;  button next, previous to cycle through
@@ -2786,19 +2787,22 @@ Waits for a reset signal."
 ;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
 
 
-(defun draw-color-palette! (pos title-texture-id colors sprite-palette?)
+(defun draw-color-palette! (pos title-texture-id palette-colors sprite-palette?)
   (draw-full-texture-id-right-aligned! title-texture-id pos)
-  (loop for color in colors
+  (loop for color in palette-colors
 	for i from (if sprite-palette? 1 0) below 4 do
 	  (set-color! color)
 	  (fill-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))
 	  (set-color! (red 50))
 	  (draw-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))))
 
+(defun palette-colors-from-color-palette-addr (palette-addr)
+  (palette-colors-from-color-palette-byte (aref *memory* palette-addr)))
+
 (defun color-palette-drawing (pos title-texture-id layer palette-addr sprite-palette?)
   (drawing layer (fn (draw-color-palette! pos
 					  title-texture-id
-					  (colors-from-color-palette (aref *memory* palette-addr))
+					  (palette-colors-from-color-palette-addr palette-addr)
 					  sprite-palette?))))
 
 (defun palette-color-index (byte index)
@@ -2812,7 +2816,7 @@ Waits for a reset signal."
     (3 (grey 50))))
 
 
-(defun colors-from-color-palette (byte)
+(defun palette-colors-from-color-palette-byte (byte)
   (loop for i below 4 collecting (palette-color byte i)))
 
 (defun initialize-color-palette! (title pos palette-addr sprite-palette?)
@@ -2825,8 +2829,106 @@ Waits for a reset signal."
 						    palette-addr
 						    sprite-palette?))))
 
+;; Tile data block: 16x8 tiles
+
+;; 16x8 8x8 textures
+
+(defun initialize-tile-data-block-textures! ()
+  (let* ((textures (make-array '(128))))
+    (loop for i below 128 do
+      (setf (aref textures i) (create-pixel-buffer-texture! 8 8)))
+    textures))
+
+(defun tile-data-row-color-indices (hi-byte lo-byte)
+  (loop for i from 7 downto 0
+	collecting
+	(logior (ash (bit-value hi-byte i) 1)
+		(bit-value lo-byte i))))
+
+(defun tile-data-color-indices (tile-data)
+  ;; Tile data is 8 rows of 2-bytes
+  (loop for i below 8
+	appending (tile-data-row-color-indices
+		   (aref tile-data (1+ (* 2 i)))
+		   (aref tile-data (* 2 i)))))
+
+(defun tile-data-colors (tile-data palette-colors sprite?)
+  (mapcar (fn
+	    (if (and sprite? (= 0 %))
+		;; Transparent
+		(color 255 0 255 255)
+		(nth % palette-colors)))
+	  (tile-data-color-indices tile-data)))
+
+(defun rgba-pixels-from-colors (colors)
+  (let* ((rgba-pixels (make-array (list (* 4 (length colors))) :element-type '(unsigned-byte 8))))
+    (loop for i below (length rgba-pixels)
+	  for color in colors do
+	    (setf (aref rgba-pixels (+ 0 (* i 4))) (r color)
+		  (aref rgba-pixels (+ 1 (* i 4))) (g color)
+		  (aref rgba-pixels (+ 2 (* i 4))) (b color)
+		  (aref rgba-pixels (+ 3 (* i 4))) (a color)))
+    rgba-pixels))
+
+(defun fill-tile-data-texture! (tile-texture tile-data palette-colors sprite?)
+  (replace-pixel-buffer! tile-texture
+			 (rgba-pixels-from-colors
+			  (tile-data-colors tile-data palette-colors sprite?))))
+
+(defun tile-data-from-block (tile-data-block index)
+  (let* ((start (* index 16)))
+    (subseq tile-data-block start (+ start 16))))
+
+(defun fill-tile-data-textures! (tile-data-block sprite?)
+  (ensure-tile-textures!)
+  (let* ((palette-colors (default-palette-colors)))
+    (loop for i below (length *tile-textures*) do
+      (fill-tile-data-texture! (aref *tile-textures* i)
+			       (tile-data-from-block tile-data-block i)
+			       palette-colors
+			       sprite?))))
+
+(defun tile-data-block-size ()
+  (* 16 128))
+(defun tile-data-block0 ()
+  (subseq *memory* #x8000 (+ #x8000 (tile-data-block-size))))
+(defun tile-data-block1 ()
+  (subseq *memory* #x8800 (+ #x8800 (tile-data-block-size))))
+(defun tile-data-block2 ()
+  (subseq *memory* #x9000 (+ #x9000 (tile-data-block-size))))
+
+(defvar *tile-textures*)
+
+(defun draw-tile-data-texture! (pos tile-texture)
+  (draw-texture! tile-texture
+		 0 0
+		 (texture-width tile-texture) (texture-height tile-texture)
+		 (1+ (x pos)) (1+ (y pos)) (- (g1 1) 2) (- (g1 1) 2)))
+
+(defun draw-tile-data-textures! (pos)
+  (loop for x below 16 do
+    (loop for y below 8 do
+      (draw-tile-data-texture! (v+ pos (g2 x y))
+			       (aref *tile-textures* (+ x (* y 16)))))))
+
+(defun default-palette-colors ()
+  (palette-colors-from-color-palette-byte
+   #b11101000))
+
+(defun ensure-tile-textures! ()
+  (unless *tile-textures*
+    (setq *tile-textures* (initialize-tile-data-block-textures!))
+    (add-drawing! :tile-data (drawing 1 (fn (draw-tile-data-textures! (g2 3 7)))))))
+
 #+nil
 (command!
   (initialize-color-palette! "BG" (g2 3 3) #xff47 nil)
   (initialize-color-palette! "OBJ0" (g2 3 4) #xff48 t)
   (initialize-color-palette! "OBJ1" (g2 3 5) #xff49 t))
+
+(defbutton tile-data-block0 (button "Blk0" 1 (g2 3 15) :font)
+  (fill-tile-data-textures! (tile-data-block0) t))
+(defbutton tile-data-block1 (button "Blk1" 1 (g2 6 15) :font)
+  (fill-tile-data-textures! (tile-data-block1) nil))
+(defbutton tile-data-block2 (button "Blk2" 1 (g2 9 15) :font)
+  (fill-tile-data-textures! (tile-data-block2) nil))
