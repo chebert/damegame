@@ -300,6 +300,16 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
 		(format s "~A, " string)))))
 (defun c-arguments (strings)
   (format nil "(~A)" (comma-separated strings)))
+(defun c-block (c-code)
+  (format nil "{~%~A~%}~%" (indent c-code)))
+
+
+(defun c-sdl-check (c-expr)
+  (c-block
+   (c-statements
+    (list
+     (format nil "int error = ~A" c-expr)
+     "if (error) return error"))))
 
 (defun sdl-wrapper-c-functions ()
   (list
@@ -311,11 +321,12 @@ and clicks is the number of clicks performed (e.g. 2 is a 'double-click)."
 		:u8 "audio_channels" 'audio-channels)
     "Starts SDL. Loads TTF. Creates a window/renderer.
 Returns a non-zero error code on failure."
-    "#define CHECK(expr) do { int error = expr; if (error) return error; } while(0);
-CHECK(SDL_Init(SDL_INIT_EVERYTHING));
-CHECK(TTF_Init());
-CHECK(SDL_CreateWindowAndRenderer(window_width, window_height, 0, &g_window, &g_renderer));
-SDL_StartTextInput();
+    (concat
+     (list
+      (c-sdl-check "SDL_Init(SDL_INIT_EVERYTHING)")
+      (c-sdl-check "TTF_Init()")
+      (c-sdl-check "SDL_CreateWindowAndRenderer(window_width, window_height, 0, &g_window, &g_renderer)")
+      "SDL_StartTextInput();
 
 SDL_AudioSpec desired;
 SDL_zero(desired);
@@ -327,8 +338,7 @@ desired.callback = NULL;
 g_audio_device_id = SDL_OpenAudioDevice(NULL, 0, &desired, &g_obtained_audio_spec, 0);
 if (!g_audio_device_id)
   return -1;
-#undef CHECK
-return 0;")
+return 0;")))
 
    (c-exported-function
     :void "Quit" 'quit! ()

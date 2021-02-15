@@ -702,12 +702,12 @@ Test-fn and handle-fn are both functions of event."
     (load-text-texture! (aval :title-texture-id memory-visualization) :font
 			(aval :title memory-visualization))))
 
-(defmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
-						  'register8-text))
-(defmemory-visualization stack (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp (cpu-current))))
-						     'register8-text))
-(defmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
-						  'register8-text))
+(undefmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
+						    'register8-text))
+(undefmemory-visualization stack (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp (cpu-current))))
+						       'register8-text))
+(undefmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
+						    'register8-text))
 
 (defhandler handle-initialize-memory-visualization (event)
 	    (event-matcher-font-opened :font)
@@ -2736,6 +2736,24 @@ Waits for a reset signal."
 ;; focus: the memory address that was last modified
 ;; add cycles
 
+;; Add hardware events that were cycle-dependent
+;;; events cause interrupts
+;;; events switch modes in the LCD controller
+
+;; Visualizations:
+;; Memory
+;; CPU & CPU Previous
+;; Instruction description
+;; Buttons for executing/continuing/resetting
+;; Buttons for setting number base
+;; Interrupt enable list
+;; LCD stuff:
+;;; Color palette (x3)
+;;; Tile data
+;;; Tile maps
+;;; Sprites
+;;; Status
+
 ;; Visualizations
 ;;; Palettes
 ;;;; Draw a small 4-color palette for each palette
@@ -2766,3 +2784,49 @@ Waits for a reset signal."
 
 ;; Be able to switch off the BIOS ROM and replace with CART ROM
 ;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
+
+
+(defun draw-color-palette! (pos title-texture-id colors sprite-palette?)
+  (draw-full-texture-id-right-aligned! title-texture-id pos)
+  (loop for color in colors
+	for i from (if sprite-palette? 1 0) below 4 do
+	  (set-color! color)
+	  (fill-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))
+	  (set-color! (red 50))
+	  (draw-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))))
+
+(defun color-palette-drawing (pos title-texture-id layer palette-addr sprite-palette?)
+  (drawing layer (fn (draw-color-palette! pos
+					  title-texture-id
+					  (colors-from-color-palette (aref *memory* palette-addr))
+					  sprite-palette?))))
+
+(defun palette-color-index (byte index)
+  (logand #b11 (ash byte (- (* 2 index)))))
+
+(defun palette-color (byte index)
+  (ecase (palette-color-index byte index)
+    (0 (grey 200))
+    (1 (grey 150))
+    (2 (grey 100))
+    (3 (grey 50))))
+
+
+(defun colors-from-color-palette (byte)
+  (loop for i below 4 collecting (palette-color byte i)))
+
+(defun initialize-color-palette! (title pos palette-addr sprite-palette?)
+  (let* ((title-texture-id (gensym))
+	 (drawing-id (gensym)))
+    (load-text-texture! title-texture-id :font title)
+    (add-drawing! drawing-id (color-palette-drawing pos
+						    title-texture-id
+						    1
+						    palette-addr
+						    sprite-palette?))))
+
+#+nil
+(command!
+  (initialize-color-palette! "BG" (g2 3 3) #xff47 nil)
+  (initialize-color-palette! "OBJ0" (g2 3 4) #xff48 t)
+  (initialize-color-palette! "OBJ1" (g2 3 5) #xff49 t))
