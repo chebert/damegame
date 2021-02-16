@@ -2919,7 +2919,10 @@ Waits for a reset signal."
     (setq *tile-textures* (initialize-tile-data-block-textures!))))
 
 (defun initialize-block-visualization! ()
-  (fill-tile-data-textures! (tile-data-block0) t))
+  (ecase *lcd-visualization-current-tile-data-block*
+    (0 (fill-tile-data-textures! (tile-data-block0) t))
+    (1 (fill-tile-data-textures! (tile-data-block1) nil))
+    (2 (fill-tile-data-textures! (tile-data-block2) nil))))
 
 
 ;; Bg Tile Map
@@ -3141,23 +3144,28 @@ Waits for a reset signal."
 	 (initialize-button! id))))
     id))
 
+(defvar *lcd-visualization-current-tile-data-block* 0)
+
 (defun lcd-buttons ()
   (list
    (button-spec
     :tile-data-block0
     (button "Blk0" 1 (g2 3 13) :font)
-    (fn 
-      (fill-tile-data-textures! (tile-data-block0) t)))
+    (fn
+      (setq *lcd-visualization-current-tile-data-block* 0)
+      (initialize-block-visualization!)))
    (button-spec
     :tile-data-block1
     (button "Blk1" 1 (g2 6 13) :font)
     (fn
-      (fill-tile-data-textures! (tile-data-block1) nil)))
+      (setq *lcd-visualization-current-tile-data-block* 1)
+      (initialize-block-visualization!)))
    (button-spec
     :tile-data-block2
     (button "Blk2" 1 (g2 9 13) :font)
     (fn
-      (fill-tile-data-textures! (tile-data-block2) nil)))
+      (setq *lcd-visualization-current-tile-data-block* 2)
+      (initialize-block-visualization!)))
    
    (button-spec
     :background
