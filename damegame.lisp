@@ -610,7 +610,7 @@ Test-fn and handle-fn are both functions of event."
 
 (defun cpu-initial ()
   (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0
-	    :zero? nil :half-carry? nil :subtraction? nil :ime? t))
+	    :zero? nil :half-carry? nil :subtraction? nil :ime? nil))
 
 (defvar *cpus* (list (cpu-initial)))
 (defun cpu-current ()
@@ -2757,27 +2757,20 @@ Waits for a reset signal."
 
 ;; TODO: determine when interrupt flags are reset
 
-;; focus: the memory address that was last modified
-;; add cycles
+;; TODO: focus on the memory address that was last modified
 
 ;; Add hardware events that were cycle-dependent
 ;;; events cause interrupts
 ;;; events switch modes in the LCD controller
 
 ;; Visualizations
-;;; Tile Maps
-;;;;  write window-x, window-y
 ;;; Sprites
 ;;;; Write position
 ;;;; show flipping
-;;; write List of interrupts: color green for enabled; red for disabled
-;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
-;;;; Serial Transfer Completion, End of input signal for ports P10-P13
 
 
 ;; Be able to switch off the BIOS ROM and replace with CART ROM
 ;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
-
 
 (defun draw-color-palette! (pos title-texture-id palette-addr sprite-palette?)
   (draw-full-texture-id-right-aligned! title-texture-id pos)
@@ -2975,13 +2968,6 @@ Waits for a reset signal."
 	      (copy-tile-map-pixels-from-tile-data! rgba-pixels i colors)))
     (replace-pixel-buffer! *tile-map-texture* rgba-pixels)))
 
-(defun background-tile-map ()
-  (subseq *memory* #x9800 #x9c00))
-(defun window-tile-map ()
-  (subseq *memory* #x9c00 #xa000))
-
-;; TODO: window/background can choose between 2 tile maps interchangeably
-
 (defun lcdc-register ()
   (aref *memory* #xff40))
 (defun 8000-addressing-mode? ()
@@ -3025,6 +3011,13 @@ Waits for a reset signal."
 (defun lcdc-background/window-display? ()
   (bit-set? 0 (lcdc-register)))
 
+
+(defun background-tile-map ()
+  (let* ((addr (lcdc-background-tiles-addr)))
+    (subseq *memory* addr (+ addr #x0400))))
+(defun window-tile-map ()
+  (let* ((addr (lcdc-window-tiles-addr)))
+    (subseq *memory* addr (+ addr #x0400))))
 
 (defun ensure-tile-map-texture! ()
   (setq *tile-map-texture* (create-pixel-buffer-texture! 256 256)))
@@ -3222,8 +3215,6 @@ Waits for a reset signal."
     (load-text-texture! :lcdc-object-display? :font "Object Disp?: ")
     (load-text-texture! :lcdc-background/window-display? :font "BG/Win Disp?: ")))
 
-;; TODO: remember which block is currently selected
-
 (defun draw-lcd-visualizations! ()
   (draw-sprites! (g2 16 14))
   (draw-tile-data-textures! (g2 3 5))
@@ -3237,28 +3228,28 @@ Waits for a reset signal."
     (draw-full-texture-id! (if (lcdc-display?) :yes :no) (g2 column y))
 
     (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-window-tiles (g2 column y))
-    (draw-full-texture-id! :lcdc-window-tiles-data (g2 column y))
+    (draw-full-texture-id-right-aligned! :lcdc-background/window-display? (g2 column y))
+    (draw-full-texture-id! (if (lcdc-background/window-display?) :yes :no) (g2 column y))
 
     (incf y)
     (draw-full-texture-id-right-aligned! :lcdc-window-disp? (g2 column y))
     (draw-full-texture-id! (if (lcdc-window-display?) :yes :no) (g2 column y))
 
     (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-object-display? (g2 column y))
+    (draw-full-texture-id! (if (lcdc-object-display?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-window-tiles (g2 column y))
+    (draw-full-texture-id! :lcdc-window-tiles-data (g2 column y))
+    
+    (incf y)
     (draw-full-texture-id-right-aligned! :lcdc-bg-tiles (g2 column y))
     (draw-full-texture-id! :lcdc-bg-tiles-data (g2 column y))
 
     (incf y)
     (draw-full-texture-id-right-aligned! :lcdc-object-size (g2 column y))
-    (draw-full-texture-id! :lcdc-object-size-data (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-object-display? (g2 column y))
-    (draw-full-texture-id! (if (lcdc-object-display?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-background/window-display? (g2 column y))
-    (draw-full-texture-id! (if (lcdc-background/window-display?) :yes :no) (g2 column y)))
+    (draw-full-texture-id! :lcdc-object-size-data (g2 column y)))
 
   (let* ((column 24)
 	 (y 21))
@@ -3272,13 +3263,11 @@ Waits for a reset signal."
     (draw-full-texture-id! :lcd-status-mode-data (g2 column y))
     (incf y)
     (draw-full-texture-id-right-aligned! :lcd-status-coincidence? (g2 column y))
-    (draw-full-texture-id! (if (lcd-coincidence?)
-			       :yes
-			       :no)
-			   (g2 column y))
+    (draw-full-texture-id! (if (lcd-coincidence?) :yes :no) (g2 column y))
     (incf y)
     (draw-full-texture-id-right-aligned! :lcd-status-dma-address (g2 column y))
     (draw-full-texture-id! :lcd-status-dma-address-data (g2 column y))))
+
 (defun background-scroll-drawing ()
   (drawing 3 (fn
 	       (set-color! (blue))
@@ -3318,3 +3307,10 @@ Waits for a reset signal."
   (remove-drawing! :memory-visualizations))
 
 ;; TODO: buttons should have ids on them
+
+
+
+;;; write List of interrupts enabled: color green for enabled; red for disabled
+;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
+;;;; Serial Transfer Completion, End of input signal for ports P10-P13
+
