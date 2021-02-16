@@ -970,6 +970,10 @@ Test-fn and handle-fn are both functions of event."
   (format nil "0b~8,'0b" num))
 (defun hex8-text (num)
   (format nil "0x~2,'0x" num))
+(defun s8-text (num)
+  (format nil "~d" (s8 num)))
+(defun u8-text (num)
+  (format nil "~d" num))
 (defun hex16-text (num)
   (format nil "0x~4,'0x" num))
 (defun register8-text (register)
@@ -977,9 +981,9 @@ Test-fn and handle-fn are both functions of event."
     (:hexadecimal
      (hex8-text register))
     (:signed
-     (format nil "~d" (s8 register)))
+     (s8-text register))
     (:unsigned
-     (format nil "~d" register))
+     (u8-text register))
     (:binary
      (bin8-text register))))
 (defun register16-text (register)
@@ -2816,12 +2820,6 @@ Waits for a reset signal."
 			       (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
 			       (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t))))
 
-(defun update-lcd-visualizations! ()
-  (unless *draw-memory-visualizations?*
-    (initialize-color-palettes!)
-    (initialize-background-visualization!)
-    (initialize-block-visualization!)))
-
 (defun draw-color-palettes! ()
   (mapcar 
    (fn (draw-color-palette! (aval :pos %)
@@ -2979,6 +2977,8 @@ Waits for a reset signal."
 (defun window-tile-map ()
   (subseq *memory* #x9c00 #xa000))
 
+;; TODO: window/background can choose between 2 tile maps interchangeably
+
 (defun lcdc-register ()
   (aref *memory* #xff40))
 (defun 8000-addressing-mode? ()
@@ -2993,6 +2993,34 @@ Waits for a reset signal."
   (+ (aref *memory* #xff4b) 7))
 (defun window-y ()
   (aref *memory* #xff4a))
+(defun lcd-scanline ()
+  (aref *memory* #xff44))
+(defun lcd-scanline-compare ()
+  (aref *memory* #xff45))
+(defun lcds-register ()
+  (aref *memory* #xff41))
+(defun lcd-mode ()
+  (logand #b11 (lcds-register)))
+(defun lcd-dma-start ()
+  (ash (aref *memory* #xff46) 4))
+(defun lcd-coincidence? ()
+  (bit-set? 2 (lcds-register)))
+(defun lcdc-background-tiles-addr ()
+  (if (bit-set? 3 (lcdc-register))
+      #x9C00
+      #x9800))
+(defun lcdc-window-tiles-addr ()
+  (if (bit-set? 6 (lcdc-register))
+      #x9C00
+      #x9800))
+(defun lcdc-display? ()
+  (bit-set? 7 (lcdc-register)))
+(defun lcdc-window-display? ()
+  (bit-set? 5 (lcdc-register)))
+(defun lcdc-object-display? ()
+  (bit-set? 1 (lcdc-register)))
+(defun lcdc-background/window-display? ()
+  (bit-set? 0 (lcdc-register)))
 
 
 (defun ensure-tile-map-texture! ()
@@ -3119,20 +3147,17 @@ Waits for a reset signal."
     :tile-data-block0
     (button "Blk0" 1 (g2 3 13) :font)
     (fn 
-      (fill-tile-data-textures! (tile-data-block0) t)
-      (add-tile-data-drawing!)))
+      (fill-tile-data-textures! (tile-data-block0) t)))
    (button-spec
     :tile-data-block1
     (button "Blk1" 1 (g2 6 13) :font)
     (fn
-      (fill-tile-data-textures! (tile-data-block1) nil)
-      (add-tile-data-drawing!)))
+      (fill-tile-data-textures! (tile-data-block1) nil)))
    (button-spec
     :tile-data-block2
     (button "Blk2" 1 (g2 9 13) :font)
     (fn
-      (fill-tile-data-textures! (tile-data-block2) nil)
-      (add-tile-data-drawing!)))
+      (fill-tile-data-textures! (tile-data-block2) nil)))
    
    (button-spec
     :background
@@ -3157,25 +3182,37 @@ Waits for a reset signal."
 	   (eql (aval :id %) id))))
 
 
-;;; LCD Status
-;;;   write Current Mode, Coincidence?, current-scanline (y coordinate), compare-y coordinate
+(defun update-lcd-visualizations! ()
+  (unless *draw-memory-visualizations?*
+    (initialize-color-palettes!)
+    (initialize-background-visualization!)
+    (initialize-block-visualization!)
+    (load-text-texture! :lcd-status-scanline :font "Scanline: ")
+    (load-text-texture! :lcd-status-scanline-data :font (s8-text (lcd-scanline)))
+    (load-text-texture! :lcd-status-compare-scanline :font "CmpScanline: ")
+    (load-text-texture! :lcd-status-compare-scanline-data :font (s8-text (lcd-scanline-compare)))
+    (load-text-texture! :lcd-status-mode :font "Mode: ")
+    (load-text-texture! :lcd-status-mode-data :font (ecase (lcd-mode)
+						      (0 "H-Blank")
+						      (1 "V-Blank")
+						      (2 "OAM")
+						      (3 "OAM/VRAM")))
+    (load-text-texture! :lcd-status-coincidence? :font "Coincidence?: ")
+    (load-text-texture! :lcd-status-dma-address :font "DMA Start: ")
+    (load-text-texture! :lcd-status-dma-address-data :font (hex16-text (lcd-dma-start)))
 
-;; LCD Status
-
-;;     Scanline: u8 decimal
-;;  CmpScanline: u8 decimal
-;;         Mode: u8 decimal
-;; Coincidence?: Yes/No
-;;     DMA Addr: u16 hex
-
-;; LCD Control
-
-;;     Display?: Yes/no
-;; Window Tiles: u16 hex
-;; Window Disp?: Yes/no
-;;     BG Tiles: u16 hex
-;;     Obj Size: "1x" or "2x"
-;; BG/Win Disp?: Yes/No
+    (load-text-texture! :lcdc-display? :font "Display?: ")
+    (load-text-texture! :lcdc-window-tiles :font "Window Tiles: ")
+    (load-text-texture! :lcdc-window-tiles-data :font (hex16-text (lcdc-window-tiles-addr)))
+    (load-text-texture! :lcdc-window-disp? :font "Window Disp?: ")
+    (load-text-texture! :lcdc-bg-tiles :font "BG Tiles: ")
+    (load-text-texture! :lcdc-bg-tiles-data :font (hex16-text (lcdc-background-tiles-addr)))
+    (load-text-texture! :lcdc-object-size :font "Object Size: ")
+    (load-text-texture! :lcdc-object-size-data :font (if (object-size-doubled?)
+							 "2x"
+							 "1x"))
+    (load-text-texture! :lcdc-object-display? :font "Object Disp?: ")
+    (load-text-texture! :lcdc-background/window-display? :font "BG/Win Disp?: ")))
 
 ;; TODO: remember which block is currently selected
 
@@ -3184,7 +3221,56 @@ Waits for a reset signal."
   (draw-tile-data-textures! (g2 3 5))
   (draw-color-palettes!)
   (draw-full-texture! *tile-map-texture* (g1 3) (g1 14))
-  (draw-full-texture-id! :tile-map-pos (g2 10 27)))
+  (draw-full-texture-id! :tile-map-pos (g2 10 27))
+
+  (let* ((column 27)
+	 (y 6))
+    (draw-full-texture-id-right-aligned! :lcdc-display? (g2 column y))
+    (draw-full-texture-id! (if (lcdc-display?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-window-tiles (g2 column y))
+    (draw-full-texture-id! :lcdc-window-tiles-data (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-window-disp? (g2 column y))
+    (draw-full-texture-id! (if (lcdc-window-display?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-bg-tiles (g2 column y))
+    (draw-full-texture-id! :lcdc-bg-tiles-data (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-object-size (g2 column y))
+    (draw-full-texture-id! :lcdc-object-size-data (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-object-display? (g2 column y))
+    (draw-full-texture-id! (if (lcdc-object-display?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcdc-background/window-display? (g2 column y))
+    (draw-full-texture-id! (if (lcdc-background/window-display?) :yes :no) (g2 column y)))
+
+  (let* ((column 24)
+	 (y 21))
+    (draw-full-texture-id-right-aligned! :lcd-status-scanline (g2 column y))
+    (draw-full-texture-id! :lcd-status-scanline-data (g2 column y))
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcd-status-compare-scanline (g2 column y))
+    (draw-full-texture-id! :lcd-status-compare-scanline-data (g2 column y))
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcd-status-mode (g2 column y))
+    (draw-full-texture-id! :lcd-status-mode-data (g2 column y))
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcd-status-coincidence? (g2 column y))
+    (draw-full-texture-id! (if (lcd-coincidence?)
+			       :yes
+			       :no)
+			   (g2 column y))
+    (incf y)
+    (draw-full-texture-id-right-aligned! :lcd-status-dma-address (g2 column y))
+    (draw-full-texture-id! :lcd-status-dma-address-data (g2 column y))))
 (defun background-scroll-drawing ()
   (drawing 3 (fn
 	       (set-color! (blue))
@@ -3202,9 +3288,8 @@ Waits for a reset signal."
 ;; Display/Hide LCD Visualizations (when toggling memory/lcd vis)
 (defhandler handle-display-lcd-visualizations (event)
 	    (event-display-matcher :lcd-visualizations)
-  (initialize-color-palettes!)
-  (initialize-background-visualization!)
-  (initialize-block-visualization!)
+  (update-lcd-visualizations!)
+
   (mapcar 'create-button! (lcd-buttons))
   (add-drawing! :lcd-visualizations (drawing 1 (fn (draw-lcd-visualizations!))))
   (add-drawing! :background-scroll (background-scroll-drawing)))
