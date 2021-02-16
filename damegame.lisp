@@ -703,25 +703,31 @@ Test-fn and handle-fn are both functions of event."
   (declare (ignore args))
   `(command! (remove-memory-visualization! ',name)))
 
+(defun draw-memory-visualizations! ()
+  (amap (fn (draw-memory-visualization! (cpu-current) %)) *memory-visualizations*))
+
 (defun initialize-memory-visualization! (id memory-visualization)
   (let* ((drawing-id (gensym)))
     (set-memory-visualization! id (aset :drawing-id drawing-id memory-visualization))
     (update-memory-visualization! *memory* memory-visualization)
-    (add-drawing! drawing-id (drawing 1 (fn (draw-memory-visualization! (cpu-current) id))))
+    ;;(add-drawing! drawing-id (drawing 1 (fn (draw-memory-visualization! (cpu-current) id))))
     (load-text-texture! (aval :title-texture-id memory-visualization) :font
 			(aval :title memory-visualization))))
 
-(undefmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
-						    'register8-text))
-(undefmemory-visualization stack (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp (cpu-current))))
-						       'register8-text))
-(undefmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
-						    'register8-text))
+(defmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
+						  'register8-text))
+(defmemory-visualization stack (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp (cpu-current))))
+						     'register8-text))
+(defmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
+						  'register8-text))
+
+(defvar *draw-memory-visualizations?* nil)
 
 (defhandler handle-initialize-memory-visualization (event)
 	    (event-matcher-font-opened :font)
-  (amap 'initialize-memory-visualization! *memory-visualizations*))
-
+  (amap 'initialize-memory-visualization! *memory-visualizations*)
+  (add-drawing! :memory-visualizations (drawing 1 (fn (when *draw-memory-visualizations?*
+							(draw-memory-visualizations!))))))
 
 (defvar *cpu-visualizations* ())
 (defun get-cpu-visualization (id)
@@ -1180,7 +1186,8 @@ Test-fn and handle-fn are both functions of event."
 					       prev-disassembly-text
 					       "(Disassembly)"))
     (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
-    (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))))
+    (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
+    (update-lcd-visualizations!)))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
@@ -2749,32 +2756,16 @@ Waits for a reset signal."
 ;;; events cause interrupts
 ;;; events switch modes in the LCD controller
 
-;; Visualizations:
-;; Memory
-;; CPU & CPU Previous
-;; Instruction description
-;; Buttons for executing/continuing/resetting
-;; Buttons for setting number base
-;; Interrupt enable list
-;; LCD stuff:
-;;; Color palette (x3)
-;;; Tile data
-;;; Tile maps
-;;; Sprites
-;;; Status
-
 ;; Visualizations
 ;;; Tile Maps
 ;;;;  write window-x, window-y
 ;;; Sprites
-;;;; Show Sprite (based on 8x8 or 8x16 mode)
 ;;;; Write position
-;;;; write priority
 ;;;; show flipping
-;;;;  show grid; button next/prev
 ;;; write List of interrupts: color green for enabled; red for disabled
 ;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
 ;;;; Serial Transfer Completion, End of input signal for ports P10-P13
+
 ;;; LCD Status
 ;;;   write Current Mode, Coincidence?, current-scanline (y coordinate), compare-y coordinate
 
@@ -2787,9 +2778,9 @@ Waits for a reset signal."
 ;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
 
 
-(defun draw-color-palette! (pos title-texture-id palette-colors sprite-palette?)
+(defun draw-color-palette! (pos title-texture-id palette-addr sprite-palette?)
   (draw-full-texture-id-right-aligned! title-texture-id pos)
-  (loop for color in palette-colors
+  (loop for color in (palette-colors-from-color-palette-addr palette-addr)
 	for i from (if sprite-palette? 1 0) below 4 do
 	  (set-color! color)
 	  (fill-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))
@@ -2798,12 +2789,6 @@ Waits for a reset signal."
 
 (defun palette-colors-from-color-palette-addr (palette-addr)
   (palette-colors-from-color-palette-byte (aref *memory* palette-addr)))
-
-(defun color-palette-drawing (pos title-texture-id layer palette-addr sprite-palette?)
-  (drawing layer (fn (draw-color-palette! pos
-					  title-texture-id
-					  (palette-colors-from-color-palette-addr palette-addr)
-					  sprite-palette?))))
 
 (defun palette-color-index (byte index)
   (logand #b11 (ash byte (- (* 2 index)))))
@@ -2820,14 +2805,43 @@ Waits for a reset signal."
   (loop for i below 4 collecting (palette-color byte i)))
 
 (defun initialize-color-palette! (title pos palette-addr sprite-palette?)
-  (let* ((title-texture-id (gensym))
-	 (drawing-id (gensym)))
+  (let* ((title-texture-id (gensym)))
     (load-text-texture! title-texture-id :font title)
-    (add-drawing! drawing-id (color-palette-drawing pos
-						    title-texture-id
-						    1
-						    palette-addr
-						    sprite-palette?))))
+    (alist :pos pos
+	   :title-texture-id title-texture-id
+	   :palette-addr palette-addr
+	   :sprite-palette? sprite-palette?)))
+
+(defvar *color-palettes* ())
+
+(defun initialize-color-palettes! ()
+  (setq *color-palettes* (list (initialize-color-palette! "BG" (g2 3 1) #xff47 nil)
+			       (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
+			       (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t)))
+  (add-drawing! :color-palettes (drawing 1 (fn (unless *draw-memory-visualizations?*
+						 (draw-color-palettes!))))))
+
+(defun update-lcd-visualizations! ()
+  (initialize-color-palettes!)
+  (initialize-background-visualization!)
+  (initialize-block-visualization!)
+  (if *draw-memory-visualizations?*
+      (remove-lcd-buttons!)
+      (create-lcd-buttons!))
+  (add-drawing! :sprites (drawing 1 (fn (unless *draw-memory-visualizations?*
+					  (draw-sprites! (g2 16 14)))))))
+
+(defhandler handle-initialize-lcd-visualizations (event)
+	    (event-matcher-font-opened :font)
+  (update-lcd-visualizations!))
+
+(defun draw-color-palettes! ()
+  (mapcar 
+   (fn (draw-color-palette! (aval :pos %)
+			    (aval :title-texture-id %)
+			    (aval :palette-addr %)
+			    (aval :sprite-palette? %)))
+   *color-palettes*))
 
 ;; Tile data block: 16x8 tiles
 
@@ -2897,7 +2911,7 @@ Waits for a reset signal."
 (defun tile-data-block2 ()
   (subseq *memory* #x9000 (+ #x9000 (tile-data-block-size))))
 
-(defvar *tile-textures*)
+(defvar *tile-textures* nil)
 
 (defun draw-tile-data-texture! (pos tile-texture)
   (draw-texture! tile-texture
@@ -2920,17 +2934,13 @@ Waits for a reset signal."
     (setq *tile-textures* (initialize-tile-data-block-textures!))))
 
 (defun add-tile-data-drawing! ()
-  (add-drawing! :tile-data (drawing 1 (fn (draw-tile-data-textures! (g2 3 5))))))
+  (add-drawing! :tile-data (drawing 1 (fn (unless *draw-memory-visualizations?*
+					    (draw-tile-data-textures! (g2 3 5)))))))
 
-(defbutton tile-data-block0 (button "Blk0" 1 (g2 3 13) :font)
+(defun initialize-block-visualization! ()
   (fill-tile-data-textures! (tile-data-block0) t)
   (add-tile-data-drawing!))
-(defbutton tile-data-block1 (button "Blk1" 1 (g2 6 13) :font)
-  (fill-tile-data-textures! (tile-data-block1) nil)
-  (add-tile-data-drawing!))
-(defbutton tile-data-block2 (button "Blk2" 1 (g2 9 13) :font)
-  (fill-tile-data-textures! (tile-data-block2) nil)
-  (add-tile-data-drawing!))
+
 
 ;; Bg Tile Map
 ;; 32x32
@@ -3001,22 +3011,20 @@ Waits for a reset signal."
 (defun ensure-tile-map-texture! ()
   (setq *tile-map-texture* (create-pixel-buffer-texture! 256 256))
   (add-drawing! :tile-map-texture
-		(drawing 1 (fn (draw-full-texture! *tile-map-texture*
-						   (g1 3) (g1 14))))))
+		(drawing 1 (fn (unless *draw-memory-visualizations?*
+				 (draw-full-texture! *tile-map-texture*
+						     (g1 3) (g1 14)))))))
 
-(defbutton background (button "BG" 1 (g2 3 27) :font)
+(defun initialize-background-visualization! ()
   (ensure-tile-map-texture!)
   (fill-tile-map-texture! (background-tile-map) (8000-addressing-mode?))
   ;; TODO: show the wrapped region of the background scroll
   (add-drawing! :background-scroll (drawing 3 (fn
-						(set-color! (blue))
-						(draw-rect! (+ (g1 3) (scroll-x))
-							    (+ (g1 14) (scroll-y))
-							    160 144)))))
-(defbutton window (button "Window" 1 (g2 5 27) :font)
-  (ensure-tile-map-texture!)
-  (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
-  (remove-drawing! :background-scroll))
+						(unless *draw-memory-visualizations?*
+						  (set-color! (blue))
+						  (draw-rect! (+ (g1 3) (scroll-x))
+							      (+ (g1 14) (scroll-y))
+							      160 144))))))
 
 (defvar *sprite-tile-textures* nil)
 (defun ensure-sprite-tile-data-textures! ()
@@ -3068,10 +3076,58 @@ Waits for a reset signal."
 			       (+ (x pos) (g1 x))
 			       (+ (y pos) (g1 y))
 			       (g1 1) (g1 1)))))))))
-#+nil
-(command!
-  (initialize-color-palette! "BG" (g2 3 1) #xff47 nil)
-  (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
-  (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t)
 
-  (add-drawing! :sprites (drawing 1 (fn (draw-sprites! (g2 16 14))))))
+(defbutton toggle-memory/lcd (button "Toggle Memory/LCD" 1 (g2 1 28) :font)
+  (setq *draw-memory-visualizations?* (not *draw-memory-visualizations?*))
+  (update-lcd-visualizations!))
+
+;; I want to be able to
+;;  create buttons as a group
+;;  update buttons the same way I create them/add them to the system
+;;  remove buttons as a group
+
+(defun create-button! (id handler-id button on-click-fn)
+  (register-handler! handler-id (event-handler
+				 (EVENT-MATCHER-BUTTON-CLICKED id)
+				 (fn (funcall on-click-fn))))
+  (set-button! id button)
+  (INITIALIZE-BUTTON! id))
+
+
+;; TODO: figure out why the drawing persists even after we've removed the button.
+;; Causes a crash.
+
+
+(defun create-lcd-buttons! ()
+  (create-button! 'tile-data-block0 'handle-tile-data-block0-clicked
+		  (button "Blk0" 1 (g2 3 13) :font)
+		  (fn 
+		    (fill-tile-data-textures! (tile-data-block0) t)
+		    (add-tile-data-drawing!)))
+  (create-button! 'tile-data-block1 'handle-tile-data-block1-clicked
+		  (button "Blk1" 1 (g2 6 13) :font)
+		  (fn
+		    (fill-tile-data-textures! (tile-data-block1) nil)
+		    (add-tile-data-drawing!)))
+  (create-button! 'tile-data-block2 'handle-tile-data-block2-clicked
+		  (button "Blk2" 1 (g2 9 13) :font)
+		  (fn
+		    (fill-tile-data-textures! (tile-data-block2) nil)
+		    (add-tile-data-drawing!)))
+  
+  (create-button! 'background 'handle-background-clicked
+		  (button "BG" 1 (g2 3 27) :font)
+		  (fn
+		    (initialize-background-visualization!)))
+  (create-button! 'window 'handle-window-clicked
+		  (button "Window" 1 (g2 5 27) :font)
+		  (fn
+		    (ensure-tile-map-texture!)
+		    (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
+		    (remove-drawing! :background-scroll))))
+(defun remove-lcd-buttons! ()
+  (remove-button! 'tile-data-block0)
+  (remove-button! 'tile-data-block1)
+  (remove-button! 'tile-data-block2)
+  (remove-button! 'background)
+  (remove-button! 'window))
