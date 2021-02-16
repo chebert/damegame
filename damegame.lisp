@@ -478,6 +478,7 @@ Test-fn and handle-fn are both functions of event."
 
 ;; Creation: text, layer, pos, font-id,
 (defun button (text layer pos font-id)
+  "Button spec used for defbutton."
   (alist :text text
 	 :layer layer
 	 :pos pos
@@ -2769,13 +2770,6 @@ Waits for a reset signal."
 ;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
 ;;;; Serial Transfer Completion, End of input signal for ports P10-P13
 
-;;; LCD Status
-;;;   write Current Mode, Coincidence?, current-scanline (y coordinate), compare-y coordinate
-
-;; I want a way to group visualizations together and switch between them
-;;; Switch on & off drawings as groups
-;;; draw a nice rectangle around them.
-
 
 ;; Be able to switch off the BIOS ROM and replace with CART ROM
 ;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
@@ -2995,17 +2989,26 @@ Waits for a reset signal."
   (aref *memory* #xff42))
 (defun object-size-doubled? ()
   (bit-set? 2 (lcdc-register)))
+(defun window-x ()
+  (+ (aref *memory* #xff4b) 7))
+(defun window-y ()
+  (aref *memory* #xff4a))
+
 
 (defun ensure-tile-map-texture! ()
-  (setq *tile-map-texture* (create-pixel-buffer-texture! 256 256))
-  (add-drawing! :tile-map-texture
-		(drawing 1 (fn (unless *draw-memory-visualizations?*
-				 (draw-full-texture! *tile-map-texture*
-						     (g1 3) (g1 14)))))))
+  (setq *tile-map-texture* (create-pixel-buffer-texture! 256 256)))
 
+
+(defvar *draw-background-tile-map?* nil)
 (defun initialize-background-visualization! ()
-  (ensure-tile-map-texture!)
-  (fill-tile-map-texture! (background-tile-map) (8000-addressing-mode?)))
+  (let* ((tile-map (if *draw-background-tile-map?*
+		       (background-tile-map)
+		       (window-tile-map))))
+    (ensure-tile-map-texture!)
+    (fill-tile-map-texture! tile-map (8000-addressing-mode?))
+    (load-text-texture! :tile-map-pos :font (if *draw-background-tile-map?*
+						(format nil "<~A, ~A>" (scroll-x) (scroll-y))
+						(format nil "<~A, ~A>" (window-x) (window-y))))))
 
 (defvar *sprite-tile-textures* nil)
 (defun ensure-sprite-tile-data-textures! ()
@@ -3076,70 +3079,75 @@ Waits for a reset signal."
       (display-lcd-visualiztions!)
       (display-memory-visualiztions!)))
 
-;; I want to be able to
-;;  create buttons as a group
-;;  update buttons the same way I create them/add them to the system
-;;  remove buttons as a group
-
-(defun create-button-spec (id button on-click-fn)
+(defun button-spec (id button on-click-fn)
+  "A button spec used for create-button!, uses a button spec for defbutton."
   (amerge button (alist :id id :on-click-fn on-click-fn)))
+
+(defun register-button-handler! (button)
+  (register-handler! (aval :click-handler-id button)
+		     (button-clicked-event-handler (aval :id button)
+						   (aval :on-click-fn button))))
+
+(defun update-button! (old-button button)
+  (let* ((new-button (amerge old-button button)))
+    (register-button-handler! new-button)
+    (load-text-texture! (aval :texture-id new-button)
+			(aval :font-id new-button)
+			(aval :text new-button))
+    (set-button! (aval :id button) new-button)))
+
+(defun button-clicked-event-handler (button-id on-click-fn)
+  (event-handler
+   (EVENT-MATCHER-BUTTON-CLICKED button-id)
+   on-click-fn))
 
 (defun create-button! (button)
   (let* ((id (aval :id button))
-	 (on-click-fn (aval :on-click-fn button))
 	 (old-button (get-button id)))
     (cond
-      (old-button
-       ;; If the button already exists, just update it.
-       (let* ((new-button (amerge old-button button)))
-	 (register-handler! (aval :click-handler-id new-button)
-			    (event-handler
-			     (EVENT-MATCHER-BUTTON-CLICKED id)
-			     on-click-fn))
-	 (load-text-texture! (aval :texture-id new-button)
-			     (aval :font-id new-button)
-			     (aval :text new-button))
-	 (set-button! id new-button))
-       )
+      (old-button (update-button! old-button button))
       (t
-       (let* ((handler-id (gensym)))
-	 (register-handler! handler-id (event-handler
-					(EVENT-MATCHER-BUTTON-CLICKED id)
-					on-click-fn))
-	 
-	 (set-button! id (aset :click-handler-id handler-id button))
-	 (initialize-BUTTON! id))))
+       (let* ((button (aset :click-handler-id (gensym) button)))
+	 (register-button-handler! button)
+	 (set-button! id button)
+	 (initialize-button! id))))
     id))
 
 (defun lcd-buttons ()
   (list
-   (create-button-spec :tile-data-block0
-		       (button "Blk0" 1 (g2 3 13) :font)
-		       (fn 
-			 (fill-tile-data-textures! (tile-data-block0) t)
-			 (add-tile-data-drawing!)))
-   (create-button-spec :tile-data-block1
-		       (button "Blk1" 1 (g2 6 13) :font)
-		       (fn
-			 (fill-tile-data-textures! (tile-data-block1) nil)
-			 (add-tile-data-drawing!)))
-   (create-button-spec :tile-data-block2
-		       (button "Blk2" 1 (g2 9 13) :font)
-		       (fn
-			 (fill-tile-data-textures! (tile-data-block2) nil)
-			 (add-tile-data-drawing!)))
+   (button-spec
+    :tile-data-block0
+    (button "Blk0" 1 (g2 3 13) :font)
+    (fn 
+      (fill-tile-data-textures! (tile-data-block0) t)
+      (add-tile-data-drawing!)))
+   (button-spec
+    :tile-data-block1
+    (button "Blk1" 1 (g2 6 13) :font)
+    (fn
+      (fill-tile-data-textures! (tile-data-block1) nil)
+      (add-tile-data-drawing!)))
+   (button-spec
+    :tile-data-block2
+    (button "Blk2" 1 (g2 9 13) :font)
+    (fn
+      (fill-tile-data-textures! (tile-data-block2) nil)
+      (add-tile-data-drawing!)))
    
-   (create-button-spec :background
-		       (button "BG" 1 (g2 3 27) :font)
-		       (fn
-			 (initialize-background-visualization!)
-			 (add-drawing! :background-scroll (background-scroll-drawing))))
-   (create-button-spec :window
-		       (button "Window" 1 (g2 5 27) :font)
-		       (fn
-			 (ensure-tile-map-texture!)
-			 (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
-			 (remove-drawing! :background-scroll)))))
+   (button-spec
+    :background
+    (button "BG" 1 (g2 3 27) :font)
+    (fn
+      (setq *draw-background-tile-map?* t)
+      (initialize-background-visualization!)
+      (add-drawing! :background-scroll (background-scroll-drawing))))
+   (button-spec
+    :window
+    (button "Window" 1 (g2 5 27) :font)
+    (fn
+      (setq *draw-background-tile-map?* nil)
+      (initialize-background-visualization!)
+      (remove-drawing! :background-scroll)))))
 
 (defun event-display-matcher (id)
   (fn (and (eql (aval :type %) :display)
@@ -3148,10 +3156,35 @@ Waits for a reset signal."
   (fn (and (eql (aval :type %) :hide)
 	   (eql (aval :id %) id))))
 
+
+;;; LCD Status
+;;;   write Current Mode, Coincidence?, current-scanline (y coordinate), compare-y coordinate
+
+;; LCD Status
+
+;;     Scanline: u8 decimal
+;;  CmpScanline: u8 decimal
+;;         Mode: u8 decimal
+;; Coincidence?: Yes/No
+;;     DMA Addr: u16 hex
+
+;; LCD Control
+
+;;     Display?: Yes/no
+;; Window Tiles: u16 hex
+;; Window Disp?: Yes/no
+;;     BG Tiles: u16 hex
+;;     Obj Size: "1x" or "2x"
+;; BG/Win Disp?: Yes/No
+
+;; TODO: remember which block is currently selected
+
 (defun draw-lcd-visualizations! ()
   (draw-sprites! (g2 16 14))
   (draw-tile-data-textures! (g2 3 5))
-  (draw-color-palettes!))
+  (draw-color-palettes!)
+  (draw-full-texture! *tile-map-texture* (g1 3) (g1 14))
+  (draw-full-texture-id! :tile-map-pos (g2 10 27)))
 (defun background-scroll-drawing ()
   (drawing 3 (fn
 	       (set-color! (blue))
@@ -3190,3 +3223,5 @@ Waits for a reset signal."
 	    (event-hide-matcher :memory-visualizations)
   (setq *draw-memory-visualizations?* nil)
   (remove-drawing! :memory-visualizations))
+
+;; TODO: buttons should have ids on them
