@@ -510,10 +510,13 @@ Test-fn and handle-fn are both functions of event."
 (defun remove-button! (button-id)
   (let* ((button (get-button button-id))
 	 (texture-id (aval :texture-id button))
-	 (drawing-id (aval :drawing-id button)))
-    (unload-texture! texture-id)
+	 (drawing-id (aval :drawing-id button))
+	 (handler-id (aval :click-handler-id button)))
     (remove-drawing! drawing-id)
-    (setq *buttons* (aremove *buttons* button-id))))
+    (unload-texture! texture-id)
+    (setq *buttons* (aremove *buttons* button-id))
+    (when handler-id
+      (remove-handler! handler-id))))
 
 (defun button-color (button)
   (cond
@@ -2817,23 +2820,13 @@ Waits for a reset signal."
 (defun initialize-color-palettes! ()
   (setq *color-palettes* (list (initialize-color-palette! "BG" (g2 3 1) #xff47 nil)
 			       (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
-			       (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t)))
-  (add-drawing! :color-palettes (drawing 1 (fn (unless *draw-memory-visualizations?*
-						 (draw-color-palettes!))))))
+			       (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t))))
 
 (defun update-lcd-visualizations! ()
-  (initialize-color-palettes!)
-  (initialize-background-visualization!)
-  (initialize-block-visualization!)
-  (if *draw-memory-visualizations?*
-      (remove-lcd-buttons!)
-      (create-lcd-buttons!))
-  (add-drawing! :sprites (drawing 1 (fn (unless *draw-memory-visualizations?*
-					  (draw-sprites! (g2 16 14)))))))
-
-(defhandler handle-initialize-lcd-visualizations (event)
-	    (event-matcher-font-opened :font)
-  (update-lcd-visualizations!))
+  (unless *draw-memory-visualizations?*
+    (initialize-color-palettes!)
+    (initialize-background-visualization!)
+    (initialize-block-visualization!)))
 
 (defun draw-color-palettes! ()
   (mapcar 
@@ -2933,13 +2926,8 @@ Waits for a reset signal."
   (unless *tile-textures*
     (setq *tile-textures* (initialize-tile-data-block-textures!))))
 
-(defun add-tile-data-drawing! ()
-  (add-drawing! :tile-data (drawing 1 (fn (unless *draw-memory-visualizations?*
-					    (draw-tile-data-textures! (g2 3 5)))))))
-
 (defun initialize-block-visualization! ()
-  (fill-tile-data-textures! (tile-data-block0) t)
-  (add-tile-data-drawing!))
+  (fill-tile-data-textures! (tile-data-block0) t))
 
 
 ;; Bg Tile Map
@@ -3017,14 +3005,7 @@ Waits for a reset signal."
 
 (defun initialize-background-visualization! ()
   (ensure-tile-map-texture!)
-  (fill-tile-map-texture! (background-tile-map) (8000-addressing-mode?))
-  ;; TODO: show the wrapped region of the background scroll
-  (add-drawing! :background-scroll (drawing 3 (fn
-						(unless *draw-memory-visualizations?*
-						  (set-color! (blue))
-						  (draw-rect! (+ (g1 3) (scroll-x))
-							      (+ (g1 14) (scroll-y))
-							      160 144))))))
+  (fill-tile-map-texture! (background-tile-map) (8000-addressing-mode?)))
 
 (defvar *sprite-tile-textures* nil)
 (defun ensure-sprite-tile-data-textures! ()
@@ -3077,57 +3058,135 @@ Waits for a reset signal."
 			       (+ (y pos) (g1 y))
 			       (g1 1) (g1 1)))))))))
 
+(defun display-memory-visualiztions! ()
+  (mapcar
+   'event!
+   (list
+    (alist :type :hide :id :lcd-visualizations)
+    (alist :type :display :id :memory-visualizations))))
+(defun display-lcd-visualiztions! ()
+  (mapcar
+   'event!
+   (list
+    (alist :type :hide :id :memory-visualizations)
+    (alist :type :display :id :lcd-visualizations))))
+
 (defbutton toggle-memory/lcd (button "Toggle Memory/LCD" 1 (g2 1 28) :font)
-  (setq *draw-memory-visualizations?* (not *draw-memory-visualizations?*))
-  (update-lcd-visualizations!))
+  (if *draw-memory-visualizations?*
+      (display-lcd-visualiztions!)
+      (display-memory-visualiztions!)))
 
 ;; I want to be able to
 ;;  create buttons as a group
 ;;  update buttons the same way I create them/add them to the system
 ;;  remove buttons as a group
 
-(defun create-button! (id handler-id button on-click-fn)
-  (register-handler! handler-id (event-handler
-				 (EVENT-MATCHER-BUTTON-CLICKED id)
-				 (fn (funcall on-click-fn))))
-  (set-button! id button)
-  (INITIALIZE-BUTTON! id))
+(defun create-button-spec (id button on-click-fn)
+  (amerge button (alist :id id :on-click-fn on-click-fn)))
 
+(defun create-button! (button)
+  (let* ((id (aval :id button))
+	 (on-click-fn (aval :on-click-fn button))
+	 (old-button (get-button id)))
+    (cond
+      (old-button
+       ;; If the button already exists, just update it.
+       (let* ((new-button (amerge old-button button)))
+	 (register-handler! (aval :click-handler-id new-button)
+			    (event-handler
+			     (EVENT-MATCHER-BUTTON-CLICKED id)
+			     on-click-fn))
+	 (load-text-texture! (aval :texture-id new-button)
+			     (aval :font-id new-button)
+			     (aval :text new-button))
+	 (set-button! id new-button))
+       )
+      (t
+       (let* ((handler-id (gensym)))
+	 (register-handler! handler-id (event-handler
+					(EVENT-MATCHER-BUTTON-CLICKED id)
+					on-click-fn))
+	 
+	 (set-button! id (aset :click-handler-id handler-id button))
+	 (initialize-BUTTON! id))))
+    id))
 
-;; TODO: figure out why the drawing persists even after we've removed the button.
-;; Causes a crash.
+(defun lcd-buttons ()
+  (list
+   (create-button-spec :tile-data-block0
+		       (button "Blk0" 1 (g2 3 13) :font)
+		       (fn 
+			 (fill-tile-data-textures! (tile-data-block0) t)
+			 (add-tile-data-drawing!)))
+   (create-button-spec :tile-data-block1
+		       (button "Blk1" 1 (g2 6 13) :font)
+		       (fn
+			 (fill-tile-data-textures! (tile-data-block1) nil)
+			 (add-tile-data-drawing!)))
+   (create-button-spec :tile-data-block2
+		       (button "Blk2" 1 (g2 9 13) :font)
+		       (fn
+			 (fill-tile-data-textures! (tile-data-block2) nil)
+			 (add-tile-data-drawing!)))
+   
+   (create-button-spec :background
+		       (button "BG" 1 (g2 3 27) :font)
+		       (fn
+			 (initialize-background-visualization!)
+			 (add-drawing! :background-scroll (background-scroll-drawing))))
+   (create-button-spec :window
+		       (button "Window" 1 (g2 5 27) :font)
+		       (fn
+			 (ensure-tile-map-texture!)
+			 (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
+			 (remove-drawing! :background-scroll)))))
 
+(defun event-display-matcher (id)
+  (fn (and (eql (aval :type %) :display)
+	   (eql (aval :id %) id))))
+(defun event-hide-matcher (id)
+  (fn (and (eql (aval :type %) :hide)
+	   (eql (aval :id %) id))))
 
-(defun create-lcd-buttons! ()
-  (create-button! 'tile-data-block0 'handle-tile-data-block0-clicked
-		  (button "Blk0" 1 (g2 3 13) :font)
-		  (fn 
-		    (fill-tile-data-textures! (tile-data-block0) t)
-		    (add-tile-data-drawing!)))
-  (create-button! 'tile-data-block1 'handle-tile-data-block1-clicked
-		  (button "Blk1" 1 (g2 6 13) :font)
-		  (fn
-		    (fill-tile-data-textures! (tile-data-block1) nil)
-		    (add-tile-data-drawing!)))
-  (create-button! 'tile-data-block2 'handle-tile-data-block2-clicked
-		  (button "Blk2" 1 (g2 9 13) :font)
-		  (fn
-		    (fill-tile-data-textures! (tile-data-block2) nil)
-		    (add-tile-data-drawing!)))
-  
-  (create-button! 'background 'handle-background-clicked
-		  (button "BG" 1 (g2 3 27) :font)
-		  (fn
-		    (initialize-background-visualization!)))
-  (create-button! 'window 'handle-window-clicked
-		  (button "Window" 1 (g2 5 27) :font)
-		  (fn
-		    (ensure-tile-map-texture!)
-		    (fill-tile-map-texture! (window-tile-map) (8000-addressing-mode?))
-		    (remove-drawing! :background-scroll))))
-(defun remove-lcd-buttons! ()
-  (remove-button! 'tile-data-block0)
-  (remove-button! 'tile-data-block1)
-  (remove-button! 'tile-data-block2)
-  (remove-button! 'background)
-  (remove-button! 'window))
+(defun draw-lcd-visualizations! ()
+  (draw-sprites! (g2 16 14))
+  (draw-tile-data-textures! (g2 3 5))
+  (draw-color-palettes!))
+(defun background-scroll-drawing ()
+  (drawing 3 (fn
+	       (set-color! (blue))
+	       (draw-rect! (+ (g1 3) (scroll-x))
+			   (+ (g1 14) (scroll-y))
+			   160 144))))
+
+;; Initialize the LCD/Memory visualizations when we startup
+(defhandler handle-initialize-memory/lcd-visualizations (event)
+	    (event-matcher-font-opened :font)
+  (if *draw-memory-visualizations?*
+      (display-memory-visualiztions!)
+      (display-lcd-visualiztions!)))
+
+;; Display/Hide LCD Visualizations (when toggling memory/lcd vis)
+(defhandler handle-display-lcd-visualizations (event)
+	    (event-display-matcher :lcd-visualizations)
+  (initialize-color-palettes!)
+  (initialize-background-visualization!)
+  (initialize-block-visualization!)
+  (mapcar 'create-button! (lcd-buttons))
+  (add-drawing! :lcd-visualizations (drawing 1 (fn (draw-lcd-visualizations!))))
+  (add-drawing! :background-scroll (background-scroll-drawing)))
+(defhandler handle-hide-lcd-visualizations (event)
+	    (event-hide-matcher :lcd-visualizations)
+  (mapcar (fn (remove-button! (aval :id %))) (lcd-buttons))
+  (mapcar 'remove-drawing! '(:lcd-visualizations :background-scroll)))
+
+;; Display/Hide Memory Visualizations (when toggling memory/lcd vis)
+(defhandler handle-display-memory-visualizations (event)
+	    (event-display-matcher :memory-visualizations)
+  (setq *draw-memory-visualizations?* t)
+  (amap 'initialize-memory-visualization! *memory-visualizations*)
+  (add-drawing! :memory-visualizations (drawing 1 (fn (draw-memory-visualizations!)))))
+(defhandler handle-hide-memory-visualizations (event)
+	    (event-hide-matcher :memory-visualizations)
+  (setq *draw-memory-visualizations?* nil)
+  (remove-drawing! :memory-visualizations))
