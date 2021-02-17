@@ -413,9 +413,6 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (when *tile-textures*
       (map nil 'free-texture! *tile-textures*)
       (setq *tile-textures* nil))
-    (when *sprite-tile-textures*
-      (map nil 'free-texture! *sprite-tile-textures*)
-      (setq *sprite-tile-textures* nil))
     (when *tile-map-texture*
       (free-texture! *tile-map-texture*)
       (setq *tile-map-texture* nil))
@@ -604,7 +601,21 @@ Test-fn and handle-fn are both functions of event."
   (draw-full-texture-id! texture-id (texture-right-alignment texture-id pos)))
 
 (defstruct cpu
-  a b c d e f h l sp pc zero? half-carry? carry? subtraction? ime?)
+  (a 0 :type (unsigned-byte 8))
+  (b 0 :type (unsigned-byte 8))
+  (c 0 :type (unsigned-byte 8))
+  (d 0 :type (unsigned-byte 8))
+  (e 0 :type (unsigned-byte 8))
+  (f 0 :type (unsigned-byte 8))
+  (h 0 :type (unsigned-byte 8))
+  (l 0 :type (unsigned-byte 8))
+  (sp 0 :type (unsigned-byte 16))
+  (pc 0 :type (unsigned-byte 16))
+  (zero? nil :type boolean)
+  (half-carry? nil :type boolean)
+  (carry? nil :type boolean)
+  (subtraction? nil :type boolean)
+  (ime? nil :type boolean))
 
 (defun g1 (value) (* value *grid-size*))
 
@@ -1006,13 +1017,6 @@ Test-fn and handle-fn are both functions of event."
 (defun cpu-hl (cpu)
   (combined-register (cpu-h cpu) (cpu-l cpu)))
 
-#+nil
-(command!
-  (let ((*number-base* :unsigned))
-    (update-cpu-visualization!
-     (make-cpu :a 128 :b 255 :c 3 :d 4 :e 5 :f 6 :h 7 :l 8
-	       :sp 9 :pc #x100 :flag #b1010))))
-
 (defun read-rom-file! (filename)
   (with-open-file (stream filename :direction :input :element-type 'unsigned-byte)
     (let* ((length (file-length stream))
@@ -1021,19 +1025,85 @@ Test-fn and handle-fn are both functions of event."
 	    do (setf (aref array i) (read-byte stream)))
       array)))
 
-(defvar *memory* (make-array (list (1+ #xffff))
-			     :element-type 'unsigned-byte
-			     :initial-element 0))
+(defun cart-title (cart-rom-header)
+  (map 'string 'code-char (remove 0 (subseq cart-rom-header #x134 #x144))))
+(defun cart-type-code (cart-rom-header)
+  (aref cart-rom-header #x147))
+(defun cart-type (cart-type-code)
+  (ecase cart-type-code
+    (#x00 :ROM-only)
+    (#x01 :MBC1)
+    (#x02 :MBC1+RAM)
+    (#x03 :MBC1+RAM+BATTERY)
+    (#x05 :MBC2)
+    (#x06 :MBC2+BATTERY)
+    (#x08 :ROM+RAM)
+    (#x09 :ROM+RAM+BATTERY)
+    (#x0B :MMM01)
+    (#x0C :MMM01+RAM)
+    (#x0D :MMM01+RAM+BATTERY)
+    (#x0F :MBC3+TIMER+BATTERY)
+    (#x10 :MBC3+TIMER+RAM+BATTERY)
+    (#x11 :MBC3)
+    (#x12 :MBC3+RAM)
+    (#x13 :MBC3+RAM+BATTERY)
+    (#x19 :MBC5)
+    (#x1A :MBC5+RAM)
+    (#x1B :MBC5+RAM+BATTERY)
+    (#x1C :MBC5+RUMBLE)
+    (#x1D :MBC5+RUMBLE+RAM)
+    (#x1E :MBC5+RUMBLE+RAM+BATTERY)
+    (#x20 :MBC6)
+    (#x22 :MBC7+SENSOR+RUMBLE+RAM+BATTERY)
+    (#xFC :POCKET-CAMERA)
+    (#xFD :BANDAI-TAMA5)
+    (#xFE :HuC3)
+    (#xFF :HuC1+RAM+BATTERY)))
+
+(defun cart-rom-size-code (cart-rom-header)
+  (aref cart-rom-header #x148))
+(defun cart-rom-size (cart-rom-size-code)
+  (ecase cart-rom-size-code
+    (#x00 (list (list 32 :KB) 2))
+    (#x01 (list (list 64 :KB) 4))
+    (#x02 (list (list 128 :KB) 8))
+    (#x03 (list (list 256 :KB) 16))
+    (#x04 (list (list 512 :KB) 32))
+    (#x05 (list (list 1 :MB) 64))
+    (#x06 (list (list 2 :MB) 128))
+    (#x07 (list (list 4 :MB) 256))
+    (#x08 (list (list 8 :MB) 512))
+    (#x52 (list (list 1.1 :MB) 72))
+    (#x53 (list (list 1.2 :MB) 80))
+    (#x54 (list (list 1.5 :MB) 96))))
+
+(defun cart-ram-size-code (cart-rom-header)
+  (aref cart-rom-header #x149))
+
+(defun cart-ram-size (cart-ram-size-code)
+  (ecase cart-ram-size-code
+    (#x00 '((0 :kb) (0 :banks)))
+    (#x01 '((2 :kb) (1 :banks)))
+    (#x02 '((8 :kb) (1 :banks)))
+    (#x03 '((32 :kb) (4 :banks)))
+    (#x04 '((128 :kb) (16 :banks)))
+    (#x05 '((64 :kb) (8 :banks)))))
+
+(defun cart-version-number (cart-rom-header)
+  (aref cart-rom-header #x14c))
 
 (defun reset-memory! ()
   (setq *memory* (make-array (list (1+ #xffff))
-			     :element-type 'unsigned-byte
+			     :element-type '(unsigned-byte 8)
 			     :initial-element 0)))
 
-(defun read-rom-file-into-memory! (filename &optional (start-addr 0))
+(defvar *memory* (reset-memory!))
+
+(defun read-rom-file-into-memory! (filename &key (start-addr 0) (max-length #x3fff))
   (with-open-file (stream filename :direction :input :element-type 'unsigned-byte)
-    (let* ((length (file-length stream)))
-      (loop for i below length
+    (let* ((length (file-length stream))
+	   (size (min length max-length)))
+      (loop for i below size
 	    do (setf (aref *memory* (+ i start-addr)) (read-byte stream))))))
 (defparameter *cart-filename* "Legend of Zelda, The - Link's Awakening (USA, Europe).gb")
 
@@ -1083,8 +1153,10 @@ Test-fn and handle-fn are both functions of event."
 (defun reset! ()
   (setq *cpus* (list (cpu-initial)))
   (reset-memory!)
-  (read-rom-file-into-memory! "gb_bios.bin")
 
+  (read-rom-file-into-memory! *cart-filename*)
+  (read-rom-file-into-memory! "gb_bios.bin")
+  
   (update-visualizations! nil))
 
 (defun handle-execute-button-clicked! ()
@@ -2050,7 +2122,7 @@ placing the carry bit in the ~Ath bit of ~A, and setting the carry bit to the ~A
   (merge-instr-specs
    (data-bindings key)
    (rotate-bindings 7 *data-name* :bit-name *bit-name*)
-   (result-bindings `(logior (ash ,*data-name* 1) ,*bit-name*))))
+   (result-bindings `(logior (logand #xff (ash ,*data-name* 1)) ,*bit-name*))))
 (defun rlc-instr-spec (key &optional zero?)
   (merge-instr-specs
    (alist :description (rc-description key :left))
@@ -2066,7 +2138,7 @@ placing the carry bit in the ~Ath bit of ~A, and setting the carry bit to the ~A
 (defun rl-bindings (key)
   (merge-instr-specs
    (shift-left-bindings key)
-   (result-bindings `(logior (ash ,*data-name* 1) (cpu-carry-bit ,*cpu-name*)))))
+   (result-bindings `(logior (logand #xff (ash ,*data-name* 1)) (cpu-carry-bit ,*cpu-name*)))))
 (defun rl-instr-spec (key &optional zero?)
   (merge-instr-specs
    (alist :description (rotate-description key :left))
@@ -2756,21 +2828,7 @@ Waits for a reset signal."
 ;; TODO: visualize control registers
 
 ;; TODO: determine when interrupt flags are reset
-
 ;; TODO: focus on the memory address that was last modified
-
-;; Add hardware events that were cycle-dependent
-;;; events cause interrupts
-;;; events switch modes in the LCD controller
-
-;; Visualizations
-;;; Sprites
-;;;; Write position
-;;;; show flipping
-
-
-;; Be able to switch off the BIOS ROM and replace with CART ROM
-;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
 
 (defun draw-color-palette! (pos title-texture-id palette-addr sprite-palette?)
   (draw-full-texture-id-right-aligned! title-texture-id pos)
@@ -2826,8 +2884,8 @@ Waits for a reset signal."
 ;; 16x8 8x8 textures
 
 (defun initialize-tile-data-block-textures! ()
-  (let* ((textures (make-array '(128))))
-    (loop for i below 128 do
+  (let* ((textures (make-array 128)))
+    (loop for i below (length textures) do
       (setf (aref textures i) (create-pixel-buffer-texture! 8 8)))
     textures))
 
@@ -2845,11 +2903,9 @@ Waits for a reset signal."
 		   (aref tile-data (* 2 i)))))
 
 (defun tile-data-colors (tile-data palette-colors sprite?)
-  (mapcar (fn
-	    (if (and sprite? (= 0 %))
-		;; Transparent
-		(color 255 0 255 255)
-		(nth % palette-colors)))
+  (mapcar (fn (if (and (zerop %) sprite?)
+		  (color 255 0 255 255)
+		  (nth % palette-colors)))
 	  (tile-data-color-indices tile-data)))
 
 (defun rgba-pixels-from-colors (colors)
@@ -2862,7 +2918,7 @@ Waits for a reset signal."
 		  (aref rgba-pixels (+ 3 (* i 4))) (a color)))
     rgba-pixels))
 
-(defun fill-tile-data-texture! (tile-texture tile-data palette-colors sprite?)
+(defun fill-tile-data-texture! (tile-texture tile-data palette-colors &optional sprite?)
   (replace-pixel-buffer! tile-texture
 			 (rgba-pixels-from-colors
 			  (tile-data-colors tile-data palette-colors sprite?))))
@@ -2871,14 +2927,13 @@ Waits for a reset signal."
   (let* ((start (* index 16)))
     (subseq tile-data-block start (+ start 16))))
 
-(defun fill-tile-data-textures! (tile-data-block sprite?)
+(defun fill-tile-data-textures! (tile-data-block)
   (ensure-tile-textures!)
   (let* ((palette-colors (default-palette-colors)))
     (loop for i below (length *tile-textures*) do
       (fill-tile-data-texture! (aref *tile-textures* i)
 			       (tile-data-from-block tile-data-block i)
-			       palette-colors
-			       sprite?))))
+			       palette-colors))))
 
 (defun tile-data-block-size ()
   (* 16 128))
@@ -2913,9 +2968,9 @@ Waits for a reset signal."
 
 (defun initialize-block-visualization! ()
   (ecase *lcd-visualization-current-tile-data-block*
-    (0 (fill-tile-data-textures! (tile-data-block0) t))
-    (1 (fill-tile-data-textures! (tile-data-block1) nil))
-    (2 (fill-tile-data-textures! (tile-data-block2) nil))))
+    (0 (fill-tile-data-textures! (tile-data-block0)))
+    (1 (fill-tile-data-textures! (tile-data-block1)))
+    (2 (fill-tile-data-textures! (tile-data-block2)))))
 
 
 ;; Bg Tile Map
@@ -2926,8 +2981,8 @@ Waits for a reset signal."
   (loop for tile-byte across tile-map
 	collecting
 	(if 8000-addressing-mode?
-	    (+ tile-byte #x8000)
-	    (+ (s8 tile-byte) #x8800))))
+	    (+ (* tile-byte 16) #x8000)
+	    (+ (* 16 (s8 tile-byte)) #x8800))))
 
 (defun copy-tile-map-pixels-from-tile-data! (rgba-pixels tile-map-index tile-data-colors)
   (loop for tile-data-pixel-x below 8 do
@@ -2962,9 +3017,7 @@ Waits for a reset signal."
     (loop for addr in tile-addresses
 	  for i from 0 do
 	    (let* ((tile-data (subseq *memory* addr (+ addr 16)))
-		   (colors (tile-data-colors tile-data
-					     (default-palette-colors)
-					     nil)))
+		   (colors (tile-data-colors tile-data (default-palette-colors) nil)))
 	      (copy-tile-map-pixels-from-tile-data! rgba-pixels i colors)))
     (replace-pixel-buffer! *tile-map-texture* rgba-pixels)))
 
@@ -3034,56 +3087,44 @@ Waits for a reset signal."
 						(format nil "<~A, ~A>" (scroll-x) (scroll-y))
 						(format nil "<~A, ~A>" (window-x) (window-y))))))
 
-(defvar *sprite-tile-textures* nil)
-(defun ensure-sprite-tile-data-textures! ()
-  (unless *sprite-tile-textures*
-    (setq *sprite-tile-textures* (initialize-tile-data-block-textures!))))
+(defun ensure-pixel-buffer-texture-loaded! (id width height)
+  (unless (gethash id *textures*)
+    ;; Create the texture and add it to the textures hash-table
+    (setf (gethash id *textures*) (create-pixel-buffer-texture! width height))
+    (notify-handlers! (event-texture-loaded id))))
+
+(defun draw-sprite-texture! (tile-index palette-colors dest-pos)
+  (ensure-pixel-buffer-texture-loaded! :sprite-texture 8 8)
+  (let* ((sprite-texture (gethash :sprite-texture *textures*))
+	 (tile-data (if (> tile-index 127)
+			(tile-data-from-block (tile-data-block1) (- tile-index 128))
+			(tile-data-from-block (tile-data-block0) tile-index))))
+    (fill-tile-data-texture! sprite-texture tile-data palette-colors t)
+    (draw-texture! sprite-texture 0 0 8 8 (x dest-pos) (y dest-pos) (g1 1) (g1 1))))
 
 (defun draw-sprites! (pos)
-  (ensure-sprite-tile-data-textures!)
   (let* ((object-size-doubled? (object-size-doubled?)))
     (loop for x below 8 do
       (loop for y below 5 do
 	(let* ((sprite-index (+ x (* 8 y)))
 	       (sprite-addr (+ #xfe00 (* 4 sprite-index)))
+
 	       (tile/pattern-number (aref *memory* (+ sprite-addr 2)))
 	       (flags (aref *memory* (+ sprite-addr 3)))
 	       (palette-index1? (bit-set? 4 flags))
 	       (palette-colors (palette-colors-from-color-palette-addr
 				(if palette-index1?
 				    #xff49
-				    #xff48)))
-	       (tile-data-block (tile-data-block0)))
-	  (if object-size-doubled?
-	      (let* ((top-tile-index (logand #xfe tile/pattern-number))
-		     (bottom-tile-index (logior #x01 tile/pattern-number))
-		     (top-dest (v+ pos (g2 x (* 2 y))))
-		     (bottom-dest (v+ pos (g2 x (1+ (* 2 y))))))
-		(fill-tile-data-texture! (aref *sprite-tile-textures* top-tile-index)
-					 (tile-data-from-block tile-data-block top-tile-index)
-					 palette-colors
-					 t)
-		(draw-texture! (aref *sprite-tile-textures* top-tile-index)
-			       0 0 8 8
-			       (x top-dest) (y top-dest) (g1 1) (g1 1))
-
-		(fill-tile-data-texture! (aref *sprite-tile-textures* bottom-tile-index)
-					 (tile-data-from-block tile-data-block bottom-tile-index)
-					 palette-colors
-					 t)
-		(draw-texture! (aref *sprite-tile-textures* bottom-tile-index)
-			       0 0 8 8
-			       (x bottom-dest) (y bottom-dest) (g1 1) (g1 1)))
-	      (let* ((tile-index tile/pattern-number))
-		(fill-tile-data-texture! (aref *sprite-tile-textures* tile-index)
-					 (tile-data-from-block tile-data-block tile-index)
-					 palette-colors
-					 t)
-		(draw-texture! (aref *sprite-tile-textures* tile-index)
-			       0 0 8 8
-			       (+ (x pos) (g1 x))
-			       (+ (y pos) (g1 y))
-			       (g1 1) (g1 1)))))))))
+				    #xff48))))
+	  (cond
+	    (object-size-doubled?
+	     (draw-sprite-texture! (logand #xfe tile/pattern-number) palette-colors
+				   (v+ pos (g2 x (* 2 y))))
+	     (draw-sprite-texture! (logior #x01 tile/pattern-number) palette-colors
+				   (v+ pos (g2 x (1+ (* 2 y))))))
+	    (t
+	     (draw-sprite-texture! tile/pattern-number palette-colors
+				   (v+ pos (g2 x y))))))))))
 
 (defun display-memory-visualiztions! ()
   (mapcar
@@ -3222,6 +3263,7 @@ Waits for a reset signal."
   (draw-full-texture! *tile-map-texture* (g1 3) (g1 14))
   (draw-full-texture-id! :tile-map-pos (g2 10 27))
 
+  ;; TODO: Modulate colors based on what has/hasn't changed.
   (let* ((column 27)
 	 (y 6))
     (draw-full-texture-id-right-aligned! :lcdc-display? (g2 column y))
@@ -3309,8 +3351,28 @@ Waits for a reset signal."
 ;; TODO: buttons should have ids on them
 
 
-
 ;;; write List of interrupts enabled: color green for enabled; red for disabled
 ;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
 ;;;; Serial Transfer Completion, End of input signal for ports P10-P13
 
+;;; Show when registers have changed.
+
+
+;; Visualizations
+;;; Sprites
+;;;; Write position
+;;;; show flipping
+
+;; Be able to switch off the BIOS ROM and replace with CART ROM
+;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
+
+;; Add hardware events that were cycle-dependent
+;;; events cause interrupts
+;;; events switch modes in the LCD controller
+
+
+;; Powerup
+;;; TODO: Then reload cartridge ROM after bios is finished (when PC=#x100 for the first time)
+
+;; Nintendo logo:
+;;   in memory (cartridge rom); Check
