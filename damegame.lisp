@@ -2827,7 +2827,6 @@ Waits for a reset signal."
 ;; TODO: visualize interrupt registers
 ;; TODO: visualize control registers
 
-;; TODO: determine when interrupt flags are reset
 ;; TODO: focus on the memory address that was last modified
 
 (defun draw-color-palette! (pos title-texture-id palette-addr sprite-palette?)
@@ -3064,6 +3063,14 @@ Waits for a reset signal."
 (defun lcdc-background/window-display? ()
   (bit-set? 0 (lcdc-register)))
 
+(defun lcds-coincidence-interrupt-enabled? ()
+  (bit-set? 6 (lcds-register)))
+(defun lcds-oam-interrupt-enabled? ()
+  (bit-set? 5 (lcds-register)))
+(defun lcds-v-blank-interrupt-enabled? ()
+  (bit-set? 4 (lcds-register)))
+(defun lcds-h-blank-interrupt-enabled? ()
+  (bit-set? 3 (lcds-register)))
 
 (defun background-tile-map ()
   (let* ((addr (lcdc-background-tiles-addr)))
@@ -3350,29 +3357,85 @@ Waits for a reset signal."
 
 ;; TODO: buttons should have ids on them
 
+(defun interrupt-enable-register ()
+  (aref *memory* #xffff))
+(defun interrupt-v-blank-enabled? ()
+  (bit-set? 0 (interrupt-enable-register)))
+(defun interrupt-lcd-enabled? ()
+  (bit-set? 1 (interrupt-enable-register)))
+(defun interrupt-timer-enabled? ()
+  (bit-set? 2 (interrupt-enable-register)))
+(defun interrupt-serial-enabled? ()
+  (bit-set? 3 (interrupt-enable-register)))
+(defun interrupt-joypad-enabled? ()
+  (bit-set? 4 (interrupt-enable-register)))
 
-;;; write List of interrupts enabled: color green for enabled; red for disabled
-;;;; Coincidence, Mode 2 OAM, Mode 1 V-Blank, Mode 0 H-Blank, LCDC, Timer Overflow,
-;;;; Serial Transfer Completion, End of input signal for ports P10-P13
+(defun draw-interrupt-enabled-visualization! ()
+  (let* ((column 59)
+	 (y 2))
+    (draw-full-texture-id-right-aligned! :interrupt-v-blank (g2 column y))
+    (draw-full-texture-id! (if (interrupt-v-blank-enabled?) :yes :no) (g2 column y))
 
-;;; Show when registers have changed.
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-timer (g2 column y))
+    (draw-full-texture-id! (if (interrupt-timer-enabled?) :yes :no) (g2 column y))
 
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-serial (g2 column y))
+    (draw-full-texture-id! (if (interrupt-timer-enabled?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-joypad (g2 column y))
+    (draw-full-texture-id! (if (interrupt-joypad-enabled?) :yes :no) (g2 column y))
+
+    (incf y)
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-lcd (g2 column y))
+    (draw-full-texture-id! (if (interrupt-lcd-enabled?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-lcd-coincidence (g2 column y))
+    (draw-full-texture-id! (if (lcds-coincidence-interrupt-enabled?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-lcd-oam (g2 column y))
+    (draw-full-texture-id! (if (lcds-oam-interrupt-enabled?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-lcd-v-blank (g2 column y))
+    (draw-full-texture-id! (if (lcds-v-blank-interrupt-enabled?) :yes :no) (g2 column y))
+
+    (incf y)
+    (draw-full-texture-id-right-aligned! :interrupt-lcd-h-blank (g2 column y))
+    (draw-full-texture-id! (if (lcds-h-blank-interrupt-enabled?) :yes :no) (g2 column y))))
+
+(defhandler handle-initialize-interrupt-enabled-visualization (event)
+	    (event-matcher-font-opened :font)
+  (load-text-texture! :interrupt-v-blank :font "V-Blank: ")
+  (load-text-texture! :interrupt-lcd :font "LCD: ")
+  (load-text-texture! :interrupt-timer :font "Timer: ")
+  (load-text-texture! :interrupt-serial :font "Serial: ")
+  (load-text-texture! :interrupt-joypad :font "Joypad: ")
+  
+  (load-text-texture! :interrupt-lcd-coincidence :font "Coincidence: ")
+  (load-text-texture! :interrupt-lcd-oam :font "OAM: ")
+  (load-text-texture! :interrupt-lcd-v-blank :font "V-Blank: ")
+  (load-text-texture! :interrupt-lcd-h-blank :font "H-Blank: ")
+  (add-drawing! :interrupts-enabled (drawing 3 (fn (draw-interrupt-enabled-visualization!)))))
 
 ;; Visualizations
 ;;; Sprites
 ;;;; Write position
 ;;;; show flipping
 
-;; Be able to switch off the BIOS ROM and replace with CART ROM
-;;  i.e. run the BIOS ROM on top of the CART, and then reset a flag when we finish running the BIOS
-
 ;; Add hardware events that were cycle-dependent
 ;;; events cause interrupts
 ;;; events switch modes in the LCD controller
 
-
-;; Powerup
+;; Power Up sequence
 ;;; TODO: Then reload cartridge ROM after bios is finished (when PC=#x100 for the first time)
 
-;; Nintendo logo:
-;;   in memory (cartridge rom); Check
+;; TODO: reset interrupt flags as you handle them
+;; TODO: a more compact way to draw tables of values.
+;; TODO: Show when memory-registers have changed (using red/green)
+;; TODO: Show what memory changed and in which region.
