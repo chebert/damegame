@@ -405,6 +405,9 @@ register A and stores the result in register A" register-key)
 ;;;;  Mode 3: During transferring data to the LCD driver
 ;;;;    Reading OAM and VRAM to generate scanline (168 to 291 cycles depending on sprite count)
 
+
+;; => 5016
+
 ;;; During Mode 2-3: CPU cannot access OAM
 ;;; During Mode 3: CPU cannot access VRAM
 

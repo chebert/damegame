@@ -736,12 +736,14 @@ Test-fn and handle-fn are both functions of event."
 (defmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
 						  'register8-text))
 
-(defvar *draw-memory-visualizations?* nil)
+(defvar *main-panel* :memory)
+(defun draw-memory-visualizations? ()
+  (eql *main-panel* :memory))
 
 (defhandler handle-initialize-memory-visualization (event)
 	    (event-matcher-font-opened :font)
   (amap 'initialize-memory-visualization! *memory-visualizations*)
-  (add-drawing! :memory-visualizations (drawing 1 (fn (when *draw-memory-visualizations?*
+  (add-drawing! :memory-visualizations (drawing 1 (fn (when (draw-memory-visualizations?)
 							(draw-memory-visualizations!))))))
 
 (defvar *cpu-visualizations* ())
@@ -1152,12 +1154,18 @@ Test-fn and handle-fn are both functions of event."
 
 (defun reset! ()
   (setq *cpus* (list (cpu-initial)))
+  (setq *current-cycle* 0
+	*lcd-start-cycle* nil)
   (reset-memory!)
 
   (read-rom-file-into-memory! *cart-filename*)
   (read-rom-file-into-memory! "gb_bios.bin")
   
-  (update-visualizations! nil))
+  (update-visualizations! nil)
+
+  (loop for i from 0 below (length *lcd-pixel-buffer*)
+	do (setf (aref *lcd-pixel-buffer* i) 255))
+  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
 
 (defun handle-execute-button-clicked! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
@@ -1279,6 +1287,8 @@ Test-fn and handle-fn are both functions of event."
   (update-visualizations!))
 
 (defbutton continue (button "Continue!" 1 (g2 37 30) :font)
+  (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
+  (execute! (cpu-current) *memory*)
   (loop until (break? (cpu-current) *memory*)
 	do (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
 	   (execute! (cpu-current) *memory*))
@@ -2740,9 +2750,26 @@ Waits for a reset signal."
 (defun break? (cpu memory)
   (some (fn (funcall % cpu memory)) (mapcar 'cdr *breakpoints*)))
 
-(defbreakpoint wait-loop (cpu memory)
-  (let* ((pc (cpu-pc cpu)))
-    (= #x64 pc)))
+(undefbreakpoint break-out-of-loop (cpu memory)
+		 (let* ((pc (cpu-pc cpu)))
+		   (> pc #xA)))
+
+(undefbreakpoint copy-nintendo-loop (cpu memory)
+		 (= (cpu-pc cpu) #x2b))
+
+(defbreakpoint oam-start (cpu memory)
+  (and *lcd-start-cycle*
+       (not
+	(eql (lcd-mode) (lcd-mode-from-cycles (- *current-cycle*
+						 *lcd-start-cycle*)
+					      0)))
+       (eql 1(lcd-mode-from-cycles (- *current-cycle*
+				      *lcd-start-cycle*)
+				   0))))
+
+(undefbreakpoint wait-loop (cpu memory)
+		 (let* ((pc (cpu-pc cpu)))
+		   (= #x64 pc)))
 
 (defun compile-disassemble-instr-spec (instr-spec)
   (compile-disassemble-instr
@@ -2776,26 +2803,45 @@ Waits for a reset signal."
   (eval `(defun interrupt! (addr cpu memory)
 	   ,(compile-instr-spec-for-execute
 	     (merge-instr-specs
-	      (alist :cycles 4)
+	      (alist :cycles 5)
 	      (push-instr-spec :pc)
 	      (pc-jump 'addr))))))
 
 ;; recompile execute-next-instr! definition
 (define-instrs!)
 
+(defvar *current-cycle* 0)
+(defvar *lcd-start-cycle* nil)
 (defun execute! (cpu memory)
-  (if (cpu-ime? cpu)
-      (let* ((interrupt-flags (aref memory #xff0f))
-	     (interrupt-enable (aref memory #xffff))
-	     (interrupts (logand interrupt-flags interrupt-enable)))
-	(cond
-	  ((bit-set? 0 interrupts) (interrupt! #x0040 cpu memory))
-	  ((bit-set? 1 interrupts) (interrupt! #x0048 cpu memory))
-	  ((bit-set? 2 interrupts) (interrupt! #x0050 cpu memory))
-	  ((bit-set? 3 interrupts) (interrupt! #x0058 cpu memory))
-	  ((bit-set? 4 interrupts) (interrupt! #x0060 cpu memory))
-	  (t (execute-next-instr! cpu memory))))
-      (execute-next-instr! cpu memory)))
+  (when (lcdc-display?)
+    (when (null *lcd-start-cycle*)
+      ;; start lcd
+      (setq *lcd-start-cycle* *current-cycle*))
+    (update-lcd! *lcd-start-cycle* *current-cycle*))
+
+  (incf *current-cycle*
+	(if (cpu-ime? cpu)
+	    (let* ((interrupt-flags (aref memory #xff0f))
+		   (interrupt-enable (aref memory #xffff))
+		   (interrupts (logand interrupt-flags interrupt-enable)))
+	      (cond
+		((bit-set? 0 interrupts)
+		 (setf (aref memory #xff0f) (bit-set 0 interrupt-flags 0))
+		 (interrupt! #x0040 cpu memory))
+		((bit-set? 1 interrupts)
+		 (setf (aref memory #xff0f) (bit-set 1 interrupt-flags 0))
+		 (interrupt! #x0048 cpu memory))
+		((bit-set? 2 interrupts)
+		 (setf (aref memory #xff0f) (bit-set 2 interrupt-flags 0))
+		 (interrupt! #x0050 cpu memory))
+		((bit-set? 3 interrupts)
+		 (setf (aref memory #xff0f) (bit-set 3 interrupt-flags 0))
+		 (interrupt! #x0058 cpu memory))
+		((bit-set? 4 interrupts)
+		 (setf (aref memory #xff0f) (bit-set 4 interrupt-flags 0))
+		 (interrupt! #x0060 cpu memory))
+		(t (execute-next-instr! cpu memory))))
+	    (execute-next-instr! cpu memory))))
 
 (defun remove-newlines (string)
   (map 'string (fn (if (eql #\newline %)
@@ -2846,10 +2892,10 @@ Waits for a reset signal."
 
 (defun palette-color (byte index)
   (ecase (palette-color-index byte index)
-    (0 (grey 200))
-    (1 (grey 150))
-    (2 (grey 100))
-    (3 (grey 50))))
+    (0 (green 200))
+    (1 (green 150))
+    (2 (green 100))
+    (3 (green 50))))
 
 
 (defun palette-colors-from-color-palette-byte (byte)
@@ -2865,8 +2911,9 @@ Waits for a reset signal."
 
 (defvar *color-palettes* ())
 
+(defparameter *bg-color-palette-addr* #xff47)
 (defun initialize-color-palettes! ()
-  (setq *color-palettes* (list (initialize-color-palette! "BG" (g2 3 1) #xff47 nil)
+  (setq *color-palettes* (list (initialize-color-palette! "BG" (g2 3 1) *bg-color-palette-addr* nil)
 			       (initialize-color-palette! "OBJ0" (g2 3 2) #xff48 t)
 			       (initialize-color-palette! "OBJ1" (g2 3 3) #xff49 t))))
 
@@ -3036,12 +3083,17 @@ Waits for a reset signal."
   (aref *memory* #xff4a))
 (defun lcd-scanline ()
   (aref *memory* #xff44))
+(defun set-lcd-scanline! (val)
+  (setf (aref *memory* #xff44) val))
 (defun lcd-scanline-compare ()
   (aref *memory* #xff45))
 (defun lcds-register ()
   (aref *memory* #xff41))
 (defun lcd-mode ()
   (logand #b11 (lcds-register)))
+(defun set-lcd-mode! (mode)
+  (setf (aref *memory* #xff41)
+	(logior mode (logand #b11111100 (lcds-register)))))
 (defun lcd-dma-start ()
   (ash (aref *memory* #xff46) 4))
 (defun lcd-coincidence? ()
@@ -3138,18 +3190,30 @@ Waits for a reset signal."
    'event!
    (list
     (alist :type :hide :id :lcd-visualizations)
+    (alist :type :hide :id :game)
     (alist :type :display :id :memory-visualizations))))
 (defun display-lcd-visualiztions! ()
   (mapcar
    'event!
    (list
     (alist :type :hide :id :memory-visualizations)
+    (alist :type :hide :id :game)
     (alist :type :display :id :lcd-visualizations))))
 
-(defbutton toggle-memory/lcd (button "Toggle Memory/LCD" 1 (g2 1 28) :font)
-  (if *draw-memory-visualizations?*
-      (display-lcd-visualiztions!)
-      (display-memory-visualiztions!)))
+(defbutton memory (button "Memory" 1 (g2 1 28) :font)
+  (unless (draw-memory-visualizations?)
+    (display-memory-visualiztions!)))
+(defbutton lcd-debug (button "LCD Debug" 1 (g2 5 28) :font)
+  (when (not (eql :lcd-debug *main-panel*))
+    (display-lcd-visualiztions!)))
+(defbutton game (button "Game" 1 (g2 10 28) :font)
+  (when (not (eql :game *main-panel*))
+    (mapcar
+     'event!
+     (list
+      (alist :type :hide :id :lcd-visualizations)
+      (alist :type :hide :id :memory-visualizations)
+      (alist :type :display :id :game)))))
 
 (defun button-spec (id button on-click-fn)
   "A button spec used for create-button!, uses a button spec for defbutton."
@@ -3232,14 +3296,14 @@ Waits for a reset signal."
 
 
 (defun update-lcd-visualizations! ()
-  (unless *draw-memory-visualizations?*
+  (unless (draw-memory-visualizations?)
     (initialize-color-palettes!)
     (initialize-background-visualization!)
     (initialize-block-visualization!)
     (load-text-texture! :lcd-status-scanline :font "Scanline: ")
-    (load-text-texture! :lcd-status-scanline-data :font (s8-text (lcd-scanline)))
+    (load-text-texture! :lcd-status-scanline-data :font (u8-text (lcd-scanline)))
     (load-text-texture! :lcd-status-compare-scanline :font "CmpScanline: ")
-    (load-text-texture! :lcd-status-compare-scanline-data :font (s8-text (lcd-scanline-compare)))
+    (load-text-texture! :lcd-status-compare-scanline-data :font (u8-text (lcd-scanline-compare)))
     (load-text-texture! :lcd-status-mode :font "Mode: ")
     (load-text-texture! :lcd-status-mode-data :font (ecase (lcd-mode)
 						      (0 "H-Blank")
@@ -3327,13 +3391,14 @@ Waits for a reset signal."
 ;; Initialize the LCD/Memory visualizations when we startup
 (defhandler handle-initialize-memory/lcd-visualizations (event)
 	    (event-matcher-font-opened :font)
-  (if *draw-memory-visualizations?*
+  (if (draw-memory-visualizations?)
       (display-memory-visualiztions!)
       (display-lcd-visualiztions!)))
 
 ;; Display/Hide LCD Visualizations (when toggling memory/lcd vis)
 (defhandler handle-display-lcd-visualizations (event)
 	    (event-display-matcher :lcd-visualizations)
+  (setq *main-panel* :lcd-debug)
   (update-lcd-visualizations!)
 
   (mapcar 'create-button! (lcd-buttons))
@@ -3347,12 +3412,11 @@ Waits for a reset signal."
 ;; Display/Hide Memory Visualizations (when toggling memory/lcd vis)
 (defhandler handle-display-memory-visualizations (event)
 	    (event-display-matcher :memory-visualizations)
-  (setq *draw-memory-visualizations?* t)
+  (setq *main-panel* :memory)
   (amap 'initialize-memory-visualization! *memory-visualizations*)
   (add-drawing! :memory-visualizations (drawing 1 (fn (draw-memory-visualizations!)))))
 (defhandler handle-hide-memory-visualizations (event)
 	    (event-hide-matcher :memory-visualizations)
-  (setq *draw-memory-visualizations?* nil)
   (remove-drawing! :memory-visualizations))
 
 ;; TODO: buttons should have ids on them
@@ -3361,8 +3425,14 @@ Waits for a reset signal."
   (aref *memory* #xffff))
 (defun interrupt-v-blank-enabled? ()
   (bit-set? 0 (interrupt-enable-register)))
+(defun set-v-blank-interrupt! (&optional (bit-value 1))
+  (setf (aref *memory* #xffff)
+	(bit-set 0 (interrupt-enable-register) bit-value)))
 (defun interrupt-lcd-enabled? ()
   (bit-set? 1 (interrupt-enable-register)))
+(defun set-lcd-interrupt! (&optional (bit-value 1))
+  (setf (aref *memory* #xffff)
+	(bit-set 1 (interrupt-enable-register) bit-value)))
 (defun interrupt-timer-enabled? ()
   (bit-set? 2 (interrupt-enable-register)))
 (defun interrupt-serial-enabled? ()
@@ -3409,8 +3479,11 @@ Waits for a reset signal."
     (draw-full-texture-id-right-aligned! :interrupt-lcd-h-blank (g2 column y))
     (draw-full-texture-id! (if (lcds-h-blank-interrupt-enabled?) :yes :no) (g2 column y))))
 
-(defhandler handle-initialize-interrupt-enabled-visualization (event)
-	    (event-matcher-font-opened :font)
+(defmacro definit (name &body body)
+  `(defhandler ,name (event) (event-matcher-font-opened :font)
+     ,@body))
+
+(definit handle-initialize-interrupt-enabled-visualization
   (load-text-texture! :interrupt-v-blank :font "V-Blank: ")
   (load-text-texture! :interrupt-lcd :font "LCD: ")
   (load-text-texture! :interrupt-timer :font "Timer: ")
@@ -3422,6 +3495,217 @@ Waits for a reset signal."
   (load-text-texture! :interrupt-lcd-v-blank :font "V-Blank: ")
   (load-text-texture! :interrupt-lcd-h-blank :font "H-Blank: ")
   (add-drawing! :interrupts-enabled (drawing 3 (fn (draw-interrupt-enabled-visualization!)))))
+
+
+(defun mode0-cycles (num-sprites)
+  (- 376 (mode3-cycles num-sprites)))
+(defun mode1-cycles ()
+  4560)
+(defun mode2-cycles ()
+  80)
+(defun mode3-cycles (num-sprites)
+  (ecase num-sprites
+    (0 168)
+    (1 180)
+    (2 193)
+
+    (3 205)
+    (4 217)
+    (5 229)
+
+    (6 242)
+    (7 254)
+    (8 266)
+
+    (9 279)
+    (10 291)))
+
+(defun lcd-scanline-cycles ()
+  (+ (mode0-cycles 0)
+     (mode2-cycles)
+     (mode3-cycles 0)))
+(defun lcd-cycles ()
+  (+ (mode1-cycles)
+     (* 144 (lcd-scanline-cycles))))
+
+;; 0.1....2.3.0.2.3.0.2.3.0...
+
+(defun lcd-mode-from-cycles (elapsed-cycles num-sprites)
+  (let* ((cycle (mod elapsed-cycles (lcd-cycles)))
+	 (mode0-cycles (mode0-cycles num-sprites))
+	 (mode1-cycles (mode1-cycles))
+	 (mode2-cycles (mode2-cycles))
+	 (mode3-cycles (mode3-cycles num-sprites))
+	 (sc-cycles (lcd-scanline-cycles))
+	 (sc-cycle (mod (- cycle mode0-cycles mode1-cycles) sc-cycles)))
+    (cond
+      ((< cycle mode0-cycles) 0)
+      ((< cycle (+ mode0-cycles mode1-cycles)) 1)
+
+      ((< sc-cycle mode2-cycles) 2)
+      ((< sc-cycle (+ mode2-cycles mode3-cycles)) 3)
+      (t 0))))
+
+(defun pixels (width height)
+  (make-array (* width height 4) :element-type '(unsigned-byte 8)))
+
+(defparameter *lcd-width* 160)
+(defparameter *lcd-height* 144)
+(defvar *lcd-pixel-buffer* (pixels *lcd-width* *lcd-height*))
+(defvar *lcd-oam-addresses* ())
+
+;; Find the background tile-y, pixel-y
+
+(defun scanline-background-pixel-y (scanline scroll-y)
+  (mod (+ scanline scroll-y) (* 32 8)))
+
+(defun scanline-background-tile-y (scanline scroll-y)
+  (truncate (scanline-background-pixel-y scanline scroll-y) 8))
+
+(defun scanline-background-tile-xs (scroll-x)
+  (loop for tile-x from (truncate scroll-x 8)
+	for i to (truncate 160 8)
+	collecting (mod tile-x 32)))
+
+(defun scanline-background-tile-indices (scanline scroll-x scroll-y)
+  (let* ((tile-y (scanline-background-tile-y scanline scroll-y)))
+    (mapcar (fn (+ % (* tile-y 32))) (scanline-background-tile-xs scroll-x))))
+
+(defun scanline-background-tile-data-references (tile-map scanline scroll-x scroll-y)
+  (mapcar (fn (aref tile-map %))
+	  (scanline-background-tile-indices scanline scroll-x scroll-y)))
+
+(defun tile-data-address (8000-addressing-mode? tile-data-reference)
+  (if 8000-addressing-mode?
+      (+ (* tile-data-reference 16) #x8000)
+      (+ (* 16 (s8 tile-data-reference)) #x8800)))
+(defun scanline-background-tile-data-addresses (8000-addressing-mode? tile-data-references)
+  (mapcar
+   (fn (tile-data-address 8000-addressing-mode? %))
+   tile-data-references))
+
+
+(scanline-background-tile-data-references (background-tile-map) 64 0 0)
+;; => (0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 0 25 0 0 0 0)
+
+(scanline-background-tile-data-addresses
+ (8000-addressing-mode?)
+ (scanline-background-tile-data-references (background-tile-map) 64 0 0))
+
+(defun tile-data (addr)
+  (subseq *memory* addr (+ addr 16)))
+
+(defun tile-data-color-byte-pair-y (tile-data tile-pixel-y)
+  (subseq tile-data (* 2 tile-pixel-y) (* 2 (1+ tile-pixel-y))))
+
+(mapcar
+ (fn (tile-data-color-byte-pair-y (tile-data %) 2))
+ (scanline-background-tile-data-addresses
+  (8000-addressing-mode?)
+  (scanline-background-tile-data-references (background-tile-map) 64 0 0)))
+
+(defun scanline-background-tile-color-byte-pairs (tile-map 8000-addressing-mode? scanline scroll-x scroll-y)
+  (mapcar
+   (fn (tile-data-color-byte-pair-y (tile-data %) (mod (+ scanline scroll-y) 8)))
+   (scanline-background-tile-data-addresses
+    8000-addressing-mode?
+    (scanline-background-tile-data-references tile-map scanline scroll-x scroll-y))))
+
+(defun color-byte-pair-palette-index (byte-pair)
+  (tile-data-row-color-indices (aref byte-pair 1) (aref byte-pair 0)))
+
+
+(defun scanline-background-pixels (scanline)
+  (let* ((start-x (mod (scroll-x) 8)))
+    (rgba-pixels-from-colors
+     (subseq (mapcar
+	      (fn (nth (palette-color-index (aref *memory* *bg-color-palette-addr*) %) (default-palette-colors)))
+	      (apply 'nconc (mapcar
+			     (fn (color-byte-pair-palette-index %))
+			     (scanline-background-tile-color-byte-pairs
+			      (background-tile-map)
+			      (8000-addressing-mode?)
+			      scanline (scroll-x) (scroll-y)))))
+	     start-x
+	     (+ start-x 160)))))
+
+(defun copy-scanline-to-lcd-pixel-buffer! (scanline-pixels scanline)
+  (let* ((start (* scanline 160 4)))
+    (loop for i from 0 below (length scanline-pixels) do
+      (setf (aref *lcd-pixel-buffer* (+ i start))
+	    (aref scanline-pixels i)))))
+
+(defun update-lcd! (lcd-enable-start-cycle current-cycle)
+  (let* ((current-mode (lcd-mode))
+	 (num-sprites (length *lcd-oam-addresses*))
+	 (mode (lcd-mode-from-cycles (- current-cycle lcd-enable-start-cycle) num-sprites)))
+    (when (/= current-mode mode)
+      (set-lcd-mode! mode)
+      (ecase mode
+	(0
+	 ;; start h-blank
+	 ;; TODO: unlock OAM and VRAM	 
+	 
+	 (copy-scanline-to-lcd-pixel-buffer!
+	  (scanline-background-pixels (lcd-scanline))
+	  (lcd-scanline))
+
+	 ;; TODO: Temp
+	 (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
+	 (print 'start-h-blank)
+
+	 (when (lcds-h-blank-interrupt-enabled?)
+	   (set-lcd-interrupt!)))
+	(1
+	 ;; start v-blank
+	 ;; TODO: update lcd-scanline 10x
+	 (set-lcd-scanline! 144)
+	 ;; TODO: render the lcd pixel buffer to the screen
+	 (print 'start-v-blank)
+	 (setq *v-blank-start-cycle* current-cycle)
+
+	 (when (interrupt-v-blank-enabled?)
+	   (set-v-blank-interrupt!))
+	 (when (lcds-v-blank-interrupt-enabled?)
+	   (set-lcd-interrupt!)))
+	(2
+	 ;; Start OAM
+	 (print 'start-oam)
+	 (set-lcd-scanline! (if (= current-mode 1)
+				0  ; reset if we just finished v-blank
+				;; otherwise increment scanline.
+				(1+ (lcd-scanline))))
+	 ;; TODO: lock OAM
+	 ;; search OAM for first 10 sprites that overlap this scanline
+	 ;; primary sort on x, secondary sort on address
+	 ;; *lcd-oam-addresses*
+
+	 (when (lcds-oam-interrupt-enabled?)
+	   (set-lcd-interrupt!)))
+	(3
+	 (print 'start-vram)
+	 ;; start LCD display
+	 ;; TODO: lock VRAM
+	 )))))
+
+(definit handle-initialize-lcd-visualization
+  (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
+  (loop for i from 0 below (length *lcd-pixel-buffer*)
+	do (setf (aref *lcd-pixel-buffer* i) 255))
+  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
+
+(defhandler handle-display-game (event)
+	    (event-display-matcher :game)
+  (setq *main-panel* :game)
+  (add-drawing! :lcd (drawing 3 (fn (let* ((texture (gethash :lcd *textures*)))
+				      (draw-texture! texture
+						     0 0 (texture-width texture) (texture-height texture)
+						     (g1 2) (g1 3) (* 160 3) (* 144 3)))))))
+(defhandler handle-hide-game (event)
+	    ;; TODO: watch for a hide main-panel instead.
+	    (event-hide-matcher :game)
+  (remove-drawing! :lcd))
+
 
 ;; Visualizations
 ;;; Sprites
@@ -3436,6 +3720,6 @@ Waits for a reset signal."
 ;;; TODO: Then reload cartridge ROM after bios is finished (when PC=#x100 for the first time)
 
 ;; TODO: reset interrupt flags as you handle them
-;; TODO: a more compact way to draw tables of values.
+;; TODO: a more compact way to specify & draw tables of values;
 ;; TODO: Show when memory-registers have changed (using red/green)
 ;; TODO: Show what memory changed and in which region.
