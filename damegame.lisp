@@ -1141,11 +1141,11 @@ Test-fn and handle-fn are both functions of event."
 	(let* ((byte2 (aref memory (1+ pc)))
 	       (instr (aval byte2 *long-instrs*)))
 	  (if instr
-	      (list* (aval :name instr) (funcall (aval :disassemble-instr instr) cpu memory))
+	      (list* (cons :name (aval :name instr)) (funcall (aval :disassemble-instr instr) cpu memory))
 	      (list :unknown (register16-text (combined-register byte byte2)))))
 	(let* ((instr (aval byte *instrs*)))
 	  (if instr
-	      (list* (aval :name instr) (funcall (aval :disassemble-instr instr) cpu memory))
+	      (list* (cons :name (aval :name instr)) (funcall (aval :disassemble-instr instr) cpu memory))
 	      (list :unknown (hex8-text byte)))))))
 
 (run-tests!)
@@ -1621,7 +1621,8 @@ Test-fn and handle-fn are both functions of event."
   (amerge
    (alist :long? long?)
    (when instr-size
-     (alist :pc `(+ ,*pc-name* ,instr-size)))
+     (alist :pc `(+ ,*pc-name* ,instr-size)
+	    :instr-size instr-size))
    (when name
      (alist :name name))
    (when description
@@ -1656,7 +1657,8 @@ Test-fn and handle-fn are both functions of event."
 		       (t 1))))
     (merge-instr-specs
      (instr-spec-defaults :opcode opcode
-			  :cycles cycles)
+			  :cycles cycles
+			  :instr-size instr-size)
      (when imm8? (imm8-instr-spec))
      (when imm16? (imm16-instr-spec))
      (when (member contents-key '(:@hli))
@@ -1665,8 +1667,7 @@ Test-fn and handle-fn are both functions of event."
        (alist :hl `(1- (cpu-hl ,*cpu-name*))))
      (alist
       :name (ld-name contents-key into-key)
-      :description (ld-description contents-key into-key)
-      :pc `(+ ,instr-size ,*pc-name*))
+      :description (ld-description contents-key into-key))
      (key-set-instr-spec into-key (compile-key-accessor contents-key)))))
 
 
@@ -1721,8 +1722,12 @@ Test-fn and handle-fn are both functions of event."
      (ld-instr-spec #b11100000 :a :@imm8)
      (@imm8-disassembly-instr-spec))
     
-    (ld-instr-spec #b11111010 :@imm16 :a)
-    (ld-instr-spec #b11101010 :a :@imm16)
+    (merge-instr-specs
+     (ld-instr-spec #b11111010 :@imm16 :a)
+     (alist :disassembly (alist :addr 'imm16)))
+    (merge-instr-specs
+     (ld-instr-spec #b11101010 :a :@imm16)
+     (alist :disassembly (alist :addr 'imm16)))
 
     ;; TODO: optimize create HL binding
     (ld-instr-spec #b00101010 :@hli :a)
@@ -1798,7 +1803,9 @@ result in HL."
 	    :half-carry? '(bit-carry? 11 sp s8)
 	    :carry? '(bit-carry? 15 sp s8)))
     
-    (ld-instr-spec #b00001000 :sp :@imm16))))
+    (merge-instr-specs
+     (ld-instr-spec #b00001000 :sp :@imm16)
+     (alist :disassembly (alist :addr 'imm16))))))
 
 (defun push-value-instr-spec (value-form &key (sp-name 'sp) (sp-2-name 'sp-2) (value-name 'value))
   (alist :bindings `((,sp-name (cpu-sp ,*cpu-name*))
@@ -2066,11 +2073,14 @@ result in HL."
 (defun a-binding ()
   (alist :bindings `((,*a-name* (cpu-a ,*cpu-name*)))))
 (defun pc-next-instr (&key (instr-size 1))
-  (alist :pc `(+ ,instr-size ,*pc-name*)))
+  (alist :pc `(+ ,instr-size ,*pc-name*)
+	 :instr-size instr-size))
 (defun pc-jump (addr-form &key condition-form instr-size)
   (alist :pc (if condition-form
 		 `(if ,condition-form ,addr-form (+ ,instr-size ,*pc-name*))
 		 addr-form)
+	 :disassembly (alist :addr addr-form)
+	 :instr-size instr-size
 	 :jump? t))
 
 (defun rotate-flags (bit-set?-form &optional zerop-result-name)
@@ -2462,7 +2472,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
     ;; JR imm8
     (merge-instr-specs
      (instr-spec-defaults
-      :name :jr-imm8
+      :name (list :jr :imm8)
       :description "Load the signed imm8 value+PC+2 into the PC."
       :opcode #b00011000
       :cycles 3)
@@ -2501,13 +2511,13 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
     ;; CALL imm16
     (merge-instr-specs
      (instr-spec-defaults
-      :name :call-imm16
+      :name (list :call :imm16)
       :description "PUSH address of next instruction onto the stack. Jump to imm16."
       :opcode #b11001101
       :cycles 6)
      (imm16-instr-spec)
      (push-value-instr-spec `(+ ,*pc-name* 3))
-     (pc-jump 'imm16)))
+     (pc-jump 'imm16 :instr-size 3)))
 
    ;; CALL cc imm16
    (map-jump-conditional-opcodes
@@ -2546,7 +2556,7 @@ Otherwise, increment PC to the next instruction."
      (alist :jump? t)
      (pop-instr-spec :pc))
 
-    ;; RETI TODO!
+    ;; RETI
     (merge-instr-specs
      (alist :name :reti
 	    :description "Return from interrupt and sets the IME."
@@ -2587,7 +2597,7 @@ Otherwise increment PC to the next instruction."
 	:cycles 4
 	:disassembly (alist :t index))
        (push-value-instr-spec '(1+ pc))
-       (pc-jump (* index 8))))
+       (pc-jump (* index 8) :instr-size 1)))
     #b11000111 (alist 3 '(0 1 2 3 4 5 6 7)))))
 
 ;; TODO: Some way to leave memory unchanged?
@@ -2757,15 +2767,16 @@ Waits for a reset signal."
 (undefbreakpoint copy-nintendo-loop (cpu memory)
 		 (= (cpu-pc cpu) #x2b))
 
-(defbreakpoint oam-start (cpu memory)
+;; TODO: label modes with defparameters
+(defbreakpoint vblank-start (cpu memory)
   (and *lcd-start-cycle*
        (not
 	(eql (lcd-mode) (lcd-mode-from-cycles (- *current-cycle*
 						 *lcd-start-cycle*)
 					      0)))
-       (eql 1(lcd-mode-from-cycles (- *current-cycle*
-				      *lcd-start-cycle*)
-				   0))))
+       (eql 1 (lcd-mode-from-cycles (- *current-cycle*
+				       *lcd-start-cycle*)
+				    0))))
 
 (undefbreakpoint wait-loop (cpu memory)
 		 (let* ((pc (cpu-pc cpu)))
@@ -3497,13 +3508,13 @@ Waits for a reset signal."
   (add-drawing! :interrupts-enabled (drawing 3 (fn (draw-interrupt-enabled-visualization!)))))
 
 
-(defun mode0-cycles (num-sprites)
+(defun mode0-dots (num-sprites)
   (- 376 (mode3-cycles num-sprites)))
-(defun mode1-cycles ()
+(defun mode1-dots ()
   4560)
-(defun mode2-cycles ()
+(defun mode2-dots ()
   80)
-(defun mode3-cycles (num-sprites)
+(defun mode3-dots (num-sprites)
   (ecase num-sprites
     (0 168)
     (1 180)
@@ -3520,30 +3531,29 @@ Waits for a reset signal."
     (9 279)
     (10 291)))
 
-(defun lcd-scanline-cycles ()
-  (+ (mode0-cycles 0)
-     (mode2-cycles)
-     (mode3-cycles 0)))
-(defun lcd-cycles ()
-  (+ (mode1-cycles)
-     (* 144 (lcd-scanline-cycles))))
-
-;; 0.1....2.3.0.2.3.0.2.3.0...
+(defun lcd-scanline-dots ()
+  (+ (mode0-dots 0)
+     (mode2-dots)
+     (mode3-dots 0)))
+(defun lcd-dots ()
+  (+ (mode1-dots)
+     (* 144 (lcd-scanline-dots))))
 
 (defun lcd-mode-from-cycles (elapsed-cycles num-sprites)
-  (let* ((cycle (mod elapsed-cycles (lcd-cycles)))
-	 (mode0-cycles (mode0-cycles num-sprites))
-	 (mode1-cycles (mode1-cycles))
-	 (mode2-cycles (mode2-cycles))
-	 (mode3-cycles (mode3-cycles num-sprites))
-	 (sc-cycles (lcd-scanline-cycles))
-	 (sc-cycle (mod (- cycle mode0-cycles mode1-cycles) sc-cycles)))
+  (let* ((elapsed-dots (* 4 elapsed-cycles))
+	 (dot (mod elapsed-dots (lcd-dots)))
+	 (mode0-dots (mode0-dots num-sprites))
+	 (mode1-dots (mode1-dots))
+	 (mode2-dots (mode2-dots))
+	 (mode3-dots (mode3-dots num-sprites))
+	 (scanline-dots (lcd-scanline-dots))
+	 (scanline-dot (mod (- dot mode0-dots mode1-dots) scanline-dots)))
     (cond
-      ((< cycle mode0-cycles) 0)
-      ((< cycle (+ mode0-cycles mode1-cycles)) 1)
+      ((< dot mode0-dots) 0)
+      ((< dot (+ mode0-dots mode1-dots)) 1)
 
-      ((< sc-cycle mode2-cycles) 2)
-      ((< sc-cycle (+ mode2-cycles mode3-cycles)) 3)
+      ((< scanline-dot mode2-dots) 2)
+      ((< scanline-dot (+ mode2-dots mode3-dots)) 3)
       (t 0))))
 
 (defun pixels (width height)
@@ -3723,3 +3733,76 @@ Waits for a reset signal."
 ;; TODO: a more compact way to specify & draw tables of values;
 ;; TODO: Show when memory-registers have changed (using red/green)
 ;; TODO: Show what memory changed and in which region.
+
+
+;; TODO: disassembly of ROM
+;;; trace through all possible paths for the program counter. (with execption of JP (HL))
+;;; create a set of all possible program counter
+;;; iterate over all program counters and disassemble those
+
+;; TODO: mark the instructions with
+;;   conditional/unconditional jump
+;;   return instr
+(defun unconditional-jump-instr? (instr)
+  (or (member (aval :name instr) '(:ret :reti))
+      (equal (aval :name instr) '(:jr :imm8))))
+(defun return-instr? (instr)
+  (member (aval :name instr) '(:ret :reti)))
+
+(defun next-pcs (current-pc memory)
+  (let* ((cpu (make-cpu :pc current-pc))
+	 (next-instr (next-instr cpu memory)))
+    (append
+     (unless (unconditional-jump-instr? next-instr)
+       (list (+ current-pc (aval :instr-size next-instr))))
+     (when (and (aval :jump? next-instr) (not (return-instr? next-instr)))
+       (let* ((disassembly (disassemble-instr cpu memory)))
+	 (list (aval :addr disassembly)))))))
+
+(defparameter *bios-rom*
+  (let* ((bios-rom (make-array 256 :element-type '(unsigned-byte 8)))
+	 (*memory* bios-rom))
+    (read-rom-file-into-memory! "gb_bios.bin")
+    bios-rom))
+
+(defun instr-addrs (memory start-pc)
+  (nlet rec ((visited-pcs ())
+	     (to-visit-pcs (list start-pc)))
+    (if (null to-visit-pcs)
+	(sort visited-pcs #'<)
+	(let* ((pc (first to-visit-pcs)))
+	  (rec (union visited-pcs (list pc))
+	       (append (remove pc to-visit-pcs)
+		       (remove-if (fn (or (member % visited-pcs) (>= % (length memory))))
+				  (next-pcs pc memory))))))))
+
+(defun disassemble-memory (memory &optional (start-pc 0))
+  (mapcar (fn (acons :pc % (disassemble-instr (make-cpu :pc %) memory)))
+	  (instr-addrs memory start-pc)))
+
+(defun text-from-disassembly (disassembly)
+  (format nil "~A ~A"
+	  (hex16-text (aval :pc disassembly))
+	  (let* ((name (aval :name disassembly)))
+	    (if (listp name)
+		(let* ((args (rest name))
+		       (bindings (mapcar (fn (case %
+					       ((:@imm8 :@imm16) (format nil "(~A)" (hex16-text (aval :addr disassembly %))))
+					       (t (aval % disassembly %)))) args)))
+		  (with-output-to-string (s)
+		    (format s "~A " (first name))
+		    (loop for binding in bindings
+			  for i from 0 do
+			    (format s "~A" binding)
+			    (when (< i (1- (length bindings))) (format s " ")))))
+		name))))
+
+(defun disassemble-rom-into-text (memory &optional (start-pc 0))
+  (with-output-to-string (s)
+    (mapcar (fn (format s "~A~%" (text-from-disassembly %))) (disassemble-memory memory start-pc))))
+
+(undefbreakpoint update-scroll-y (cpu memory)
+		 (member (cpu-pc cpu) '(#x86)))
+
+(defbreakpoint end-of-bios (cpu memory)
+  (>= (cpu-pc cpu) #x100))
