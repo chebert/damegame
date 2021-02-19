@@ -1142,11 +1142,11 @@ Test-fn and handle-fn are both functions of event."
 	       (instr (aval byte2 *long-instrs*)))
 	  (if instr
 	      (list* (cons :name (aval :name instr)) (funcall (aval :disassemble-instr instr) cpu memory))
-	      (list :unknown (register16-text (combined-register byte byte2)))))
+	      (alist :name '(:unknown :bytes) :bytes (register16-text (combined-register byte byte2)))))
 	(let* ((instr (aval byte *instrs*)))
 	  (if instr
 	      (list* (cons :name (aval :name instr)) (funcall (aval :disassemble-instr instr) cpu memory))
-	      (list :unknown (hex8-text byte)))))))
+	      (alist :name '(:unknown :bytes) :bytes (hex8-text byte)))))))
 
 (run-tests!)
 
@@ -2448,7 +2448,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
     ;; JP nn
     (merge-instr-specs
      (instr-spec-defaults
-      :name :jp-imm16
+      :name (list :jp :imm16)
       :description "Load the imm16 value into the PC."
       :opcode #b11000011
       :cycles 4)
@@ -2497,7 +2497,7 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
     ;; JP (HL)
     (merge-instr-specs
      (instr-spec-defaults
-      :name :jp-@hl
+      :name (list :jp :@hl)
       :description "Copy HL into PC."
       :opcode #b11101001
       :instr-size 1
@@ -2727,7 +2727,6 @@ Otherwise increment PC to the next instruction."
      (pc-next-instr))
 
     ;; HALT: TODO
-    #+nil
     (merge-instr-specs
      (alist :name :halt
 	    :opcode #b01110110
@@ -2737,9 +2736,8 @@ before resuming execution."
      (pc-next-instr))
 
     ;; STOP: TODO
-    #+nil
     (merge-instr-specs
-     (alist :name :stop
+     (alist :name :STOP
 	    :opcode #b00010000
 	    :description "Stops the system clock. Stops the oscillator circuit. 
 Waits for a reset signal."
@@ -3509,7 +3507,7 @@ Waits for a reset signal."
 
 
 (defun mode0-dots (num-sprites)
-  (- 376 (mode3-cycles num-sprites)))
+  (- 376 (mode3-dots num-sprites)))
 (defun mode1-dots ()
   4560)
 (defun mode2-dots ()
@@ -3724,7 +3722,6 @@ Waits for a reset signal."
 	    (event-hide-matcher :game)
   (remove-drawing! :lcd))
 
-
 ;; Visualizations
 ;;; Sprites
 ;;;; Write position
@@ -3741,30 +3738,35 @@ Waits for a reset signal."
 ;; TODO: Show when memory-registers have changed (using red/green)
 ;; TODO: Show what memory changed and in which region.
 
-
-;; TODO: disassembly of ROM
-;;; trace through all possible paths for the program counter. (with execption of JP (HL))
-;;; create a set of all possible program counter
-;;; iterate over all program counters and disassemble those
-
 ;; TODO: mark the instructions with
 ;;   conditional/unconditional jump
 ;;   return instr
 (defun unconditional-jump-instr? (instr)
-  (or (member (aval :name instr) '(:ret :reti))
-      (equal (aval :name instr) '(:jr :imm8))))
+  (or (member (aval :name instr) '(:ret :reti :stop))
+      (equal (aval :name instr) '(:jr :imm8))
+      (equal (aval :name instr) '(:jp :imm16))
+      (equal (aval :name instr) '(:jp :@hl))))
 (defun return-instr? (instr)
-  (member (aval :name instr) '(:ret :reti)))
+  (member (aval :name instr) '(:ret :reti :stop :halt)))
 
 (defun next-pcs (current-pc memory)
   (let* ((cpu (make-cpu :pc current-pc))
 	 (next-instr (next-instr cpu memory)))
-    (append
-     (unless (unconditional-jump-instr? next-instr)
-       (list (+ current-pc (aval :instr-size next-instr))))
-     (when (and (aval :jump? next-instr) (not (return-instr? next-instr)))
-       (let* ((disassembly (disassemble-instr cpu memory)))
-	 (list (aval :addr disassembly)))))))
+    (if next-instr
+	(append
+	 (unless (unconditional-jump-instr? next-instr)
+	   (let* ((size (aval :instr-size next-instr)))
+	     (if size
+		 (list (+ current-pc size))
+		 (progn
+		   (warn "Instr ~A has no instr-size" next-instr)
+		   nil))))
+	 (when (and (aval :jump? next-instr) (not (return-instr? next-instr)))
+	   (let* ((disassembly (disassemble-instr cpu memory)))
+	     (list (aval :addr disassembly)))))
+	(progn
+	  (warn "Unknown instruction at ~A"  current-pc)
+	  nil))))
 
 (defparameter *bios-rom*
   (let* ((bios-rom (make-array 256 :element-type '(unsigned-byte 8)))
@@ -3813,3 +3815,9 @@ Waits for a reset signal."
 
 (defbreakpoint end-of-bios (cpu memory)
   (>= (cpu-pc cpu) #x100))
+
+
+(defparameter *cart-rom* (read-rom-file! *cart-filename*))
+(disassemble-instr (make-cpu :pc 1229) (subseq *cart-rom* 0 (* 16 1024)))
+(disassemble-rom-into-text (subseq *cart-rom* 0 (* 16 1024)) #x100)
+;; TODO: make sure I also disassemble the rst instruction areas
