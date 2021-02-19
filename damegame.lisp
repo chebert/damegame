@@ -3539,6 +3539,14 @@ Waits for a reset signal."
   (+ (mode1-dots)
      (* 144 (lcd-scanline-dots))))
 
+(defun lcd-scanline-from-cycles (elapsed-cycles num-sprites)
+  (let* ((elapsed-dots (* 4 elapsed-cycles))
+	 (dot (mod elapsed-dots (lcd-dots)))
+	 (mode0-dots (mode0-dots num-sprites)))
+    (cond
+      ((< dot mode0-dots) 143)
+      (t (mod (+ 144 (truncate (- dot mode0-dots) (lcd-scanline-dots))) 154)))))
+
 (defun lcd-mode-from-cycles (elapsed-cycles num-sprites)
   (let* ((elapsed-dots (* 4 elapsed-cycles))
 	 (dot (mod elapsed-dots (lcd-dots)))
@@ -3648,55 +3656,55 @@ Waits for a reset signal."
 (defun update-lcd! (lcd-enable-start-cycle current-cycle)
   (let* ((current-mode (lcd-mode))
 	 (num-sprites (length *lcd-oam-addresses*))
-	 (mode (lcd-mode-from-cycles (- current-cycle lcd-enable-start-cycle) num-sprites)))
-    (when (/= current-mode mode)
-      (set-lcd-mode! mode)
-      (ecase mode
-	(0
-	 ;; start h-blank
-	 ;; TODO: unlock OAM and VRAM	 
-	 
-	 (copy-scanline-to-lcd-pixel-buffer!
-	  (scanline-background-pixels (lcd-scanline))
-	  (lcd-scanline))
+	 (elapsed-cycles (- current-cycle lcd-enable-start-cycle))
+	 (mode (lcd-mode-from-cycles elapsed-cycles num-sprites)))
+    (cond
+      ((/= current-mode mode)
+       (set-lcd-mode! mode)
+       (ecase mode
+	 (0
+	  ;; start h-blank
+	  ;; TODO: unlock OAM and VRAM	 
+	  
+	  (copy-scanline-to-lcd-pixel-buffer!
+	   (scanline-background-pixels (lcd-scanline))
+	   (lcd-scanline))
 
-	 ;; TODO: Temp
-	 (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
-	 (print 'start-h-blank)
+	  (print 'start-h-blank)
 
-	 (when (lcds-h-blank-interrupt-enabled?)
-	   (set-lcd-interrupt!)))
-	(1
-	 ;; start v-blank
-	 ;; TODO: update lcd-scanline 10x
-	 (set-lcd-scanline! 144)
-	 ;; TODO: render the lcd pixel buffer to the screen
-	 (print 'start-v-blank)
-	 (setq *v-blank-start-cycle* current-cycle)
+	  (when (lcds-h-blank-interrupt-enabled?)
+	    (set-lcd-interrupt!)))
+	 (1
+	  ;; start v-blank
+	  (print 'start-v-blank)
 
-	 (when (interrupt-v-blank-enabled?)
-	   (set-v-blank-interrupt!))
-	 (when (lcds-v-blank-interrupt-enabled?)
-	   (set-lcd-interrupt!)))
-	(2
-	 ;; Start OAM
-	 (print 'start-oam)
-	 (set-lcd-scanline! (if (= current-mode 1)
-				0  ; reset if we just finished v-blank
-				;; otherwise increment scanline.
-				(1+ (lcd-scanline))))
-	 ;; TODO: lock OAM
-	 ;; search OAM for first 10 sprites that overlap this scanline
-	 ;; primary sort on x, secondary sort on address
-	 ;; *lcd-oam-addresses*
+	  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
+	  (when (interrupt-v-blank-enabled?)
+	    (set-v-blank-interrupt!))
+	  (when (lcds-v-blank-interrupt-enabled?)
+	    (set-lcd-interrupt!)))
+	 (2
+	  ;; Start OAM
+	  (print 'start-oam)
+	  (set-lcd-scanline! (if (= current-mode 1)
+				 0 ; reset if we just finished v-blank
+				 ;; otherwise increment scanline.
+				 (1+ (lcd-scanline))))
+	  ;; TODO: lock OAM
+	  ;; search OAM for first 10 sprites that overlap this scanline
+	  ;; primary sort on x, secondary sort on address
+	  ;; *lcd-oam-addresses*
 
-	 (when (lcds-oam-interrupt-enabled?)
-	   (set-lcd-interrupt!)))
-	(3
-	 (print 'start-vram)
-	 ;; start LCD display
-	 ;; TODO: lock VRAM
-	 )))))
+	  (when (lcds-oam-interrupt-enabled?)
+	    (set-lcd-interrupt!)))
+	 (3
+	  (print 'start-vram)
+	  ;; start LCD display
+	  ;; TODO: lock VRAM
+	  )))
+      ((= mode 1)
+       ;; When in v-blank mode, update the scanline
+       (set-lcd-scanline! (lcd-scanline-from-cycles elapsed-cycles num-sprites))))))
 
 (definit handle-initialize-lcd-visualization
   (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
@@ -3729,7 +3737,6 @@ Waits for a reset signal."
 ;; Power Up sequence
 ;;; TODO: Then reload cartridge ROM after bios is finished (when PC=#x100 for the first time)
 
-;; TODO: reset interrupt flags as you handle them
 ;; TODO: a more compact way to specify & draw tables of values;
 ;; TODO: Show when memory-registers have changed (using red/green)
 ;; TODO: Show what memory changed and in which region.
