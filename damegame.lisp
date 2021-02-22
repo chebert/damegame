@@ -1118,17 +1118,30 @@ Test-fn and handle-fn are both functions of event."
 			     :initial-element 0)))
 
 (defvar *memory* (reset-memory!))
+(defvar *ram-enabled? nil)
+(defvar *rom-bank* 1)
 (defun mem-write! (addr byte &optional (memory *memory*))
-  (setf (aref memory addr) byte))
+  (cond
+    ((<= 0 addr #x1fff) (setq *ram-enabled? (= #xA (logand #xF byte))))
+    ((<= 2000 addr #x3fff)
+     (setq *rom-bank* (max 1 (logand #b11111 byte)))
+     (copy-memory-bank-into-memory!
+      (memory-bank *cart-rom* *rom-bank*)
+      :start-addr #x4000))
+    (t (setf (aref memory addr) byte))))
 (defun mem-byte (addr &optional (memory *memory*))
   (aref memory addr))
 
-(defun read-rom-file-into-memory! (filename &key (start-addr 0) (max-length #x3fff))
+(defun copy-memory-bank-into-memory! (memory-bank &key (start-addr 0))
+  (loop for i below #x4000
+	do (setf (aref *memory* (+ i start-addr)) (aref memory-bank i))))
+
+(defun read-rom-file-into-memory! (filename &key (start-addr 0) (max-length #x4000))
   (with-open-file (stream filename :direction :input :element-type 'unsigned-byte)
     (let* ((length (file-length stream))
 	   (size (min length max-length)))
       (loop for i below size
-	    do (mem-write! (+ i start-addr) (read-byte stream))))))
+	    do (setf (aref *memory* (+ i start-addr)) (read-byte stream))))))
 (defparameter *cart-filename* "Legend of Zelda, The - Link's Awakening (USA, Europe).gb")
 
 (defun hi-byte (u16)
@@ -1177,7 +1190,9 @@ Test-fn and handle-fn are both functions of event."
 (defun reset! ()
   (setq *cpus* (list (cpu-initial)))
   (setq *current-cycle* 0
-	*lcd-start-cycle* nil)
+	*lcd-start-cycle* nil
+	*ram-enabled? nil
+	*rom-bank* 1)
   (reset-memory!)
 
   (read-rom-file-into-memory! *cart-filename*)
@@ -2844,11 +2859,17 @@ Waits for a reset signal."
 (defvar *current-cycle* 0)
 (defvar *lcd-start-cycle* nil)
 (defun execute! (cpu memory)
-  (when (lcdc-display?)
-    (when (null *lcd-start-cycle*)
-      ;; start lcd
-      (setq *lcd-start-cycle* *current-cycle*))
-    (update-lcd! *lcd-start-cycle* *current-cycle*))
+  (cond
+    ((lcdc-display?)
+     (when (null *lcd-start-cycle*)
+       ;; start lcd
+       (setq *lcd-start-cycle* *current-cycle*))
+     (update-lcd! *lcd-start-cycle* *current-cycle*))
+    (t
+     ;; TODO: should this be reset or should it be restored?
+     ;;(setq *lcd-start-cycle* nil)
+     ;;(set-lcd-scanline! 0)
+     ))
 
   (incf *current-cycle*
 	(if (cpu-ime? cpu)
@@ -3123,8 +3144,7 @@ Waits for a reset signal."
 (defun lcd-mode ()
   (logand #b11 (lcds-register)))
 (defun set-lcd-mode! (mode)
-  (mem-write! #xff41
-	      (logior mode (logand #b11111100 (lcds-register)))))
+  (mem-write! #xff41 (logior mode (logand #b11111100 (lcds-register)))))
 (defun lcd-dma-start ()
   (ash (mem-byte #xff46) 4))
 (defun lcd-coincidence? ()
@@ -3685,18 +3705,18 @@ Waits for a reset signal."
 	 (0
 	  ;; start h-blank
 	  ;; TODO: unlock OAM and VRAM	 
+
+	  (print (alist :h-blank elapsed-cycles))
 	  
 	  (copy-scanline-to-lcd-pixel-buffer!
 	   (scanline-background-pixels (lcd-scanline))
 	   (lcd-scanline))
 
-	  (print 'start-h-blank)
-
 	  (when (lcds-h-blank-interrupt-enabled?)
 	    (set-lcd-interrupt!)))
 	 (1
 	  ;; start v-blank
-	  (print 'start-v-blank)
+	  (print (alist :v-blank elapsed-cycles))
 
 	  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
 	  (when (interrupt-v-blank-enabled?)
@@ -3705,7 +3725,7 @@ Waits for a reset signal."
 	    (set-lcd-interrupt!)))
 	 (2
 	  ;; Start OAM
-	  (print 'start-oam)
+	  (print (alist :oam elapsed-cycles))
 	  (set-lcd-scanline! (if (= current-mode 1)
 				 0 ; reset if we just finished v-blank
 				 ;; otherwise increment scanline.
@@ -3718,13 +3738,17 @@ Waits for a reset signal."
 	  (when (lcds-oam-interrupt-enabled?)
 	    (set-lcd-interrupt!)))
 	 (3
-	  (print 'start-vram)
+	  (print (alist :vram elapsed-cycles))
 	  ;; start LCD display
 	  ;; TODO: lock VRAM
 	  )))
       ((= mode 1)
        ;; When in v-blank mode, update the scanline
-       (set-lcd-scanline! (lcd-scanline-from-cycles elapsed-cycles num-sprites))))))
+       (let* ((old-scanline (lcd-scanline)))
+	 (set-lcd-scanline! (lcd-scanline-from-cycles elapsed-cycles num-sprites))
+	 (when (/= old-scanline (lcd-scanline))
+	   (print (alist :scanline (lcd-scanline)
+			 :elapsed-cycles elapsed-cycles))))))))
 
 (definit handle-initialize-lcd-visualization
   (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
@@ -3829,8 +3853,8 @@ Waits for a reset signal."
 (undefbreakpoint update-scroll-y (cpu memory)
 		 (member (cpu-pc cpu) '(#x86)))
 
-(defbreakpoint end-of-bios (cpu memory)
-  (>= (cpu-pc cpu) #x100))
+(undefbreakpoint end-of-bios (cpu memory)
+		 (>= (cpu-pc cpu) #x100))
 
 (defun memory-bank (rom bank)
   (subseq rom (* bank (* 16 1024)) (* (1+ bank) (* 16 1024))))
