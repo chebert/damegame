@@ -195,7 +195,6 @@ From the plist (id value id2 value2 ...)"
   (if new-alists
       (let* ((new (first new-alists)))
 	(apply 'amerge
-	       
 	       ;; => ((:C . 3) (:B . 2) (:D . 5) (:A . 2) ((:E . 6) (:C . 4)))
 	       (nconc (apply 'aremove old (akeys new))
 		      new)
@@ -606,7 +605,6 @@ Test-fn and handle-fn are both functions of event."
   (c 0 :type (unsigned-byte 8))
   (d 0 :type (unsigned-byte 8))
   (e 0 :type (unsigned-byte 8))
-  (f 0 :type (unsigned-byte 8))
   (h 0 :type (unsigned-byte 8))
   (l 0 :type (unsigned-byte 8))
   (sp 0 :type (unsigned-byte 16))
@@ -615,12 +613,31 @@ Test-fn and handle-fn are both functions of event."
   (half-carry? nil :type boolean)
   (carry? nil :type boolean)
   (subtraction? nil :type boolean)
+  (f-lo 0 :type (unsigned-byte 8))
   (ime? nil :type boolean))
 
 (defun g1 (value) (* value *grid-size*))
 
+(defun cpu-f-hi (cpu)
+  (+ (if (cpu-zero? cpu) #b1000 0)
+     (if (cpu-subtraction? cpu) #b0100 0)
+     (if (cpu-half-carry? cpu) #b0010 0)
+     (if (cpu-carry? cpu) #b0001 0)))
+
+(defun cpu-f (cpu)
+  (+ (ash (cpu-f-hi cpu) 4)
+     (cpu-f-lo cpu)))
+
+(defun set-cpu-f! (cpu f)
+  (setf (cpu-f-lo cpu) (logand #xF f)
+	(cpu-zero? cpu) (bit-set? 7 f)
+	(cpu-subtraction? cpu) (bit-set? 6 f)
+	(cpu-half-carry? cpu) (bit-set? 5 f)
+	(cpu-carry? cpu) (bit-set? 4 f)))
+(defsetf cpu-f set-cpu-f!)
+
 (defun cpu-initial ()
-  (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f 0 :h 0 :l 0 :sp 0 :pc 0
+  (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f-lo 0 :h 0 :l 0 :sp 0 :pc 0
 	    :zero? nil :half-carry? nil :subtraction? nil :ime? nil))
 
 (defvar *cpus* (list (cpu-initial)))
@@ -689,7 +706,7 @@ Test-fn and handle-fn are both functions of event."
 				 :font
 				 (format nil "~A: ~A"
 					 (hex16-text (+ i start-addr))
-					 (funcall byte-text-fn (aref memory (+ i start-addr))))))))
+					 (funcall byte-text-fn (mem-byte (+ i start-addr) memory)))))))
 
 (defun start-addr (focus-addr)
   (min (max (- focus-addr (/ *memory-visualization-byte-count* 2)) 0) (- #xffff *memory-visualization-byte-count*)))
@@ -1062,6 +1079,7 @@ Test-fn and handle-fn are both functions of event."
     (#xFE :HuC3)
     (#xFF :HuC1+RAM+BATTERY)))
 
+
 (defun cart-rom-size-code (cart-rom-header)
   (aref cart-rom-header #x148))
 (defun cart-rom-size (cart-rom-size-code)
@@ -1100,13 +1118,17 @@ Test-fn and handle-fn are both functions of event."
 			     :initial-element 0)))
 
 (defvar *memory* (reset-memory!))
+(defun mem-write! (addr byte &optional (memory *memory*))
+  (setf (aref memory addr) byte))
+(defun mem-byte (addr &optional (memory *memory*))
+  (aref memory addr))
 
 (defun read-rom-file-into-memory! (filename &key (start-addr 0) (max-length #x3fff))
   (with-open-file (stream filename :direction :input :element-type 'unsigned-byte)
     (let* ((length (file-length stream))
 	   (size (min length max-length)))
       (loop for i below size
-	    do (setf (aref *memory* (+ i start-addr)) (read-byte stream))))))
+	    do (mem-write! (+ i start-addr) (read-byte stream))))))
 (defparameter *cart-filename* "Legend of Zelda, The - Link's Awakening (USA, Europe).gb")
 
 (defun hi-byte (u16)
@@ -1123,9 +1145,9 @@ Test-fn and handle-fn are both functions of event."
 
 (defun next-instr (cpu memory)
   (let* ((pc (cpu-pc cpu))
-	 (byte (aref memory pc)))
+	 (byte (mem-byte pc memory)))
     (if (long-instr? byte)
-	(let* ((byte2 (aref memory (1+ pc))))
+	(let* ((byte2 (mem-byte (1+ pc) memory)))
 	  (aval byte2 *long-instrs*))
 	(aval byte *instrs*))))
 
@@ -1136,9 +1158,9 @@ Test-fn and handle-fn are both functions of event."
 
 (defun disassemble-instr (cpu memory)
   (let* ((pc (cpu-pc cpu))
-	 (byte (aref memory pc)))
+	 (byte (mem-byte pc memory)))
     (if (long-instr? byte)
-	(let* ((byte2 (aref memory (1+ pc)))
+	(let* ((byte2 (mem-byte (1+ pc) memory))
 	       (instr (aval byte2 *long-instrs*)))
 	  (if instr
 	      (list* (cons :name (aval :name instr)) (funcall (aval :disassemble-instr instr) cpu memory))
@@ -1358,11 +1380,11 @@ Test-fn and handle-fn are both functions of event."
 (defun compile-execute-next-instr ()
   `(defun execute-next-instr! (,*cpu-name* ,*memory-name*)
      (let ((,*pc-name* (cpu-pc ,*cpu-name*)))
-       (ecase (aref ,*memory-name* ,*pc-name*)
+       (ecase (mem-byte ,*pc-name* ,*memory-name*)
 	 ,@(amap (fn (list % (compile-instr-spec-for-execute %%))) *instrs*)
 	 (#xcb
 	  ;; TODO: optimize pc-access
-	  (ecase (aref ,*memory-name* (1+ ,*pc-name*))
+	  (ecase (mem-byte (1+ ,*pc-name*) ,*memory-name*)
 	    ,@(amap (fn (list % (compile-instr-spec-for-execute %%))) *long-instrs*)))))))
 
 (defun cpu-register-accessor-name (register-key)
@@ -1416,8 +1438,8 @@ Test-fn and handle-fn are both functions of event."
 		 '(:zero? :subtraction? :half-carry? :carry?))))
 
 (defun compile-set-memory (instr-spec)
-  (let ((memory (aval :memory instr-spec)))
-    (apply 'concatenate 'list (mapcar (fn `((aref ,*memory-name* ,(first %)) ,(second %))) memory))))
+  (mapcar (fn `(mem-write! ,(first %) ,(second %) ,*memory-name*))
+	  (aval :memory instr-spec)))
 
 (defmacro when-let ((name condition-form) &body body)
   `(let* ((,name ,condition-form))
@@ -1429,8 +1451,8 @@ Test-fn and handle-fn are both functions of event."
     (warn "No CYCLES specified for ~A" instr-spec))
   `(let* ,(aval :bindings instr-spec)
      ,@(compile-combined-register-sets instr-spec)
+     ,@(compile-set-memory instr-spec)
      (setf
-      ,@(compile-set-memory instr-spec)
       ,@(compile-set-flags instr-spec)
       ,@(compile-register-sets instr-spec)
       ,@(when-let (ime? (aval :ime? instr-spec))
@@ -1575,13 +1597,13 @@ Test-fn and handle-fn are both functions of event."
   (cond
     ((member key *register-keys*) `(,(cpu-register-accessor-name key) ,*cpu-name*))
     ((eql key :imm8) *imm8-name*)
-    ((eql key :@imm8) `(aref ,*memory-name* (+ #xff00 ,*imm8-name*)))
-    ((eql key :@imm16) `(aref ,*memory-name* ,*imm16-name*))
-    ((eql key :@bc) `(aref ,*memory-name* (cpu-bc ,*cpu-name*)))
-    ((eql key :@de) `(aref ,*memory-name* (cpu-de ,*cpu-name*)))
-    ((eql key :@af) `(aref ,*memory-name* (cpu-af ,*cpu-name*)))
-    ((member key '(:@hl :@hli :@hld)) `(aref ,*memory-name* (cpu-hl ,*cpu-name*)))
-    ((eql key :@c) `(aref ,*memory-name* (+ #xff00 (cpu-c ,*cpu-name*))))
+    ((eql key :@imm8) `(mem-byte (+ #xff00 ,*imm8-name*) ,*memory-name*))
+    ((eql key :@imm16) `(mem-byte ,*imm16-name* ,*memory-name*))
+    ((eql key :@bc) `(mem-byte (cpu-bc ,*cpu-name*) ,*memory-name*))
+    ((eql key :@de) `(mem-byte (cpu-de ,*cpu-name*) ,*memory-name*))
+    ((eql key :@af) `(mem-byte (cpu-af ,*cpu-name*) ,*memory-name*))
+    ((member key '(:@hl :@hli :@hld)) `(mem-byte (cpu-hl ,*cpu-name*) ,*memory-name*))
+    ((eql key :@c) `(mem-byte (+ #xff00 (cpu-c ,*cpu-name*)) ,*memory-name*))
     ((eql key :imm16) *imm16-name*)
     (t (error "unimplemented ~A" key))))
 (defun key-set-instr-spec (key value-form)
@@ -1604,7 +1626,7 @@ Test-fn and handle-fn are both functions of event."
 
 (defun imm8-instr-spec ()
   (alist
-   :bindings `((,*imm8-name* (aref ,*memory-name* (1+ ,*pc-name*))))
+   :bindings `((,*imm8-name* (mem-byte (1+ ,*pc-name*) ,*memory-name*)))
    :disassembly (alist :imm8 `(register8-text ,*imm8-name*))))
 (defun s8-instr-spec ()
   (merge-instr-specs
@@ -1740,7 +1762,7 @@ Test-fn and handle-fn are both functions of event."
     (ld-instr-spec #b00110010 :a :@hld))))
 
 (defun imm16 (addr memory)
-  (combined-register (aref memory (1+ addr)) (aref memory addr)))
+  (combined-register (mem-byte (1+ addr) memory) (mem-byte addr memory)))
 
 ;; S2.2
 (defun ld-16bit-instr-specs ()
@@ -1824,8 +1846,8 @@ result in HL."
   (alist :bindings `((,sp-name (cpu-sp ,*cpu-name*))
 		     (,sp+-name (1+ ,sp-name)))
 	 :sp `(+ ,sp-name 2)
-	 register-pair-key `(combined-register (aref ,*memory-name* ,sp+-name)
-					       (aref ,*memory-name* ,sp-name))))
+	 register-pair-key `(combined-register (mem-byte ,sp+-name ,*memory-name*)
+					       (mem-byte ,sp-name ,*memory-name*))))
 
 (defun bit-carry? (from-bit-index a b)
   (let* ((bit-index (1+ from-bit-index))
@@ -2539,8 +2561,8 @@ Otherwise, increment PC to the next instruction."
 		    (pc+3 (+ pc 3)))
 	:sp '(if condition? sp-2 sp)
 	;; TODO: optimize by not setting memory if condition? is false
-	:memory `((sp-1 (if condition? (hi-byte pc+3) (aref memory sp-1)))
-		  (sp-2 (if condition? (lo-byte pc+3) (aref memory sp-2))))
+	:memory `((sp-1 (if condition? (hi-byte pc+3) (mem-byte sp-1 memory)))
+		  (sp-2 (if condition? (lo-byte pc+3) (mem-byte sp-2 memory))))
 	:cycles '(if condition? 6 3))
        (pc-jump 'imm16 :condition-form 'condition? :instr-size 3)))
     #b11000100)
@@ -2591,7 +2613,7 @@ Otherwise increment PC to the next instruction."
     (lambda (opcode index)
       (merge-instr-specs
        (instr-spec-defaults
-	:name :rst-t
+	:name (list :rst-t :addr)
 	:description "Jump to a predefined address based on t (0-7): (#x0000 #x0008 #x0010 #x0018 #x0020 #x0028 #x0030 #x0038)."
 	:opcode opcode
 	:cycles 4
@@ -2766,15 +2788,15 @@ Waits for a reset signal."
 		 (= (cpu-pc cpu) #x2b))
 
 ;; TODO: label modes with defparameters
-(defbreakpoint vblank-start (cpu memory)
-  (and *lcd-start-cycle*
-       (not
-	(eql (lcd-mode) (lcd-mode-from-cycles (- *current-cycle*
-						 *lcd-start-cycle*)
-					      0)))
-       (eql 1 (lcd-mode-from-cycles (- *current-cycle*
-				       *lcd-start-cycle*)
-				    0))))
+(undefbreakpoint vblank-start (cpu memory)
+		 (and *lcd-start-cycle*
+		      (not
+		       (eql (lcd-mode) (lcd-mode-from-cycles (- *current-cycle*
+								*lcd-start-cycle*)
+							     0)))
+		      (eql 1 (lcd-mode-from-cycles (- *current-cycle*
+						      *lcd-start-cycle*)
+						   0))))
 
 (undefbreakpoint wait-loop (cpu memory)
 		 (let* ((pc (cpu-pc cpu)))
@@ -2830,24 +2852,24 @@ Waits for a reset signal."
 
   (incf *current-cycle*
 	(if (cpu-ime? cpu)
-	    (let* ((interrupt-flags (aref memory #xff0f))
-		   (interrupt-enable (aref memory #xffff))
+	    (let* ((interrupt-flags (mem-byte #xff0f memory))
+		   (interrupt-enable (mem-byte #xffff memory))
 		   (interrupts (logand interrupt-flags interrupt-enable)))
 	      (cond
 		((bit-set? 0 interrupts)
-		 (setf (aref memory #xff0f) (bit-set 0 interrupt-flags 0))
+		 (mem-write! #xff0f (bit-set 0 interrupt-flags 0) memory)
 		 (interrupt! #x0040 cpu memory))
 		((bit-set? 1 interrupts)
-		 (setf (aref memory #xff0f) (bit-set 1 interrupt-flags 0))
+		 (mem-write! #xff0f (bit-set 1 interrupt-flags 0) memory)
 		 (interrupt! #x0048 cpu memory))
 		((bit-set? 2 interrupts)
-		 (setf (aref memory #xff0f) (bit-set 2 interrupt-flags 0))
+		 (mem-write! #xff0f (bit-set 2 interrupt-flags 0) memory)
 		 (interrupt! #x0050 cpu memory))
 		((bit-set? 3 interrupts)
-		 (setf (aref memory #xff0f) (bit-set 3 interrupt-flags 0))
+		 (mem-write! #xff0f (bit-set 3 interrupt-flags 0) memory)
 		 (interrupt! #x0058 cpu memory))
 		((bit-set? 4 interrupts)
-		 (setf (aref memory #xff0f) (bit-set 4 interrupt-flags 0))
+		 (mem-write! #xff0f (bit-set 4 interrupt-flags 0) memory)
 		 (interrupt! #x0060 cpu memory))
 		(t (execute-next-instr! cpu memory))))
 	    (execute-next-instr! cpu memory))))
@@ -2894,7 +2916,7 @@ Waits for a reset signal."
 	  (draw-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))))
 
 (defun palette-colors-from-color-palette-addr (palette-addr)
-  (palette-colors-from-color-palette-byte (aref *memory* palette-addr)))
+  (palette-colors-from-color-palette-byte (mem-byte palette-addr)))
 
 (defun palette-color-index (byte index)
   (logand #b11 (ash byte (- (* 2 index)))))
@@ -3030,7 +3052,7 @@ Waits for a reset signal."
 
 ;; Bg Tile Map
 ;; 32x32
-(defvar *tile-map-texture*)
+(defvar *tile-map-texture* nil)
 
 (defun tile-addresses (tile-map 8000-addressing-mode?)
   (loop for tile-byte across tile-map
@@ -3077,34 +3099,34 @@ Waits for a reset signal."
     (replace-pixel-buffer! *tile-map-texture* rgba-pixels)))
 
 (defun lcdc-register ()
-  (aref *memory* #xff40))
+  (mem-byte #xff40))
 (defun 8000-addressing-mode? ()
   (bit-set? 4 (lcdc-register)))
 (defun scroll-x ()
-  (aref *memory* #xff43))
+  (mem-byte #xff43))
 (defun scroll-y ()
-  (aref *memory* #xff42))
+  (mem-byte #xff42))
 (defun object-size-doubled? ()
   (bit-set? 2 (lcdc-register)))
 (defun window-x ()
-  (+ (aref *memory* #xff4b) 7))
+  (+ (mem-byte #xff4b) 7))
 (defun window-y ()
-  (aref *memory* #xff4a))
+  (mem-byte #xff4a))
 (defun lcd-scanline ()
-  (aref *memory* #xff44))
+  (mem-byte #xff44))
 (defun set-lcd-scanline! (val)
-  (setf (aref *memory* #xff44) val))
+  (mem-write! #xff44 val))
 (defun lcd-scanline-compare ()
-  (aref *memory* #xff45))
+  (mem-byte #xff45))
 (defun lcds-register ()
-  (aref *memory* #xff41))
+  (mem-byte #xff41))
 (defun lcd-mode ()
   (logand #b11 (lcds-register)))
 (defun set-lcd-mode! (mode)
-  (setf (aref *memory* #xff41)
-	(logior mode (logand #b11111100 (lcds-register)))))
+  (mem-write! #xff41
+	      (logior mode (logand #b11111100 (lcds-register)))))
 (defun lcd-dma-start ()
-  (ash (aref *memory* #xff46) 4))
+  (ash (mem-byte #xff46) 4))
 (defun lcd-coincidence? ()
   (bit-set? 2 (lcds-register)))
 (defun lcdc-background-tiles-addr ()
@@ -3177,8 +3199,8 @@ Waits for a reset signal."
 	(let* ((sprite-index (+ x (* 8 y)))
 	       (sprite-addr (+ #xfe00 (* 4 sprite-index)))
 
-	       (tile/pattern-number (aref *memory* (+ sprite-addr 2)))
-	       (flags (aref *memory* (+ sprite-addr 3)))
+	       (tile/pattern-number (mem-byte (+ sprite-addr 2)))
+	       (flags (mem-byte (+ sprite-addr 3)))
 	       (palette-index1? (bit-set? 4 flags))
 	       (palette-colors (palette-colors-from-color-palette-addr
 				(if palette-index1?
@@ -3431,17 +3453,17 @@ Waits for a reset signal."
 ;; TODO: buttons should have ids on them
 
 (defun interrupt-enable-register ()
-  (aref *memory* #xffff))
+  (mem-byte #xffff))
 (defun interrupt-v-blank-enabled? ()
   (bit-set? 0 (interrupt-enable-register)))
 (defun set-v-blank-interrupt! (&optional (bit-value 1))
-  (setf (aref *memory* #xffff)
-	(bit-set 0 (interrupt-enable-register) bit-value)))
+  (mem-write! #xffff
+	      (bit-set 0 (interrupt-enable-register) bit-value)))
 (defun interrupt-lcd-enabled? ()
   (bit-set? 1 (interrupt-enable-register)))
 (defun set-lcd-interrupt! (&optional (bit-value 1))
-  (setf (aref *memory* #xffff)
-	(bit-set 1 (interrupt-enable-register) bit-value)))
+  (mem-write! #xffff
+	      (bit-set 1 (interrupt-enable-register) bit-value)))
 (defun interrupt-timer-enabled? ()
   (bit-set? 2 (interrupt-enable-register)))
 (defun interrupt-serial-enabled? ()
@@ -3635,7 +3657,7 @@ Waits for a reset signal."
   (let* ((start-x (mod (scroll-x) 8)))
     (rgba-pixels-from-colors
      (subseq (mapcar
-	      (fn (nth (palette-color-index (aref *memory* *bg-color-palette-addr*) %) (default-palette-colors)))
+	      (fn (nth (palette-color-index (mem-byte *bg-color-palette-addr*) %) (default-palette-colors)))
 	      (apply 'nconc (mapcar
 			     (fn (color-byte-pair-palette-index %))
 			     (scanline-background-tile-color-byte-pairs
@@ -3768,12 +3790,6 @@ Waits for a reset signal."
 	  (warn "Unknown instruction at ~A"  current-pc)
 	  nil))))
 
-(defparameter *bios-rom*
-  (let* ((bios-rom (make-array 256 :element-type '(unsigned-byte 8)))
-	 (*memory* bios-rom))
-    (read-rom-file-into-memory! "gb_bios.bin")
-    bios-rom))
-
 (defun instr-addrs (memory start-pc)
   (nlet rec ((visited-pcs ())
 	     (to-visit-pcs (list start-pc)))
@@ -3816,8 +3832,65 @@ Waits for a reset signal."
 (defbreakpoint end-of-bios (cpu memory)
   (>= (cpu-pc cpu) #x100))
 
+(defun memory-bank (rom bank)
+  (subseq rom (* bank (* 16 1024)) (* (1+ bank) (* 16 1024))))
 
+#+nil
 (defparameter *cart-rom* (read-rom-file! *cart-filename*))
+#+nil
 (disassemble-instr (make-cpu :pc 1229) (subseq *cart-rom* 0 (* 16 1024)))
+#+nil
 (disassemble-rom-into-text (subseq *cart-rom* 0 (* 16 1024)) #x100)
-;; TODO: make sure I also disassemble the rst instruction areas
+#+nil
+(remove-if-not
+ (lambda (v)
+   (let* ((name  (aval :name v)))
+     (and (listp name)
+	  (eq (first name) :ld)
+	  (eq (second name) :@imm16)
+	  (and (< (aval :addr v) #x8000)))))
+ (disassemble-memory (memory-bank *cart-rom* 9) 0))
+
+#+nil
+(cart-type (cart-type-code *cart-rom*))
+;; => :MBC1+RAM+BATTERY
+;;(cart-rom-size (cart-rom-size-code *cart-rom*))
+;; => ((512 :KB) 32)
+;;(cart-ram-size (cart-ram-size-code *cart-rom*))
+;; => ((8 :KB) (1 :BANKS))
+
+
+;; MBC1
+;;;; x0000-x3fff:
+;;;;   ROM Bank. Normally the first 16 Kb of the cart. Could be banks 20/40/60 in mode 1.
+;;;; x4000-x7FFF:
+;;;;   ROM Bank 01-7f. Any of the banks not-addressable by the first ROM bank area.
+;;;; xA000-xBFFF:
+;;;;   RAM Bank 00-03.
+;;; Control Registers
+;;;; x0000-x1fff:
+;;;;   x0A: enable RAM
+;;;;   x00: disable RAM
+;;;; x2000-x3fff: (2nd) ROM bank number select. Defaults to 1.
+;;;;   N: sets the number of banks to (logand #b11111 n).
+;;;; x4000-x5fff: RAM bank number select.
+;;;; x6000-x7fff: Banking Mode Select. Defaults to 0.
+;;;;   0: Simple ROM Banking Mode
+;;;;   1: RAM Banking Mode/Advanced ROM Banking mode.
+
+
+;; Incorrect after startup?
+;;    #xff48-#xff49: #x00 instead of #xff
+;;     palette colors. irrelevant?
+
+;; Move redraw of lcd display outside of execute!
+
+#+nil
+(defparameter *bios-rom*
+  (let* ((bios-rom (make-array 256 :element-type '(unsigned-byte 8)))
+	 (*memory* bios-rom))
+    (read-rom-file-into-memory! "gb_bios.bin")
+    bios-rom))
+
+#+nil
+(disassemble-rom-into-text *bios-rom* 0)
