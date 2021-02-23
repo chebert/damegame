@@ -388,10 +388,13 @@ updates based on timestep, and renders to the screen."
 (defun event-initialization-finished ()
   (alist :type :initialization-finished))
 
+(defvar *sdl-wrapper-initialized?* nil)
 (defun main! ()
   "Entry point into the application. Recompiles the SDL-Wrapper, creates the window, 
 and starts the update loop, then afterwards closes SDL and cleans up the application."
-  (recompile-sdl-wrapper-dll!)
+  (unless *sdl-wrapper-initialized?*
+    (recompile-sdl-wrapper-dll!)
+    (setq *sdl-wrapper-initialized?* t))
   (unwind-protect 
        (progn
 	 (setq *quit?* nil)
@@ -1120,6 +1123,7 @@ Test-fn and handle-fn are both functions of event."
 (defvar *memory* (reset-memory!))
 (defvar *ram-enabled?* nil)
 (defvar *rom-bank* 1)
+(defvar *cart-rom*)
 (defun mem-write! (addr byte &optional (memory *memory*))
   (cond
     ((<= 0 addr #x1fff) (setq *ram-enabled?* (= #xA (logand #xF byte))))
@@ -1193,10 +1197,13 @@ Test-fn and handle-fn are both functions of event."
 	*lcd-start-cycle* nil
 	*ram-enabled?* nil
 	*rom-bank* 1
-	*pc-path* (pc-path-init))
+	*pc-path* (pc-path-init)
+	*memory-updates* ())
   (reset-memory!)
 
   (read-rom-file-into-memory! *cart-filename*)
+  (setq *cart-rom* (read-rom-file! *cart-filename*))
+
   (read-rom-file-into-memory! "gb_bios.bin")
   
   (update-visualizations! nil)
@@ -1209,9 +1216,12 @@ Test-fn and handle-fn are both functions of event."
 (defun pc-path-init ()
   ())
 
+(defvar *memory-updates* nil)
 (defun step-cpus! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
   (pushnew (cpu-pc (cpu-current)) *pc-path*)
+  (when-let (memory (aval :memory (instr-effects (cpu-current) *memory*)))
+    (push (cons (cpu-pc (cpu-current)) memory) *memory-updates*))
   (execute! (cpu-current) *memory*))
 
 (defun handle-execute-button-clicked! ()
@@ -1308,6 +1318,57 @@ Test-fn and handle-fn are both functions of event."
      (mapcar (fn (cons % (green))) just-next)
      (mapcar (fn (cons % (yellow))) both))))
 
+(defun memory-name (addr)
+  (cond
+    ((<= addr #x3fff) :rom-bank0)
+    ((<= addr #x7fff) :rom-bank1)
+    ((<= addr #x9fff) :vram)
+    ((<= addr #xbfff) :external-ram)
+    ((<= addr #xCFFF) :work-ram-bank0)
+    ((<= addr #xdfff) :work-ram-bank1)
+    ((<= addr #xfdff) :unused)
+    ((<= addr #xfe9f) :oam)
+    ((<= addr #xfeff) :unused)
+    ((= addr #xff00) :controller)
+    ((= addr #xff01) :serial-transfer-data)
+    ((= addr #xff02) :serial-transfer-control)
+    ((= addr #xff03) :unknown)
+    ((= addr #xff04) :divider)
+    ((= addr #xff05) :timer-counter)
+    ((= addr #xff06) :timer-modulo)
+    ((= addr #xff07) :timer-control)
+    ((= addr #xff07) :timer-control)
+    ((< addr #xff10) :unknown)
+    ((<= addr #xff26) :sound)
+    ((< addr #xff30) :unknown)
+    ((<= addr #xff3f) :waveform-ram)
+    ((= addr #xff40) :lcd-control)
+    ((= addr #xff41) :lcd-status)
+    ((= addr #xff42) :scroll-y)
+    ((= addr #xff43) :scroll-x)
+    ((= addr #xff44) :lcdc-y-coordinate)
+    ((= addr #xff45) :lcdc-y-compare)
+    ((= addr #xff46) :dma-start-address)
+    ((= addr #xff47) :bg-palette-data)
+    ((= addr #xff48) :obj0-palette-data)
+    ((= addr #xff49) :obj1-palette-data)
+    ((= addr #xff4a) :window-y)
+    ((= addr #xff4b) :window-x)
+    ((< addr #xff50) :unknown)
+    ((= addr #xff50) :boot-rom-disable)
+    ((< addr #xff80) :unknown)
+    ((< addr #xfffe) :high-ram)
+    ((= addr #xffff) :interrupt-enable)))
+
+(defun updated-memory-text (memory)
+  (format nil "Memory: ~A" (if memory
+			       (let* ((binding (first memory)))
+				 (format nil "~A (~A): ~A"
+					 (hex16-text (first binding))
+					 (memory-name (first binding))
+					 (register8-text (second binding))))
+			       "-")))
+
 (defun update-visualizations! (&optional (cpu-previous (cpu-previous)))
   (let* ((prev-disassembly-text (if cpu-previous
 				    (disassembly-text cpu-previous *memory*)
@@ -1315,13 +1376,17 @@ Test-fn and handle-fn are both functions of event."
     
     (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
     (amap (fn (update-cpu-visualization! %%)) *cpu-visualizations*)
+
+    (load-text-texture! :updated-memory :font
+			(updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*))))
     
     (load-text-texture! :disassembly :font (if prev-disassembly-text
 					       prev-disassembly-text
 					       "(Disassembly)"))
     (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
     (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
-    (update-lcd-visualizations!)))
+    (update-lcd-visualizations!)
+    (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
@@ -3714,7 +3779,8 @@ Waits for a reset signal."
 	  ;; TODO: unlock OAM and VRAM	 
 	  #+nil
 	  (print (alist :h-blank elapsed-cycles))
-	  
+
+	  ;; TODO: Optimize lcd-pixel-buffer-copy
 	  (copy-scanline-to-lcd-pixel-buffer!
 	   (scanline-background-pixels (lcd-scanline))
 	   (lcd-scanline))
@@ -3726,7 +3792,6 @@ Waits for a reset signal."
 	  #+nil
 	  (print (alist :v-blank elapsed-cycles))
 
-	  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
 	  (when (interrupt-v-blank-enabled?)
 	    (set-v-blank-interrupt!))
 	  (when (lcds-v-blank-interrupt-enabled?)
@@ -3754,7 +3819,8 @@ Waits for a reset signal."
 	  )))
       ((= mode 1)
        ;; When in v-blank mode, update the scanline
-       (let* ((old-scanline (lcd-scanline)))
+       (let* (;;(old-scanline (lcd-scanline))
+	      )
 	 (set-lcd-scanline! (lcd-scanline-from-cycles elapsed-cycles num-sprites))
 	 #+nil
 	 (when (/= old-scanline (lcd-scanline))
@@ -3778,6 +3844,10 @@ Waits for a reset signal."
 	    ;; TODO: watch for a hide main-panel instead.
 	    (event-hide-matcher :game)
   (remove-drawing! :lcd))
+
+(definit handle-updated-memory-visualization
+  (load-text-texture! :updated-memory :font "Memory: ")
+  (add-drawing! :updated-memory (drawing 1 (fn (draw-full-texture-id! :updated-memory (g2 32 15))))))
 
 ;; Visualizations
 ;;; Sprites
@@ -3846,9 +3916,13 @@ Waits for a reset signal."
 	  (let* ((name (aval :name disassembly)))
 	    (if (listp name)
 		(let* ((args (rest name))
-		       (bindings (mapcar (fn (case %
-					       ((:@imm8 :@imm16) (format nil "(~A)" (hex16-text (aval :addr disassembly %))))
-					       (t (aval % disassembly %)))) args)))
+		       (bindings
+			 (mapcar (fn (cond
+				       ((or (member % '(:@imm8 :@imm16))
+					    (and (eql (first name) :jr)
+						 (eql % :imm8)))
+					(format nil "(~A)" (hex16-text (aval :addr disassembly %))))
+				       (t (aval % disassembly %)))) args)))
 		  (with-output-to-string (s)
 		    (format s "~A " (first name))
 		    (loop for binding in bindings
@@ -3870,8 +3944,6 @@ Waits for a reset signal."
 (defun memory-bank (rom bank)
   (subseq rom (* bank (* 16 1024)) (* (1+ bank) (* 16 1024))))
 
-#+nil
-(defparameter *cart-rom* (read-rom-file! *cart-filename*))
 #+nil
 (disassemble-instr (make-cpu :pc 1229) (subseq *cart-rom* 0 (* 16 1024)))
 #+nil
@@ -3930,11 +4002,16 @@ Waits for a reset signal."
 #+nil
 (disassemble-rom-into-text *bios-rom* 0)
 
-;; TODO: don't need to re-compile SDL every time I run main
+;; TODO: pc-path should take into account which rom-bank we are in. (rom-bank . pc)
 
 ;; Add in more visualizations
-;;  A list of memory-writes in between continues
 ;;  the last edited piece of memory
+;;  A list of memory-writes in between continues
 ;;  add breakpoints that watch for changes in memory
-;;  set previous cpu to be the instruction right before disassembly
 ;;  set color of lcd & interrupt enable registers based on changes to memory
+
+
+(with-output-to-string (s)
+  (mapcar (fn
+	    (format s "~A: ~A~%" (car %) (updated-memory-text (cdr %))))
+	  (reverse (remove 7 *memory-updates* :key 'car))))
