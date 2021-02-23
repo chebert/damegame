@@ -1118,11 +1118,11 @@ Test-fn and handle-fn are both functions of event."
 			     :initial-element 0)))
 
 (defvar *memory* (reset-memory!))
-(defvar *ram-enabled? nil)
+(defvar *ram-enabled?* nil)
 (defvar *rom-bank* 1)
 (defun mem-write! (addr byte &optional (memory *memory*))
   (cond
-    ((<= 0 addr #x1fff) (setq *ram-enabled? (= #xA (logand #xF byte))))
+    ((<= 0 addr #x1fff) (setq *ram-enabled?* (= #xA (logand #xF byte))))
     ((<= 2000 addr #x3fff)
      (setq *rom-bank* (max 1 (logand #b11111 byte)))
      (copy-memory-bank-into-memory!
@@ -1191,8 +1191,9 @@ Test-fn and handle-fn are both functions of event."
   (setq *cpus* (list (cpu-initial)))
   (setq *current-cycle* 0
 	*lcd-start-cycle* nil
-	*ram-enabled? nil
-	*rom-bank* 1)
+	*ram-enabled?* nil
+	*rom-bank* 1
+	*pc-path* (pc-path-init))
   (reset-memory!)
 
   (read-rom-file-into-memory! *cart-filename*)
@@ -1204,9 +1205,17 @@ Test-fn and handle-fn are both functions of event."
 	do (setf (aref *lcd-pixel-buffer* i) 255))
   (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
 
-(defun handle-execute-button-clicked! ()
+(defvar *pc-path* nil)
+(defun pc-path-init ()
+  ())
+
+(defun step-cpus! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
-  (execute! (cpu-current) *memory*)
+  (pushnew (cpu-pc (cpu-current)) *pc-path*)
+  (execute! (cpu-current) *memory*))
+
+(defun handle-execute-button-clicked! ()
+  (step-cpus!)
   (update-visualizations!))
 
 (defun split-lines (text)
@@ -1324,11 +1333,9 @@ Test-fn and handle-fn are both functions of event."
   (update-visualizations!))
 
 (defbutton continue (button "Continue!" 1 (g2 37 30) :font)
-  (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
-  (execute! (cpu-current) *memory*)
+  (step-cpus!)
   (loop until (break? (cpu-current) *memory*)
-	do (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
-	   (execute! (cpu-current) *memory*))
+	do (step-cpus!))
   (update-visualizations!))
 
 (let* ((top 34))
@@ -3705,7 +3712,7 @@ Waits for a reset signal."
 	 (0
 	  ;; start h-blank
 	  ;; TODO: unlock OAM and VRAM	 
-
+	  #+nil
 	  (print (alist :h-blank elapsed-cycles))
 	  
 	  (copy-scanline-to-lcd-pixel-buffer!
@@ -3716,6 +3723,7 @@ Waits for a reset signal."
 	    (set-lcd-interrupt!)))
 	 (1
 	  ;; start v-blank
+	  #+nil
 	  (print (alist :v-blank elapsed-cycles))
 
 	  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
@@ -3725,6 +3733,7 @@ Waits for a reset signal."
 	    (set-lcd-interrupt!)))
 	 (2
 	  ;; Start OAM
+	  #+nil
 	  (print (alist :oam elapsed-cycles))
 	  (set-lcd-scanline! (if (= current-mode 1)
 				 0 ; reset if we just finished v-blank
@@ -3738,6 +3747,7 @@ Waits for a reset signal."
 	  (when (lcds-oam-interrupt-enabled?)
 	    (set-lcd-interrupt!)))
 	 (3
+	  #+nil
 	  (print (alist :vram elapsed-cycles))
 	  ;; start LCD display
 	  ;; TODO: lock VRAM
@@ -3746,6 +3756,7 @@ Waits for a reset signal."
        ;; When in v-blank mode, update the scanline
        (let* ((old-scanline (lcd-scanline)))
 	 (set-lcd-scanline! (lcd-scanline-from-cycles elapsed-cycles num-sprites))
+	 #+nil
 	 (when (/= old-scanline (lcd-scanline))
 	   (print (alist :scanline (lcd-scanline)
 			 :elapsed-cycles elapsed-cycles))))))))
@@ -3853,8 +3864,8 @@ Waits for a reset signal."
 (undefbreakpoint update-scroll-y (cpu memory)
 		 (member (cpu-pc cpu) '(#x86)))
 
-(undefbreakpoint end-of-bios (cpu memory)
-		 (>= (cpu-pc cpu) #x100))
+(defbreakpoint end-of-bios (cpu memory)
+  (>= (cpu-pc cpu) #x100))
 
 (defun memory-bank (rom bank)
   (subseq rom (* bank (* 16 1024)) (* (1+ bank) (* 16 1024))))
@@ -3918,3 +3929,12 @@ Waits for a reset signal."
 
 #+nil
 (disassemble-rom-into-text *bios-rom* 0)
+
+;; TODO: don't need to re-compile SDL every time I run main
+
+;; Add in more visualizations
+;;  A list of memory-writes in between continues
+;;  the last edited piece of memory
+;;  add breakpoints that watch for changes in memory
+;;  set previous cpu to be the instruction right before disassembly
+;;  set color of lcd & interrupt enable registers based on changes to memory
