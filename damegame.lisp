@@ -1241,7 +1241,7 @@ Test-fn and handle-fn are both functions of event."
   (copy-memory-bank-into-memory! (memory-bank *cart-rom* 0) :start-addr 0)
   (copy-memory-bank-into-memory! (memory-bank *cart-rom* *rom-bank*) :start-addr #x4000)
 
-  (update-visualizations! nil)
+  (update-visualizations!)
 
   (loop for i from 0 below (length *lcd-pixel-buffer*)
 	do (setf (aref *lcd-pixel-buffer* i) 255))
@@ -1283,16 +1283,33 @@ Test-fn and handle-fn are both functions of event."
 					     (g1 29)
 					     (g1 (1+ (length lines))))))))))
 
-(defhandler handle-initialize-cpu-visualization (event)
-	    (event-matcher-initialization-finished)
-  (load-text-texture! :disassembly :font "(Disassembly)")
-  (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
+(defvisualization :instruction-description
+    (alist :initialization
+	   (fn (initialize-description! (aval :description (next-instr (cpu-current) *memory*))))
+	   :update
+	   (fn (initialize-description! (aval :description (next-instr (cpu-current) *memory*))))))
 
-  (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
-  
-  (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
-  (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29))))
+(defvisualization :next-disassembly
+    (alist :initialization
+	   (fn
+	     (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
+	     (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29))))
 
+	   :update
+	   (fn (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*)))))
+
+(defvisualization :disassembly
+    (alist :initialization
+	   (fn
+	     (load-text-texture! :disassembly :font "(Disassembly)")
+	     (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13))))
+	   :update
+	   (fn
+	     (let* ((cpu-previous (cpu-previous)))
+	       (load-text-texture! :disassembly :font
+				   (if cpu-previous
+				       (disassembly-text cpu-previous *memory*)
+				       "(Disassembly)"))))))
 
 #+nil
 (command! (reset!))
@@ -1403,22 +1420,13 @@ Test-fn and handle-fn are both functions of event."
 					 (register8-text (second binding))))
 			       "-")))
 
-(defun update-visualizations! (&optional (cpu-previous (cpu-previous)))
-  (let* ((prev-disassembly-text (if cpu-previous
-				    (disassembly-text cpu-previous *memory*)
-				    "(Disassembly)")))
-    
-    (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
-    (amap (fn (update-cpu-visualization! %%)) *cpu-visualizations*)
-    
-    (load-text-texture! :disassembly :font (if prev-disassembly-text
-					       prev-disassembly-text
-					       "(Disassembly)"))
-    (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
-    (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
-    (update-lcd-visualizations!)
-    ;;(replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
-    (event! (alist :type :update-visualization))))
+(defun update-visualizations! ()
+  (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
+  (amap (fn (update-cpu-visualization! %%)) *cpu-visualizations*)
+
+  (update-lcd-visualizations!)
+  ;;(replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
+  (event! (alist :type :update-visualization)))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
@@ -3446,7 +3454,7 @@ Waits for a reset signal."
 
 
 (defun update-lcd-visualizations! ()
-  (unless (draw-memory-visualizations?)
+  (unless (not (eql *main-panel* :lcd-debug))
     (initialize-color-palettes!)
     (initialize-background-visualization!)
     (initialize-block-visualization!)
@@ -3455,11 +3463,12 @@ Waits for a reset signal."
     (load-text-texture! :lcd-status-compare-scanline :font "CmpScanline: ")
     (load-text-texture! :lcd-status-compare-scanline-data :font (u8-text (lcd-scanline-compare)))
     (load-text-texture! :lcd-status-mode :font "Mode: ")
-    (load-text-texture! :lcd-status-mode-data :font (ecase (lcd-mode)
-						      (0 "H-Blank")
-						      (1 "V-Blank")
-						      (2 "OAM")
-						      (3 "OAM/VRAM")))
+    (load-text-texture! :lcd-status-mode-data :font (let* ((mode (lcd-mode)))
+						      (cond
+							((= mode *h-blank-mode*) "H-Blank")
+							((= mode *v-blank-mode*) "V-Blank")
+							((= mode *oam-mode*) "OAM")
+							((= mode *vram-mode*) "OAM/VRAM"))))
     (load-text-texture! :lcd-status-coincidence? :font "Coincidence?: ")
     (load-text-texture! :lcd-status-dma-address :font "DMA Start: ")
     (load-text-texture! :lcd-status-dma-address-data :font (hex16-text (lcd-dma-start)))
@@ -3476,6 +3485,30 @@ Waits for a reset signal."
 							 "1x"))
     (load-text-texture! :lcdc-object-display? :font "Object Disp?: ")
     (load-text-texture! :lcdc-background/window-display? :font "BG/Win Disp?: ")))
+
+(defvisualization :lcd-debug
+    (alist :initialization
+	   (fn (case *main-panel*
+		 (:memory (display-memory-visualiztions!))
+		 (:lcd-debug (display-lcd-visualiztions!))))
+	   :update
+	   (fn (update-lcd-visualizations!))
+	   :display-event-handler
+	   (display-event-handler
+	    :lcd-visualizations
+	    (fn
+	      (setq *main-panel* :lcd-debug)
+	      (update-lcd-visualizations!)
+
+	      (mapcar 'create-button! (lcd-buttons))
+	      (add-drawing! :lcd-visualizations (drawing 1 (fn (draw-lcd-visualizations!))))
+	      (add-drawing! :background-scroll (background-scroll-drawing))))
+	   :hide-event-handler
+	   (hide-event-handler
+	    :lcd-visualizations
+	    (fn
+	      (mapcar (fn (remove-button! (aval :id %))) (lcd-buttons))
+	      (mapcar 'remove-drawing! '(:lcd-visualizations :background-scroll))))))
 
 (defun draw-lcd-visualizations! ()
   (draw-sprites! (g2 16 14))
@@ -3537,27 +3570,6 @@ Waits for a reset signal."
 	       (draw-rect! (+ (g1 3) (scroll-x))
 			   (+ (g1 14) (scroll-y))
 			   160 144))))
-
-;; Initialize the LCD/Memory visualizations when we startup
-(defhandler handle-initialize-memory/lcd-visualizations (event)
-	    (event-matcher-initialization-finished)
-  (if (draw-memory-visualizations?)
-      (display-memory-visualiztions!)
-      (display-lcd-visualiztions!)))
-
-;; Display/Hide LCD Visualizations (when toggling memory/lcd vis)
-(defhandler handle-display-lcd-visualizations (event)
-	    (event-display-matcher :lcd-visualizations)
-  (setq *main-panel* :lcd-debug)
-  (update-lcd-visualizations!)
-
-  (mapcar 'create-button! (lcd-buttons))
-  (add-drawing! :lcd-visualizations (drawing 1 (fn (draw-lcd-visualizations!))))
-  (add-drawing! :background-scroll (background-scroll-drawing)))
-(defhandler handle-hide-lcd-visualizations (event)
-	    (event-hide-matcher :lcd-visualizations)
-  (mapcar (fn (remove-button! (aval :id %))) (lcd-buttons))
-  (mapcar 'remove-drawing! '(:lcd-visualizations :background-scroll)))
 
 ;; Display/Hide Memory Visualizations (when toggling memory/lcd vis)
 (defhandler handle-display-memory-visualizations (event)
