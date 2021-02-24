@@ -221,12 +221,18 @@ From the plist (id value id2 value2 ...)"
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *resets* ()
-    "A-list of variable-name, to (fn) which resets the variable-name."))
+    "A-list of variable-name, to (fn) which resets the variable-name.")
+  (defvar *visualizations* ()))
 
 (defmacro defreset-var (var-name reset-form &optional documentation)
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
+  `(progn
      (defvar ,var-name nil ,documentation)
      (asetq ',var-name (lambda () ,reset-form) *resets*)))
+(defmacro defvisualization (id visualization)
+  `(asetq ,id ,visualization *visualizations*))
+(defmacro undefvisualization (id &rest ignored)
+  (declare (ignore ignored))
+  `(setq *visualizations* (aremove *visualizations* ,id)))
 
 ;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
 ;; something like a binary tree may be better
@@ -284,7 +290,7 @@ From the plist (id value id2 value2 ...)"
   (and (<= (x r) (x v2) (1- (+ (x r) (w r))))
        (<= (y r) (y v2) (1- (+ (y r) (h r))))))
 
-(defvar *event-handlers* (make-hash-table)
+(defvar *event-handlers* (make-hash-table :test 'equal)
   "A hash-table of runtime-created event-handlers.")
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *compiled-event-handlers* (make-hash-table)
@@ -425,10 +431,14 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (setq *events* ())
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (load-font! :font "DroidSansMono.ttf" 16)
-	 (event! (event-initialization-finished))
+
+	 (amap 'register-visualization! *visualizations*)
+	 (notify-handlers! (event-initialization-finished))
+
 	 (unless *system-initialized?*
 	   (reset!)
 	   (setq *system-initialized?* t))
+
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
@@ -443,6 +453,8 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
       (setq *tile-map-texture* nil))
     (quit!)))
 
+(defun event-matcher-update-visualization ()
+  (fn (eql (aval :type %) :update-visualization)))
 (defun event-matcher-font-opened (font-id)
   (fn (event-font-opened? % font-id)))
 (defun event-matcher-initialization-finished ()
@@ -548,7 +560,7 @@ Test-fn and handle-fn are both functions of event."
     (t (grey 60))))
 
 (defhandler handle-intialize-buttons (event)
-	    (event-matcher-font-opened :font)
+	    (event-matcher-initialization-finished)
   (amap (fn (initialize-button! %)) *buttons*))
 
 ;;; Lifetime of a button
@@ -784,7 +796,7 @@ Test-fn and handle-fn are both functions of event."
   (eql *main-panel* :memory))
 
 (defhandler handle-initialize-memory-visualization (event)
-	    (event-matcher-font-opened :font)
+	    (event-matcher-initialization-finished)
   (amap 'initialize-memory-visualization! *memory-visualizations*)
   (add-drawing! :memory-visualizations (drawing 1 (fn (when (draw-memory-visualizations?)
 							(draw-memory-visualizations!))))))
@@ -930,7 +942,7 @@ Test-fn and handle-fn are both functions of event."
 		       (fn (or (third *cpus*) (cpu-initial)))))
 
 (defhandler load-cpu-visualization (event)
-	    (event-matcher-font-opened :font)
+	    (event-matcher-initialization-finished)
   (load-text-texture! :no :font "[No]")
   (load-text-texture! :yes :font "[Yes]")
   (load-text-texture! :zero :font "Zero? ")
@@ -1272,7 +1284,7 @@ Test-fn and handle-fn are both functions of event."
 					     (g1 (1+ (length lines))))))))))
 
 (defhandler handle-initialize-cpu-visualization (event)
-	    (event-matcher-font-opened :font)
+	    (event-matcher-initialization-finished)
   (load-text-texture! :disassembly :font "(Disassembly)")
   (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13)))
 
@@ -1280,6 +1292,7 @@ Test-fn and handle-fn are both functions of event."
   
   (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
   (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29))))
+
 
 #+nil
 (command! (reset!))
@@ -1397,9 +1410,6 @@ Test-fn and handle-fn are both functions of event."
     
     (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
     (amap (fn (update-cpu-visualization! %%)) *cpu-visualizations*)
-
-    (load-text-texture! :updated-memory :font
-			(updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*))))
     
     (load-text-texture! :disassembly :font (if prev-disassembly-text
 					       prev-disassembly-text
@@ -1407,7 +1417,8 @@ Test-fn and handle-fn are both functions of event."
     (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
     (initialize-description! (aval :description (next-instr (cpu-current) *memory*)))
     (update-lcd-visualizations!)
-    (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)))
+    ;;(replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
+    (event! (alist :type :update-visualization))))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
@@ -1446,7 +1457,7 @@ Test-fn and handle-fn are both functions of event."
 	  (truncate *mouse-y* *grid-size*)))
 
 (defhandler initialize-mouse-cursor-pos-text (event)
-	    (event-matcher-font-opened :font)
+	    (event-matcher-initialization-finished)
   (load-text-texture! :mouse-pos :font (mouse-pos-text))
   (add-mouse-pos-drawing!))
 
@@ -3529,7 +3540,7 @@ Waits for a reset signal."
 
 ;; Initialize the LCD/Memory visualizations when we startup
 (defhandler handle-initialize-memory/lcd-visualizations (event)
-	    (event-matcher-font-opened :font)
+	    (event-matcher-initialization-finished)
   (if (draw-memory-visualizations?)
       (display-memory-visualiztions!)
       (display-lcd-visualiztions!)))
@@ -3619,7 +3630,7 @@ Waits for a reset signal."
     (draw-full-texture-id! (if (lcds-h-blank-interrupt-enabled?) :yes :no) (g2 column y))))
 
 (defmacro definit (name &body body)
-  `(defhandler ,name (event) (event-matcher-font-opened :font)
+  `(defhandler ,name (event) (event-matcher-initialization-finished)
      ,@body))
 
 (definit handle-initialize-interrupt-enabled-visualization
@@ -3736,9 +3747,11 @@ Waits for a reset signal."
    tile-data-references))
 
 
+#+nil
 (scanline-background-tile-data-references (background-tile-map) 64 0 0)
 ;; => (0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 0 25 0 0 0 0)
 
+#+nil
 (scanline-background-tile-data-addresses
  (8000-addressing-mode?)
  (scanline-background-tile-data-references (background-tile-map) 64 0 0))
@@ -3749,6 +3762,7 @@ Waits for a reset signal."
 (defun tile-data-color-byte-pair-y (tile-data tile-pixel-y)
   (subseq tile-data (* 2 tile-pixel-y) (* 2 (1+ tile-pixel-y))))
 
+#+nil
 (mapcar
  (fn (tile-data-color-byte-pair-y (tile-data %) 2))
  (scanline-background-tile-data-addresses
@@ -3847,28 +3861,6 @@ Waits for a reset signal."
 	 (when (/= old-scanline (lcd-scanline))
 	   (print (alist :scanline (lcd-scanline)
 			 :elapsed-cycles elapsed-cycles))))))))
-
-(definit handle-initialize-lcd-visualization
-  (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
-  (loop for i from 0 below (length *lcd-pixel-buffer*)
-	do (setf (aref *lcd-pixel-buffer* i) 255))
-  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
-
-(defhandler handle-display-game (event)
-	    (event-display-matcher :game)
-  (setq *main-panel* :game)
-  (add-drawing! :lcd (drawing 3 (fn (let* ((texture (gethash :lcd *textures*)))
-				      (draw-texture! texture
-						     0 0 (texture-width texture) (texture-height texture)
-						     (g1 2) (g1 3) (* 160 3) (* 144 3)))))))
-(defhandler handle-hide-game (event)
-	    ;; TODO: watch for a hide main-panel instead.
-	    (event-hide-matcher :game)
-  (remove-drawing! :lcd))
-
-(definit handle-updated-memory-visualization
-  (load-text-texture! :updated-memory :font "Memory: ")
-  (add-drawing! :updated-memory (drawing 1 (fn (draw-full-texture-id! :updated-memory (g2 32 15))))))
 
 ;; Visualizations
 ;;; Sprites
@@ -4007,3 +3999,57 @@ Waits for a reset signal."
   (mapcar (fn
 	    (format s "~A: ~A~%" (car %) (updated-memory-text (cdr %))))
 	  (reverse (remove 7 *memory-updates* :key 'car))))
+
+(defun register-visualization! (id visualization)
+  (register-handler! (cons :initialization id)
+		     (event-handler (event-matcher-initialization-finished)
+				    (aval :initialization visualization)))
+  (when-let (display-event-handler (aval :display-event-handler visualization))
+    (register-handler! (cons :display id) display-event-handler))
+  (when-let (hide-event-handler (aval :hide-event-handler visualization))
+    (register-handler! (cons :hide id) hide-event-handler))
+  (when-let (update-event-handler (event-handler (event-matcher-update-visualization)
+						 (aval :update visualization)))
+    (register-handler! (cons :update id) update-event-handler)))
+
+(defun display-event-handler (display-id fn)
+  (event-handler
+   (event-display-matcher display-id)
+   (fn (funcall fn))))
+(defun hide-event-handler (panel-id fn)
+  (event-handler
+   (event-hide-matcher panel-id)
+   (fn
+     (funcall fn))))
+
+(defvisualization :main-lcd
+    (alist :initialization
+	   (fn
+	     (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
+	     (loop for i from 0 below (length *lcd-pixel-buffer*)
+		   do (setf (aref *lcd-pixel-buffer* i) 255))
+	     (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
+	   :display-event-handler
+	   (display-event-handler
+	    :game
+	    (fn
+	      (setq *main-panel* :game)
+	      (add-drawing! :lcd (drawing 3 (fn (let* ((texture (gethash :lcd *textures*)))
+						  (draw-texture! texture
+								 0 0 (texture-width texture) (texture-height texture)
+								 (g1 2) (g1 3) (* 160 3) (* 144 3))))))))
+	   :hide-event-handler
+	   (hide-event-handler :game (fn (remove-drawing! :lcd)))
+	   :update
+	   (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
+
+
+(defvisualization :updated-memory
+    (alist :initialization
+	   (fn
+	     (load-text-texture! :updated-memory :font "Memory: -")
+	     (add-drawing! :updated-memory (drawing 1 (fn (draw-full-texture-id! :updated-memory (g2 32 15))))))
+	   :update
+	   (fn
+	     (load-text-texture! :updated-memory :font
+				 (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))))
