@@ -514,3 +514,22 @@ register A and stores the result in register A" register-key)
 
 ;;; dma transfer start: (x cycles)
 ;;; dma transfer end: (copy memory)
+
+
+;; MBC1
+;;;; x0000-x3fff:
+;;;;   ROM Bank. Normally the first 16 Kb of the cart. Could be banks 20/40/60 in mode 1.
+;;;; x4000-x7FFF:
+;;;;   ROM Bank 01-7f. Any of the banks not-addressable by the first ROM bank area.
+;;;; xA000-xBFFF:
+;;;;   RAM Bank 00-03.
+;;; Control Registers
+;;;; x0000-x1fff:
+;;;;   x0A: enable RAM
+;;;;   x00: disable RAM
+;;;; x2000-x3fff: (2nd) ROM bank number select. Defaults to 1.
+;;;;   N: sets the number of banks to (logand #b11111 n).
+;;;; x4000-x5fff: RAM bank number select.
+;;;; x6000-x7fff: Banking Mode Select. Defaults to 0.
+;;;;   0: Simple ROM Banking Mode
+;;;;   1: RAM Banking Mode/Advanced ROM Banking mode.

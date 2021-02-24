@@ -11,6 +11,11 @@
   
   (defvar *commands* ()))
 
+(defmacro when-let ((name condition-form) &body body)
+  `(let* ((,name ,condition-form))
+     (when ,name
+       ,@body)))
+
 (defmacro command! (&body body)
   `(if *quit?*
        (progn ,@body)
@@ -175,18 +180,22 @@ From the plist (id value id2 value2 ...)"
     (if pair
 	(cdr pair)
 	not-present)))
-(defun aremove (alist &rest keys)
-  "Return a new alist with keys removed from alist."
-  (remove-if (fn (member % keys))
-	     alist
-	     :key 'car))
+
 (defun akeep (alist &rest keys)
   (remove-if-not (fn (member % keys))
 		 alist
 		 :key 'car))
-(defun aset (key value alist)
-  "Return a new alist with the value associated with key added or replaced."
-  (acons key value (aremove alist key)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun aremove (alist &rest keys)
+    "Return a new alist with keys removed from alist."
+    (remove-if (fn (member % keys))
+	       alist
+	       :key 'car))
+  (defun aset (key value alist)
+    "Return a new alist with the value associated with key added or replaced."
+    (acons key value (aremove alist key))))
+
 (defun akeys (alist)
   "Return a list of all keys in alist."
   (mapcar 'car alist))
@@ -206,8 +215,18 @@ From the plist (id value id2 value2 ...)"
 	  alist))
 (defun akey? (key alist)
   (member key alist :key 'car))
+
 (defmacro asetq (id value alist-name)
   `(setq ,alist-name (aset ,id ,value ,alist-name)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defvar *resets* ()
+    "A-list of variable-name, to (fn) which resets the variable-name."))
+
+(defmacro defreset-var (var-name reset-form &optional documentation)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (defvar ,var-name nil ,documentation)
+     (asetq ',var-name (lambda () ,reset-form) *resets*)))
 
 ;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
 ;; something like a binary tree may be better
@@ -389,6 +408,7 @@ updates based on timestep, and renders to the screen."
   (alist :type :initialization-finished))
 
 (defvar *sdl-wrapper-initialized?* nil)
+(defvar *system-initialized?* nil)
 (defun main! ()
   "Entry point into the application. Recompiles the SDL-Wrapper, creates the window, 
 and starts the update loop, then afterwards closes SDL and cleans up the application."
@@ -406,6 +426,9 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (load-font! :font "DroidSansMono.ttf" 16)
 	 (event! (event-initialization-finished))
+	 (unless *system-initialized?*
+	   (reset!)
+	   (setq *system-initialized?* t))
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
@@ -643,7 +666,7 @@ Test-fn and handle-fn are both functions of event."
   (make-cpu :a 0 :b 0 :c 0 :d 0 :e 0 :f-lo 0 :h 0 :l 0 :sp 0 :pc 0
 	    :zero? nil :half-carry? nil :subtraction? nil :ime? nil))
 
-(defvar *cpus* (list (cpu-initial)))
+(defreset-var *cpus* (list (cpu-initial)))
 (defun cpu-current ()
   (first *cpus*))
 (defun cpu-previous ()
@@ -1115,15 +1138,17 @@ Test-fn and handle-fn are both functions of event."
 (defun cart-version-number (cart-rom-header)
   (aref cart-rom-header #x14c))
 
-(defun reset-memory! ()
-  (setq *memory* (make-array (list (1+ #xffff))
-			     :element-type '(unsigned-byte 8)
-			     :initial-element 0)))
+(defun bios-rom-enabled? (memory)
+  (zerop (aref memory #xff50)))
 
-(defvar *memory* (reset-memory!))
-(defvar *ram-enabled?* nil)
-(defvar *rom-bank* 1)
-(defvar *cart-rom*)
+(defreset-var *memory* (make-array (list (1+ #xffff))
+				   :element-type '(unsigned-byte 8)
+				   :initial-element 0))
+(defreset-var *ram-enabled?* nil)
+(defreset-var *rom-bank* 1)
+(defreset-var *bios-rom* (read-rom-file! "gb_bios.bin"))
+(defreset-var *cart-rom* (read-rom-file! *cart-filename*))
+
 (defun mem-write! (addr byte &optional (memory *memory*))
   (cond
     ((<= 0 addr #x1fff) (setq *ram-enabled?* (= #xA (logand #xF byte))))
@@ -1134,7 +1159,10 @@ Test-fn and handle-fn are both functions of event."
       :start-addr #x4000))
     (t (setf (aref memory addr) byte))))
 (defun mem-byte (addr &optional (memory *memory*))
-  (aref memory addr))
+  (if (and (bios-rom-enabled? memory)
+	   (< addr #x100))
+      (aref *bios-rom* addr)
+      (aref memory addr)))
 
 (defun copy-memory-bank-into-memory! (memory-bank &key (start-addr 0))
   (loop for i below #x4000
@@ -1187,39 +1215,32 @@ Test-fn and handle-fn are both functions of event."
 	      (list* (cons :name (aval :name instr)) (funcall (aval :disassemble-instr instr) cpu memory))
 	      (alist :name '(:unknown :bytes) :bytes (hex8-text byte)))))))
 
-(run-tests!)
-
 (defvar *instruction-description-ids* (loop for i below 8 collecting (gensym)))
 
+;; Variables that get reset:
+;;   Variables that are part of the system
+;;   variables that track the behavior of the system.
+
+(defun reset-vars! ()
+  (amap (fn (set % (funcall %%))) *resets*))
+
 (defun reset! ()
-  (setq *cpus* (list (cpu-initial)))
-  (setq *current-cycle* 0
-	*lcd-start-cycle* nil
-	*ram-enabled?* nil
-	*rom-bank* 1
-	*pc-path* (pc-path-init)
-	*memory-updates* ())
-  (reset-memory!)
+  (reset-vars!)
+  (copy-memory-bank-into-memory! (memory-bank *cart-rom* 0) :start-addr 0)
+  (copy-memory-bank-into-memory! (memory-bank *cart-rom* *rom-bank*) :start-addr #x4000)
 
-  (read-rom-file-into-memory! *cart-filename*)
-  (setq *cart-rom* (read-rom-file! *cart-filename*))
-
-  (read-rom-file-into-memory! "gb_bios.bin")
-  
   (update-visualizations! nil)
 
   (loop for i from 0 below (length *lcd-pixel-buffer*)
 	do (setf (aref *lcd-pixel-buffer* i) 255))
   (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
 
-(defvar *pc-path* nil)
-(defun pc-path-init ()
-  ())
+(defreset-var *pc-path* (make-array (* 512 1024) :adjustable t :fill-pointer 0))
+(defreset-var *memory-updates* ())
 
-(defvar *memory-updates* nil)
 (defun step-cpus! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
-  (pushnew (cpu-pc (cpu-current)) *pc-path*)
+  (vector-push-extend (cpu-pc (cpu-current)) *pc-path*)
   (when-let (memory (aval :memory (instr-effects (cpu-current) *memory*)))
     (push (cons (cpu-pc (cpu-current)) memory) *memory-updates*))
   (execute! (cpu-current) *memory*))
@@ -1527,11 +1548,6 @@ Test-fn and handle-fn are both functions of event."
 (defun compile-set-memory (instr-spec)
   (mapcar (fn `(mem-write! ,(first %) ,(second %) ,*memory-name*))
 	  (aval :memory instr-spec)))
-
-(defmacro when-let ((name condition-form) &body body)
-  `(let* ((,name ,condition-form))
-     (when ,name
-       ,@body)))
 
 (defun compile-instr-spec-for-execute (instr-spec)
   (unless (akey? :cycles instr-spec)
@@ -2928,8 +2944,8 @@ Waits for a reset signal."
 ;; recompile execute-next-instr! definition
 (define-instrs!)
 
-(defvar *current-cycle* 0)
-(defvar *lcd-start-cycle* nil)
+(defreset-var *current-cycle* 0)
+(defreset-var *lcd-start-cycle* nil)
 (defun execute! (cpu memory)
   (cond
     ((lcdc-display?)
@@ -3659,6 +3675,11 @@ Waits for a reset signal."
       ((< dot mode0-dots) 143)
       (t (mod (+ 144 (truncate (- dot mode0-dots) (lcd-scanline-dots))) 154)))))
 
+(defparameter *h-blank-mode* 0)
+(defparameter *v-blank-mode* 1)
+(defparameter *oam-mode* 2)
+(defparameter *vram-mode* 3)
+
 (defun lcd-mode-from-cycles (elapsed-cycles num-sprites)
   (let* ((elapsed-dots (* 4 elapsed-cycles))
 	 (dot (mod elapsed-dots (lcd-dots)))
@@ -3669,12 +3690,12 @@ Waits for a reset signal."
 	 (scanline-dots (lcd-scanline-dots))
 	 (scanline-dot (mod (- dot mode0-dots mode1-dots) scanline-dots)))
     (cond
-      ((< dot mode0-dots) 0)
-      ((< dot (+ mode0-dots mode1-dots)) 1)
+      ((< dot mode0-dots) *h-blank-mode*)
+      ((< dot (+ mode0-dots mode1-dots)) *v-blank-mode*)
 
-      ((< scanline-dot mode2-dots) 2)
-      ((< scanline-dot (+ mode2-dots mode3-dots)) 3)
-      (t 0))))
+      ((< scanline-dot mode2-dots) *oam-mode*)
+      ((< scanline-dot (+ mode2-dots mode3-dots)) *vram-mode*)
+      (t *h-blank-mode*))))
 
 (defun pixels (width height)
   (make-array (* width height 4) :element-type '(unsigned-byte 8)))
@@ -3773,8 +3794,8 @@ Waits for a reset signal."
     (cond
       ((/= current-mode mode)
        (set-lcd-mode! mode)
-       (ecase mode
-	 (0
+       (cond
+	 ((= mode *h-blank-mode*)
 	  ;; start h-blank
 	  ;; TODO: unlock OAM and VRAM	 
 	  #+nil
@@ -3787,7 +3808,7 @@ Waits for a reset signal."
 
 	  (when (lcds-h-blank-interrupt-enabled?)
 	    (set-lcd-interrupt!)))
-	 (1
+	 ((= mode *v-blank-mode*)
 	  ;; start v-blank
 	  #+nil
 	  (print (alist :v-blank elapsed-cycles))
@@ -3796,7 +3817,7 @@ Waits for a reset signal."
 	    (set-v-blank-interrupt!))
 	  (when (lcds-v-blank-interrupt-enabled?)
 	    (set-lcd-interrupt!)))
-	 (2
+	 ((= mode *oam-mode*)
 	  ;; Start OAM
 	  #+nil
 	  (print (alist :oam elapsed-cycles))
@@ -3811,13 +3832,13 @@ Waits for a reset signal."
 
 	  (when (lcds-oam-interrupt-enabled?)
 	    (set-lcd-interrupt!)))
-	 (3
+	 ((= mode *vram-mode*)
 	  #+nil
 	  (print (alist :vram elapsed-cycles))
 	  ;; start LCD display
 	  ;; TODO: lock VRAM
 	  )))
-      ((= mode 1)
+      ((= mode *v-blank-mode*)
        ;; When in v-blank mode, update the scanline
        (let* (;;(old-scanline (lcd-scanline))
 	      )
@@ -3857,9 +3878,6 @@ Waits for a reset signal."
 ;; Add hardware events that were cycle-dependent
 ;;; events cause interrupts
 ;;; events switch modes in the LCD controller
-
-;; Power Up sequence
-;;; TODO: Then reload cartridge ROM after bios is finished (when PC=#x100 for the first time)
 
 ;; TODO: a more compact way to specify & draw tables of values;
 ;; TODO: Show when memory-registers have changed (using red/green)
@@ -3967,37 +3985,11 @@ Waits for a reset signal."
 ;; => ((8 :KB) (1 :BANKS))
 
 
-;; MBC1
-;;;; x0000-x3fff:
-;;;;   ROM Bank. Normally the first 16 Kb of the cart. Could be banks 20/40/60 in mode 1.
-;;;; x4000-x7FFF:
-;;;;   ROM Bank 01-7f. Any of the banks not-addressable by the first ROM bank area.
-;;;; xA000-xBFFF:
-;;;;   RAM Bank 00-03.
-;;; Control Registers
-;;;; x0000-x1fff:
-;;;;   x0A: enable RAM
-;;;;   x00: disable RAM
-;;;; x2000-x3fff: (2nd) ROM bank number select. Defaults to 1.
-;;;;   N: sets the number of banks to (logand #b11111 n).
-;;;; x4000-x5fff: RAM bank number select.
-;;;; x6000-x7fff: Banking Mode Select. Defaults to 0.
-;;;;   0: Simple ROM Banking Mode
-;;;;   1: RAM Banking Mode/Advanced ROM Banking mode.
-
-
 ;; Incorrect after startup?
 ;;    #xff48-#xff49: #x00 instead of #xff
 ;;     palette colors. irrelevant?
 
 ;; Move redraw of lcd display outside of execute!
-
-#+nil
-(defparameter *bios-rom*
-  (let* ((bios-rom (make-array 256 :element-type '(unsigned-byte 8)))
-	 (*memory* bios-rom))
-    (read-rom-file-into-memory! "gb_bios.bin")
-    bios-rom))
 
 #+nil
 (disassemble-rom-into-text *bios-rom* 0)
@@ -4010,7 +4002,7 @@ Waits for a reset signal."
 ;;  add breakpoints that watch for changes in memory
 ;;  set color of lcd & interrupt enable registers based on changes to memory
 
-
+#+nil
 (with-output-to-string (s)
   (mapcar (fn
 	    (format s "~A: ~A~%" (car %) (updated-memory-text (cdr %))))
