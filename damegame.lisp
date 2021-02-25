@@ -429,9 +429,12 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (clrhash *event-handlers*)
 	 (setq *drawings* ())
 	 (setq *events* ())
+	 (unless *system-initialized?*
+	   (reset-vars!))
+
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (load-font! :font "DroidSansMono.ttf" 16)
-
+	 
 	 (amap 'register-visualization! *visualizations*)
 	 (notify-handlers! (event-initialization-finished))
 
@@ -444,7 +447,6 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (maphash (fn (free-texture! %%)) *textures*)
     (clrhash *fonts*)
     (clrhash *textures*)
-    (clrhash *event-handlers*)
     (when *tile-textures*
       (map nil 'free-texture! *tile-textures*)
       (setq *tile-textures* nil))
@@ -629,7 +631,10 @@ Test-fn and handle-fn are both functions of event."
       (remhash id *textures*))))
 
 (defun texture-right-aligned (x texture-id)
-  (- x (texture-width (gethash texture-id *textures*))))
+  (let* ((texture (gethash texture-id *textures*)))
+    (if texture
+	(- x (texture-width texture))
+	0)))
 
 (defun texture-right-alignment (texture-id pos)
   (v2 (texture-right-aligned (x pos) texture-id) (y pos)))
@@ -3347,15 +3352,13 @@ Waits for a reset signal."
   (mapcar
    'event!
    (list
-    (alist :type :hide :id :lcd-visualizations)
-    (alist :type :hide :id :game)
+    (alist :type :hide :id :main-panel)
     (alist :type :display :id :memory-visualizations))))
 (defun display-lcd-visualiztions! ()
   (mapcar
    'event!
    (list
-    (alist :type :hide :id :memory-visualizations)
-    (alist :type :hide :id :game)
+    (alist :type :hide :id :main-panel)
     (alist :type :display :id :lcd-visualizations))))
 
 (defbutton memory (button "Memory" 1 (g2 1 28) :font)
@@ -3369,8 +3372,7 @@ Waits for a reset signal."
     (mapcar
      'event!
      (list
-      (alist :type :hide :id :lcd-visualizations)
-      (alist :type :hide :id :memory-visualizations)
+      (alist :type :hide :id :main-panel)
       (alist :type :display :id :game)))))
 
 (defun button-spec (id button on-click-fn)
@@ -3486,6 +3488,17 @@ Waits for a reset signal."
     (load-text-texture! :lcdc-object-display? :font "Object Disp?: ")
     (load-text-texture! :lcdc-background/window-display? :font "BG/Win Disp?: ")))
 
+
+(defun display-event-handler (display-id fn)
+  (event-handler
+   (event-display-matcher display-id)
+   (fn (funcall fn))))
+(defun hide-event-handler (panel-id fn)
+  (event-handler
+   (event-hide-matcher panel-id)
+   (fn
+     (funcall fn))))
+
 (defvisualization :lcd-debug
     (alist :initialization
 	   (fn (case *main-panel*
@@ -3505,7 +3518,7 @@ Waits for a reset signal."
 	      (add-drawing! :background-scroll (background-scroll-drawing))))
 	   :hide-event-handler
 	   (hide-event-handler
-	    :lcd-visualizations
+	    :main-panel
 	    (fn
 	      (mapcar (fn (remove-button! (aval :id %))) (lcd-buttons))
 	      (mapcar 'remove-drawing! '(:lcd-visualizations :background-scroll))))))
@@ -3578,7 +3591,7 @@ Waits for a reset signal."
   (amap 'initialize-memory-visualization! *memory-visualizations*)
   (add-drawing! :memory-visualizations (drawing 1 (fn (draw-memory-visualizations!)))))
 (defhandler handle-hide-memory-visualizations (event)
-	    (event-hide-matcher :memory-visualizations)
+	    (event-hide-matcher :main-panel)
   (remove-drawing! :memory-visualizations))
 
 ;; TODO: buttons should have ids on them
@@ -3883,7 +3896,6 @@ Waits for a reset signal."
 ;;; events cause interrupts
 ;;; events switch modes in the LCD controller
 
-;; TODO: a more compact way to specify & draw tables of values;
 ;; TODO: Show when memory-registers have changed (using red/green)
 ;; TODO: Show what memory changed and in which region.
 
@@ -4024,15 +4036,6 @@ Waits for a reset signal."
 						 (aval :update visualization)))
     (register-handler! (cons :update id) update-event-handler)))
 
-(defun display-event-handler (display-id fn)
-  (event-handler
-   (event-display-matcher display-id)
-   (fn (funcall fn))))
-(defun hide-event-handler (panel-id fn)
-  (event-handler
-   (event-hide-matcher panel-id)
-   (fn
-     (funcall fn))))
 
 (defvisualization :main-lcd
     (alist :initialization
@@ -4051,7 +4054,7 @@ Waits for a reset signal."
 								 0 0 (texture-width texture) (texture-height texture)
 								 (g1 2) (g1 3) (* 160 3) (* 144 3))))))))
 	   :hide-event-handler
-	   (hide-event-handler :game (fn (remove-drawing! :lcd)))
+	   (hide-event-handler :main-panel (fn (remove-drawing! :lcd)))
 	   :update
 	   (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
 
@@ -4065,3 +4068,149 @@ Waits for a reset signal."
 	   (fn
 	     (load-text-texture! :updated-memory :font
 				 (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))))
+
+
+;; TODO: convert cpu-visualizations and memory visualizations to use defvisualization
+
+
+;; TODO: a more compact way to specify & draw tables of values;
+;;        |
+;;        V
+;; Label: Value
+;; Label: Value
+;; Label: Value
+;; Label: Value
+
+;; Table is a layout of labels & values positioned at top-center
+;;  each value has a display type:
+;;     flag [yes/no]
+;;     addresses #x0000
+;;     1-byte numbers
+;;     2-byte numbers
+;;  a value can be different colors
+;;     white (no change)
+;;     green/yellow (executing instr will change value)
+;;     red/yellow (executing last instr changed value)
+
+
+;; To specify the values
+;;   how to get the value itself
+;;   what display type the value has
+;;   how to get the color
+
+(defun cpu-data-color (cpu-fn previous-cpu-fn key)
+  (let* ((cpu (funcall cpu-fn))
+	 (previous-cpu (funcall previous-cpu-fn))
+	 (will-change? (when cpu (aval key (instr-effects cpu *memory*))))
+	 (changed? (when previous-cpu (aval key (instr-effects previous-cpu *memory*)))))
+    (cond
+      ((and changed? will-change?) (yellow))
+      (changed? (red))
+      (will-change? (green))
+      (t (white)))))
+
+(defun cpu-byte1-table-data (keys cpu-fn previous-cpu-fn)
+  (mapcar (lambda (key)
+	    (alist
+	     :label (concat (symbol-name key) " ")
+	     :value (fn (when-let (cpu  (funcall cpu-fn))
+			  (funcall (cpu-register-accessor-name key) cpu)))
+	     :type :1-byte
+	     :color (fn (cpu-data-color cpu-fn previous-cpu-fn key))))
+	  keys))
+(defun cpu-byte2-table-data (keys cpu-fn previous-cpu-fn)
+  (mapcar (lambda (key)
+	    (alist
+	     :label (concat (symbol-name key) " ")
+	     :value (fn (when-let (cpu  (funcall cpu-fn))
+			  (funcall (cpu-register-accessor-name key) cpu)))
+	     :type :2-byte
+	     :color (fn (cpu-data-color cpu-fn previous-cpu-fn key))))
+	  keys))
+
+(defun draw-table-entry! (table-entry pos)
+  (draw-full-texture-id-right-aligned! (aval :label-texture-id table-entry) pos)
+  (let* ((color (funcall (aval :color table-entry)))
+	 (value-texture-id (aval :value-texture-id table-entry)))
+    (set-texture-color! value-texture-id color)
+    (draw-full-texture-id! value-texture-id pos)))
+
+(defun table-entry-value-text (table-entry)
+  (let* ((type (aval :type table-entry))
+	 (value (funcall (aval :value table-entry))))
+    (ecase type
+      (:1-byte (register8-text value))
+      (:2-byte (register16-text value))
+      (:address (hex16-text value))
+      (:flag ""))))
+
+(defun table-entry-value-texture-id (table-entry)
+  (if (eql (aval :type table-entry) :flag)
+      (if (funcall (aval :value table-entry)) :yes :no)
+      (aval :value-texture-id table-entry)))
+
+(defun update-table-entry-visualization! (table-entry)
+  (let* ((type (aval :type table-entry))
+	 (texture-id (table-entry-value-texture-id table-entry)))
+    (unless (eql :flag type)
+      (load-text-texture! texture-id :font (table-entry-value-text table-entry)))
+    (aset :value-texture-id texture-id table-entry)))
+
+(defun draw-table-data! (table-data pos)
+  (mapcar (fn
+	    (draw-table-entry! % pos)
+	    (setq pos (v+ pos (g2 0 1))))
+	  table-data))
+
+(defun initialize-table-data-textures! (table-data)
+  (mapcar (fn
+	    (let* ((label (aval :label %))
+		   (label-texture-id (gensym)))
+	      (load-text-texture! label-texture-id :font label)
+	      (amerge (alist :label-texture-id label-texture-id
+			     :value-texture-id (if (eql (aval :type %) :flag)
+						   :no
+						   (gensym)))
+		      %)))
+	  table-data))
+
+(defun table-visualization (table-data top-center-pos)
+  (alist :initialization
+	 (fn
+	   (setq table-data (initialize-table-data-textures! table-data))
+	   (add-drawing! (gensym) (drawing 3 (fn (draw-table-data! table-data top-center-pos)))))
+
+	 :update
+	 (fn (setq table-data (mapcar 'update-table-entry-visualization! table-data)))))
+
+(defun merge-simple-visualizations (&rest visualizations)
+  (alist :initialization (fn (mapcar (fn (when-let (initialization (aval :initialization %))
+					   (funcall initialization)))
+				     visualizations))
+	 :update (fn (mapcar (fn (when-let (update (aval :update %))
+				   (funcall update)))
+			     visualizations))))
+
+(defun cpu-table-visualization (cpu-fn previous-cpu-fn)
+  (merge-simple-visualizations
+   (table-visualization (cpu-byte1-table-data '(:a :b :d :h)
+					      cpu-fn
+					      previous-cpu-fn)
+			(g2 4 4))
+   (table-visualization (cpu-byte1-table-data '(:f :c :e :l)
+					      cpu-fn
+					      previous-cpu-fn)
+			(g2 11 4))
+   (table-visualization (cpu-byte2-table-data '(:af :bc :de :hl)
+					      cpu-fn
+					      previous-cpu-fn)
+			(g2 18 4))))
+
+
+(defvisualization :test-tables (cpu-table-visualization
+				(fn (cpu-current))
+				(fn (cpu-previous))))
+
+;; TODO: create/redefine visualizations at runtime.
+;; TODO: I need to think about how/where to store visualizations' texture ids
+;; TODO: I want to think about how to combine multiple visualizations into one
