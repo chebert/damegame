@@ -9,17 +9,24 @@
     (intern (apply 'concatenate 'string (mapcar 'symbol-name symbols))))
   (defvar *tests* (make-hash-table))
   
-  (defvar *commands* ()))
+  (defvar *commands* ())
+
+  (defvar *running?* nil)
+  (defvar *initialization-finished?* nil))
 
 (defmacro when-let ((name condition-form) &body body)
   `(let* ((,name ,condition-form))
      (when ,name
        ,@body)))
 
+(defmacro when-aval ((name key alist) &body body)
+  `(when-let (,name (aval ,key ,alist))
+     ,@body))
+
 (defmacro command! (&body body)
-  `(if *quit?*
-       (progn ,@body)
-       (push (fn ,@body) *commands*)))
+  `(if *running?*
+       (push (fn ,@body) *commands*)
+       (progn ,@body)))
 
 (defmacro deftest (name &body body)
   `(progn
@@ -104,7 +111,7 @@ Removes events from the queue."
   (push event *events*))
 
 (defvar *fonts* (make-hash-table))
-(defvar *textures* (make-hash-table))
+(defvar *textures* (make-hash-table :test 'equal))
 
 (defun event-font-opened (font-id)
   (alist :type :font-opened
@@ -229,10 +236,20 @@ From the plist (id value id2 value2 ...)"
      (defvar ,var-name nil ,documentation)
      (asetq ',var-name (lambda () ,reset-form) *resets*)))
 (defmacro defvisualization (id visualization)
-  `(asetq ,id ,visualization *visualizations*))
+  (let* ((vis-name (gensym)))
+    `(if *running?*
+	 (command!
+	   (let* ((,vis-name ,visualization))
+	     (asetq ,id ,vis-name *visualizations*)
+	     (register-visualization! ,id ,vis-name)))
+	 (asetq ,id ,visualization *visualizations*))))
 (defmacro undefvisualization (id &rest ignored)
   (declare (ignore ignored))
-  `(setq *visualizations* (aremove *visualizations* ,id)))
+  `(if *running?*
+       (command!
+	 (remove-visuaulization! ,id)
+	 (setq *visualizations* (aremove *visualizations* ,id)))
+       (setq *visualizations* (aremove *visualizations* ,id))))
 
 ;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
 ;; something like a binary tree may be better
@@ -333,6 +350,24 @@ From the plist (id value id2 value2 ...)"
   (declare (ignore rest))
   `(remhash ',name *compiled-event-handlers*))
 
+(defun draw-drawing! (drawing)
+  (cond
+    ((listp drawing)
+     (ecase (aval :type drawing)
+       (:texture
+	(let* ((texture-id (aval :texture-id drawing))
+	       (color (aval :color drawing))
+	       (right-aligned? (aval :right-aligned? drawing))
+	       (pos (aval :pos drawing)))
+	  (when color
+	    (set-texture-color! texture-id color))
+	  (if right-aligned?
+	      (draw-full-texture-id-right-aligned! texture-id pos)
+	      (draw-full-texture-id! texture-id pos))))
+       (:drawings
+	(mapcar 'draw-drawing! (aval :drawings drawing)))))
+    (t (funcall drawing))))
+
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
@@ -364,7 +399,7 @@ updates based on timestep, and renders to the screen."
   ;; Render to the screen
   (set-draw-color! 0 0 0 255)
   (clear!)
-  (amap (fn (funcall (aval :fn %%))) *drawings*)
+  (amap (fn (draw-drawing! (aval :fn %%))) *drawings*)
   (present!)
   
   (update-swank!))
@@ -418,6 +453,7 @@ updates based on timestep, and renders to the screen."
 (defun main! ()
   "Entry point into the application. Recompiles the SDL-Wrapper, creates the window, 
 and starts the update loop, then afterwards closes SDL and cleans up the application."
+  (setq *running?* t)
   (unless *sdl-wrapper-initialized?*
     (recompile-sdl-wrapper-dll!)
     (setq *sdl-wrapper-initialized?* t))
@@ -436,7 +472,9 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (load-font! :font "DroidSansMono.ttf" 16)
 	 
 	 (amap 'register-visualization! *visualizations*)
+	 (amap (fn (initialize-visualization! %%)) *visualizations2*)
 	 (notify-handlers! (event-initialization-finished))
+	 (setq *initialization-finished?* t)
 
 	 (unless *system-initialized?*
 	   (reset!)
@@ -453,6 +491,8 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (when *tile-map-texture*
       (free-texture! *tile-map-texture*)
       (setq *tile-map-texture* nil))
+    (setq *initialization-finished?* nil
+	  *running?* nil)
     (quit!)))
 
 (defun event-matcher-update-visualization ()
@@ -497,16 +537,17 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
   (load-text-texture! texture-id font-id text)
   (add-drawing! drawing-id (full-texture-drawing layer texture-id pos)))
 
-(defun register-one-off-handler! (test-fn handle-fn)
+(defun register-one-off-handler! (event-matcher handle-fn)
   "Registers an event handler that will be removed once handled.
 Only calls handle-fn if test-fn returns a truthy value.
 Test-fn and handle-fn are both functions of event."
   (register-handler!
    (gensym)
-   (lambda (event handler-id)
-     (when (funcall test-fn event)
-       (funcall handle-fn event)
-       (remove-handler! handler-id)))))
+   (event-handler
+    event-matcher
+    (lambda (event handler-id)
+      (funcall handle-fn event)
+      (remove-handler! handler-id)))))
 
 (defun texture-rect (pos texture)
   "Returns a rect positioned at pos with the same dimensions as texture."
@@ -937,6 +978,29 @@ Test-fn and handle-fn are both functions of event."
     (update-cpu-visualization! vis)
     (add-drawing! drawing-id (drawing *cpu-state-layer* (fn (draw-cpu-visualization! id))))))
 
+(defun cpu-visualization (title pos cpu-fn previous-cpu-fn)
+  (alist
+   :title title
+   :cpu-fn cpu-fn
+   :previous-cpu-fn previous-cpu-fn
+   :title-texture-id (gensym)
+   :pos pos
+   :pc (gensym)
+   :sp (gensym)
+   :hl (gensym)
+   :l (gensym)
+   :h (gensym)
+   :de (gensym)
+   :e (gensym)
+   :d (gensym)
+   :bc (gensym)
+   :c (gensym)
+   :b (gensym)
+   :af (gensym)
+   :f (gensym)
+   :a (gensym)
+   :colors ()))
+
 (defcpu-visualization current
     (cpu-visualization "Current" (g2 32 18)
 		       'cpu-current
@@ -974,29 +1038,6 @@ Test-fn and handle-fn are both functions of event."
 
 (defun flag-state-texture-id (set?)
   (if set? :yes :no))
-
-(defun cpu-visualization (title pos cpu-fn previous-cpu-fn)
-  (alist
-   :title title
-   :cpu-fn cpu-fn
-   :previous-cpu-fn previous-cpu-fn
-   :title-texture-id (gensym)
-   :pos pos
-   :pc (gensym)
-   :sp (gensym)
-   :hl (gensym)
-   :l (gensym)
-   :h (gensym)
-   :de (gensym)
-   :e (gensym)
-   :d (gensym)
-   :bc (gensym)
-   :c (gensym)
-   :b (gensym)
-   :af (gensym)
-   :f (gensym)
-   :a (gensym)
-   :colors ()))
 
 (defun update-cpu-visualization! (cpu-visualization)
   (let* ((cpu (funcall (aval :cpu-fn cpu-visualization))))
@@ -1258,7 +1299,7 @@ Test-fn and handle-fn are both functions of event."
 (defun step-cpus! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
   (vector-push-extend (cpu-pc (cpu-current)) *pc-path*)
-  (when-let (memory (aval :memory (instr-effects (cpu-current) *memory*)))
+  (when-aval (memory :memory (instr-effects (cpu-current) *memory*))
     (push (cons (cpu-pc (cpu-current)) memory) *memory-updates*))
   (execute! (cpu-current) *memory*))
 
@@ -1431,7 +1472,7 @@ Test-fn and handle-fn are both functions of event."
 
   (update-lcd-visualizations!)
   ;;(replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
-  (event! (alist :type :update-visualization)))
+  (notify-handlers! (alist :type :update-visualization)))
 
 (defbutton execute (button "Execute!" 1 (g2 32 30) :font)
   (handle-execute-button-clicked!))
@@ -1582,7 +1623,7 @@ Test-fn and handle-fn are both functions of event."
      (setf
       ,@(compile-set-flags instr-spec)
       ,@(compile-register-sets instr-spec)
-      ,@(when-let (ime? (aval :ime? instr-spec))
+      ,@(when-aval (ime? :ime? instr-spec)
 	  `((cpu-ime? ,*cpu-name*) ,ime?)))
      ,(aval :cycles instr-spec)))
 
@@ -3488,7 +3529,6 @@ Waits for a reset signal."
     (load-text-texture! :lcdc-object-display? :font "Object Disp?: ")
     (load-text-texture! :lcdc-background/window-display? :font "BG/Win Disp?: ")))
 
-
 (defun display-event-handler (display-id fn)
   (event-handler
    (event-display-matcher display-id)
@@ -4025,39 +4065,53 @@ Waits for a reset signal."
 	  (reverse (remove 7 *memory-updates* :key 'car))))
 
 (defun register-visualization! (id visualization)
-  (register-handler! (cons :initialization id)
-		     (event-handler (event-matcher-initialization-finished)
-				    (aval :initialization visualization)))
-  (when-let (display-event-handler (aval :display-event-handler visualization))
+  (if *initialization-finished?*
+      (funcall (aval :initialization visualization))
+      (register-handler! (cons :initialization id)
+			 (event-handler (event-matcher-initialization-finished)
+					(aval :initialization visualization))))
+  (when-aval (display-event-handler :display-event-handler visualization)
     (register-handler! (cons :display id) display-event-handler))
-  (when-let (hide-event-handler (aval :hide-event-handler visualization))
+  (when-aval (hide-event-handler :hide-event-handler visualization)
     (register-handler! (cons :hide id) hide-event-handler))
-  (when-let (update-event-handler (event-handler (event-matcher-update-visualization)
-						 (aval :update visualization)))
+  (let* ((update-event-handler (event-handler (event-matcher-update-visualization)
+					      (aval :update visualization))))
     (register-handler! (cons :update id) update-event-handler)))
 
+(defun remove-visuaulization! (id)
+  (remove-handler! (cons :initialization id))
+  (remove-handler! (cons :display id))
+  (remove-handler! (cons :hide id))
+  (remove-handler! (cons :update id)))
+
+(defun visualization (&key initialization update display-event-handler hide-event-handler)
+  (alist :type :visualization
+	 :initialization initialization
+	 :update update
+	 :display-event-handler display-event-handler
+	 :hide-event-handler hide-event-handler))
 
 (defvisualization :main-lcd
-    (alist :initialization
-	   (fn
-	     (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
-	     (loop for i from 0 below (length *lcd-pixel-buffer*)
-		   do (setf (aref *lcd-pixel-buffer* i) 255))
-	     (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
-	   :display-event-handler
-	   (display-event-handler
-	    :game
-	    (fn
-	      (setq *main-panel* :game)
-	      (add-drawing! :lcd (drawing 3 (fn (let* ((texture (gethash :lcd *textures*)))
-						  (draw-texture! texture
-								 0 0 (texture-width texture) (texture-height texture)
-								 (g1 2) (g1 3) (* 160 3) (* 144 3))))))))
-	   :hide-event-handler
-	   (hide-event-handler :main-panel (fn (remove-drawing! :lcd)))
-	   :update
-	   (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
-
+    (visualization
+     :initialization
+     (fn
+       (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
+       (loop for i from 0 below (length *lcd-pixel-buffer*)
+	     do (setf (aref *lcd-pixel-buffer* i) 255))
+       (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
+     :display-event-handler
+     (display-event-handler
+      :game
+      (fn
+	(setq *main-panel* :game)
+	(add-drawing! :lcd (drawing 3 (fn (let* ((texture (gethash :lcd *textures*)))
+					    (draw-texture! texture
+							   0 0 (texture-width texture) (texture-height texture)
+							   (g1 2) (g1 3) (* 160 3) (* 144 3))))))))
+     :hide-event-handler
+     (hide-event-handler :main-panel (fn (remove-drawing! :lcd)))
+     :update
+     (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
 
 (defvisualization :updated-memory
     (alist :initialization
@@ -4113,7 +4167,7 @@ Waits for a reset signal."
   (mapcar (lambda (key)
 	    (alist
 	     :label (concat (symbol-name key) " ")
-	     :value (fn (when-let (cpu  (funcall cpu-fn))
+	     :value (fn (when-let (cpu (funcall cpu-fn))
 			  (funcall (cpu-register-accessor-name key) cpu)))
 	     :type :1-byte
 	     :color (fn (cpu-data-color cpu-fn previous-cpu-fn key))))
@@ -4184,10 +4238,10 @@ Waits for a reset signal."
 	 (fn (setq table-data (mapcar 'update-table-entry-visualization! table-data)))))
 
 (defun merge-simple-visualizations (&rest visualizations)
-  (alist :initialization (fn (mapcar (fn (when-let (initialization (aval :initialization %))
+  (alist :initialization (fn (mapcar (fn (when-aval (initialization :initialization %)
 					   (funcall initialization)))
 				     visualizations))
-	 :update (fn (mapcar (fn (when-let (update (aval :update %))
+	 :update (fn (mapcar (fn (when-aval (update :update %)
 				   (funcall update)))
 			     visualizations))))
 
@@ -4207,10 +4261,129 @@ Waits for a reset signal."
 			(g2 18 4))))
 
 
-(defvisualization :test-tables (cpu-table-visualization
-				(fn (cpu-current))
-				(fn (cpu-previous))))
+(defun text-texture (text &optional (font-id :font))
+  (alist :type :text-texture
+	 :font-id font-id
+	 :text text))
 
-;; TODO: create/redefine visualizations at runtime.
-;; TODO: I need to think about how/where to store visualizations' texture ids
-;; TODO: I want to think about how to combine multiple visualizations into one
+(defun drawings (&rest drawings)
+  (alist :type :drawings
+	 :drawings drawings))
+
+(defun texture-drawing (texture-id pos &optional color)
+  (alist :type :texture
+	 :texture-id texture-id
+	 :pos pos
+	 :color color))
+
+(defun right-aligned-drawing (drawing)
+  (aset :right-aligned? t drawing))
+
+(defun adjacent-textures-drawing (pos left-texture-id right-texture-id)
+  (drawings
+   (right-aligned-drawing (texture-drawing left-texture-id pos))
+   (texture-drawing right-texture-id pos)))
+
+(defun rows-drawing (fn top-pos &rest lists)
+  (let* ((pos top-pos))
+    (apply 'drawings
+	   (apply 'mapcar
+		  (lambda (&rest args)
+		    (prog1 (apply fn pos args)
+		      (setq pos (v+ pos (g2 0 1)))))
+		  lists))))
+
+(defun visualization-id (visualization id)
+  (list :visualization (aval :id visualization) id))
+
+(defun visualization-texture-ids (visualization)
+  (let* ((static-texture-specs (aval :static-texture-specs visualization))
+	 (dynamic-texture-spec-fns (aval :dynamic-texture-spec-fns visualization)))
+    (append (akeys static-texture-specs)
+	    (akeys dynamic-texture-spec-fns))))
+
+(defun load-texture-spec! (id texture-spec)
+  (ecase (aval :type texture-spec)
+    (:text-texture (load-text-texture! id (aval :font-id texture-spec) (aval :text texture-spec)))))
+
+(defmacro do-when-initialized (&body body)
+  `(if *initialization-finished?*
+       (progn ,@body)
+       (register-one-off-handler! 'event-initialization-finished? (fn ,@body))))
+
+(defun initialize-visualization! (visualization)
+  (do-when-initialized
+    (amap (fn (load-texture-spec! % %%))
+	  (aval :static-texture-specs visualization))
+    (update-visualization! visualization)
+    (show-visualization! visualization)
+
+    (register-handler! (visualization-id visualization :update)
+		       (event-handler (fn (eql (aval :type %) :update-visualization))
+				      (fn (update-visualization! visualization))))
+    (amap 'register-handler! (aval :event-handlers visualization))))
+(defun update-visualization! (visualization)
+  (amap (fn (load-texture-spec! % (funcall %%)))
+	(aval :dynamic-texture-spec-fns visualization)))
+(defun show-visualization! (visualization)
+  (amap (fn (add-drawing! % %%)) (aval :drawings visualization)))
+(defun hide-visualization! (visualization)
+  (amap (fn (remove-drawing! %)) (aval :drawings visualization)))
+(defun unload-visualization! (visualization)
+  (hide-visualization! visualization)
+  (mapcar 'unload-texture! (visualization-texture-ids visualization))
+  (remove-handler! (visualization-id visualization :update))
+  (amap (fn (remove-handler! %)) (aval :event-handlers visualization)))
+
+(defmacro with-visualization-ids (id (id-name &rest names) &body body)
+  `(let* ,(cons
+	   (list id-name id)
+	   (mapcar (lambda (name) (list name `(list :visualization ,id ,(make-keyword name)))) names))
+     ,@body))
+
+(defvar *visualizations2* ())
+(defun get-vis (id) (aval id *visualizations2*))
+(defmacro defvis (id (id-name &rest names) &body visualization-alist)
+  (let* ((vis-name (gensym)))
+    `(let* ((,vis-name (with-visualization-ids ,id ,(cons id-name names)
+			 (amerge (alist :id ,id)
+				 ,@visualization-alist))))
+       (asetq ,id ,vis-name *visualizations2*)
+       (command! (initialize-visualization! ,vis-name))
+       ,id)))
+(defmacro undefvis (id &body ignored)
+  (declare (ignore ignored))
+  (let* ((vis-name (gensym)))
+    `(let* ((,vis-name (aval ,id *visualizations2*)))
+       (setq *visualizations2* (aremove *visualizations2* ,id))
+       (command! (unload-visualization! ,vis-name))
+       ,id)))
+
+(defun merge-vis (&rest vis)
+  (let* ((result ()))
+    (loop for v in vis do
+      (setq result (amap (fn (cons % (amerge (aval % result) %%))) v)))
+    result))
+
+(defvis :test-vis (id a b d h a-data b-data d-data h-data show hide drawing)
+  (alist :static-texture-specs (alist a (text-texture "A ")
+				      b (text-texture "B ")
+				      d (text-texture "D ")
+				      h (text-texture "H "))
+	 ;; Get reloaded at update time
+	 :dynamic-texture-spec-fns (alist a-data (fn (text-texture (register8-text (cpu-a (cpu-current)))))
+					  b-data (fn (text-texture (register8-text (cpu-b (cpu-current)))))
+					  d-data (fn (text-texture (register8-text (cpu-d (cpu-current)))))
+					  h-data (fn (text-texture (register8-text (cpu-h (cpu-current))))))
+	 :drawings (alist drawing (drawing 8 (rows-drawing
+					      'adjacent-textures-drawing
+					      (g2 4 8)
+					      (list a b d h)
+					      (list a-data b-data d-data h-data))))
+
+	 :event-handlers (alist show (display-event-handler
+				      :game
+				      (fn (show-visualization! (get-vis id))))
+				hide (hide-event-handler
+				      :main-panel
+				      (fn (hide-visualization! (get-vis id)))))))
