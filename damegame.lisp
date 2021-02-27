@@ -4135,19 +4135,6 @@ Waits for a reset signal."
 	 ,if-form
 	 ,else-form)))
 
-(defun register8-text-texture (register-key cpu-fn)
-  (text-texture
-   (if-let (cpu (funcall cpu-fn))
-     (register8-text (funcall (cpu-register-accessor-name register-key) cpu))
-     "-")))
-
-(defun register16-text-texture (register-key cpu-fn)
-  (text-texture
-   (if-let (cpu (funcall cpu-fn))
-     (register16-text
-      (funcall (cpu-register-accessor-name register-key) cpu))
-     "-")))
-
 (defun flatten (value)
   (nlet rec ((value value)
 	     (result ()))
@@ -4160,8 +4147,8 @@ Waits for a reset signal."
 (defun join-ids (&rest ids)
   (flatten ids))
 
-(defun cpu-register8-list-vis (pos vis-id label-texts register-keys
-			       cpu-fn cpu-previous-fn)
+(defun cpu-register-list-vis (pos vis-id label-texts register-keys register-text-fn
+			      cpu-fn cpu-previous-fn)
   (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys))
 	 (data-ids (mapcar (fn (join-ids vis-id % :data)) register-keys))
 	 (drawing-id (join-ids vis-id :drawing)))
@@ -4171,7 +4158,11 @@ Waits for a reset signal."
 	   ;; Get reloaded at update time
 	   :dynamic-texture-spec-fns
 	   (mapcar (lambda (id key)
-		     (cons id (fn (register8-text-texture key cpu-fn))))
+		     (cons id (fn (text-texture
+				   (if-let (cpu (funcall cpu-fn))
+				     (funcall register-text-fn
+					      (funcall (cpu-register-accessor-name key) cpu))
+				     "-")))))
 		   data-ids register-keys)
 
 	   :drawings (alist drawing-id (drawing 3 (fn (draw-cpu-registers! pos
@@ -4179,22 +4170,13 @@ Waits for a reset signal."
 									   register-keys
 									   cpu-fn cpu-previous-fn)))))))
 
+(defun cpu-register8-list-vis (pos vis-id label-texts register-keys
+			       cpu-fn cpu-previous-fn)
+  (cpu-register-list-vis pos vis-id label-texts register-keys 'register8-text cpu-fn cpu-previous-fn))
+
 (defun cpu-register16-list-vis (pos vis-id label-texts register-keys
 				cpu-fn cpu-previous-fn)
-  (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys))
-	 (data-ids (mapcar (fn (join-ids vis-id % :data)) register-keys)))
-    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids label-texts)
-	   ;; Get reloaded at update time
-	   :dynamic-texture-spec-fns
-	   (mapcar (lambda (id key)
-		     (cons id (fn (register16-text-texture key cpu-fn))))
-		   data-ids register-keys)
-
-	   :drawings (alist (join-ids vis-id :drawing)
-			    (drawing 3 (fn (draw-cpu-registers! pos
-								label-ids data-ids
-								register-keys
-								cpu-fn cpu-previous-fn)))))))
+  (cpu-register-list-vis pos vis-id label-texts register-keys 'register16-text cpu-fn cpu-previous-fn))
 
 (defun cpu-flags-data-ids (register-keys cpu-fn)
   (mapcar (fn (if (and (funcall cpu-fn)
@@ -4268,6 +4250,7 @@ Waits for a reset signal."
 			      cpu-prev-fn)
      (cpu-register16-list-vis (v+ pos (g2 9 8)) stack-pointer (list "Stack Pointer:") '(:sp)
 			      cpu-fn cpu-prev-fn)
+     
      (static-texts-vis pc (list "Program Counter: ") (v+ pos (g2 9 9)) :right-aligned? t)
      (dynamic-texts-vis pc-data
 			(list (fn (if-let (cpu (funcall cpu-fn))
@@ -4278,6 +4261,7 @@ Waits for a reset signal."
 				   (funcall cpu-prev-fn)
 				   *memory*)))
 			(v+ pos (g2 9 9)))
+     
      (cpu-flags-list-vis (v+ pos (g2 6 0))
 			 flags1
 			 (list "Zero?" "Half-Carry?")
