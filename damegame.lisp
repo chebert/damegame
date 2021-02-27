@@ -183,20 +183,20 @@ From the plist (id value id2 value2 ...)"
 	result)))
 (defun aval (key alist &optional not-present)
   "Get the value from the alist assuming it is there. Returns not-present if it isn't."
-  (let ((pair (assoc key alist)))
+  (let ((pair (assoc key alist :test 'equal)))
     (if pair
 	(cdr pair)
 	not-present)))
 
 (defun akeep (alist &rest keys)
-  (remove-if-not (fn (member % keys))
+  (remove-if-not (fn (member % keys :test 'equal))
 		 alist
 		 :key 'car))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun aremove (alist &rest keys)
     "Return a new alist with keys removed from alist."
-    (remove-if (fn (member % keys))
+    (remove-if (fn (member % keys :test 'equal))
 	       alist
 	       :key 'car))
   (defun aset (key value alist)
@@ -221,7 +221,7 @@ From the plist (id value id2 value2 ...)"
   (mapcar (fn (funcall fn (car %) (cdr %)))
 	  alist))
 (defun akey? (key alist)
-  (member key alist :key 'car))
+  (member key alist :key 'car :test 'equal))
 
 (defmacro asetq (id value alist-name)
   `(setq ,alist-name (aset ,id ,value ,alist-name)))
@@ -350,24 +350,6 @@ From the plist (id value id2 value2 ...)"
   (declare (ignore rest))
   `(remhash ',name *compiled-event-handlers*))
 
-(defun draw-drawing! (drawing)
-  (cond
-    ((listp drawing)
-     (ecase (aval :type drawing)
-       (:texture
-	(let* ((texture-id (aval :texture-id drawing))
-	       (color (aval :color drawing))
-	       (right-aligned? (aval :right-aligned? drawing))
-	       (pos (aval :pos drawing)))
-	  (when color
-	    (set-texture-color! texture-id color))
-	  (if right-aligned?
-	      (draw-full-texture-id-right-aligned! texture-id pos)
-	      (draw-full-texture-id! texture-id pos))))
-       (:drawings
-	(mapcar 'draw-drawing! (aval :drawings drawing)))))
-    (t (funcall drawing))))
-
 (defun update! ()
   "Handles events, handles input events,
 updates based on timestep, and renders to the screen."
@@ -399,7 +381,7 @@ updates based on timestep, and renders to the screen."
   ;; Render to the screen
   (set-draw-color! 0 0 0 255)
   (clear!)
-  (amap (fn (draw-drawing! (aval :fn %%))) *drawings*)
+  (amap (fn (funcall (aval :fn %%))) *drawings*)
   (present!)
   
   (update-swank!))
@@ -470,6 +452,8 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 
 	 (start! *width* *height* *audio-frequency* *audio-channels*)
 	 (load-font! :font "DroidSansMono.ttf" 16)
+	 (load-text-texture! :no :font "[No]")
+	 (load-text-texture! :yes :font "[Yes]")
 	 
 	 (amap 'register-visualization! *visualizations*)
 	 (amap (fn (initialize-visualization! %%)) *visualizations2*)
@@ -493,6 +477,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
       (setq *tile-map-texture* nil))
     (setq *initialization-finished?* nil
 	  *running?* nil)
+    (setq *commands* ())
     (quit!)))
 
 (defun event-matcher-update-visualization ()
@@ -847,218 +832,8 @@ Test-fn and handle-fn are both functions of event."
   (add-drawing! :memory-visualizations (drawing 1 (fn (when (draw-memory-visualizations?)
 							(draw-memory-visualizations!))))))
 
-(defvar *cpu-visualizations* ())
-(defun get-cpu-visualization (id)
-  (aval id *cpu-visualizations*))
-(defun set-cpu-visualization! (id value)
-  (asetq id value *cpu-visualizations*))
-
-(defmacro defcpu-visualization (name cpu-visualization)
-  `(progn
-     (command!
-       (set-cpu-visualization! ',name ,cpu-visualization)
-       (when (gethash :font *fonts*)
-	 (initialize-cpu-visualization! ',name (get-cpu-visualization ',name))))
-     ',name))
-(defmacro undefcpu-visualization (name &rest args)
-  (declare (ignore args))
-  `(command! (remove-cpu-visualization! ',name)))
-
-(defun remove-cpu-visualization! (id)
-  (let* ((vis (get-cpu-visualization id)))
-    (when vis
-      ;; TODO
-      )))
-
-(defun draw-cpu-visualization! (id)
-  (let* ((cpu-visualization (get-cpu-visualization id))
-	 (cpu-pos (aval :pos cpu-visualization)))
-    (set-color! (white))
-    (draw-rect! (- (x cpu-pos) (/ *grid-size* 2))
-		(- (y cpu-pos) (/ *grid-size* 2))
-		(g1 19)
-		(g1 11))
-    (draw-full-texture-id! (aval :title-texture-id cpu-visualization)
-			   (v+ cpu-pos (v2 0 (truncate (g1 -1.5)))))
-    (let* ((cpu (funcall (aval :cpu-fn cpu-visualization)))
-	   (cpu-colors (cpu-visualization-colors cpu-visualization))
-	   
-	   (left-column (cpu-state-left-column cpu-pos))
-	   (right-column (cpu-state-right-column cpu-pos))
-	   (y (y cpu-pos)))
-      (draw-full-texture-id-right-aligned! :zero (v2 left-column y))
-      (draw-full-texture-id-right-aligned! :subtraction (v2 right-column y))
-      (let ((texture-id (flag-state-texture-id (cpu-zero? cpu))))
-	(set-texture-color! texture-id (aval :zero? cpu-colors (white)))
-	(draw-full-texture-id! texture-id (v2 left-column y)))
-      (let ((texture-id (flag-state-texture-id (cpu-subtraction? cpu))))
-	(set-texture-color! texture-id (aval :subtraction? cpu-colors (white)))
-	(draw-full-texture-id! texture-id (v2 right-column y)))
-      
-      (incf y *grid-size*)
-      (draw-full-texture-id-right-aligned! :half-carry (v2 left-column y))
-      (draw-full-texture-id-right-aligned! :carry (v2 right-column y))
-      (let ((texture-id (flag-state-texture-id (cpu-half-carry? cpu))))
-	(set-texture-color! texture-id (aval :half-carry? cpu-colors (white)))
-	(draw-full-texture-id! texture-id (v2 left-column y)))
-      (let ((texture-id (flag-state-texture-id (cpu-carry? cpu))))
-	(set-texture-color! texture-id (aval :carry? cpu-colors (white)))
-	(draw-full-texture-id! texture-id (v2 right-column y)))
-
-      (incf y *grid-size*)
-      (let ((c1 (+ (g1 1) (x cpu-pos)))
-	    (c2 (+ (g1 8) (x cpu-pos)))
-	    (c3 (+ (g1 15) (x cpu-pos))))
-	(incf y *grid-size*)
-	(draw-full-texture-id-right-aligned! :a-register (v2 c1 y))
-	(draw-full-texture-id-right-aligned! :f-register (v2 c2 y))
-	(draw-full-texture-id-right-aligned! :af-register (v2 c3 y))
-	(set-texture-color! (aval :a cpu-visualization) (aval :a cpu-colors (white)))
-	(draw-full-texture-id! (aval :a cpu-visualization) (v2 c1 y))
-	(set-texture-color! (aval :f cpu-visualization) (aval :f cpu-colors (white)))
-	(draw-full-texture-id! (aval :f cpu-visualization) (v2 c2 y))
-	(set-texture-color! (aval :af cpu-visualization) (aval :af cpu-colors (white)))
-	(draw-full-texture-id! (aval :af cpu-visualization) (v2 c3 y))
-
-	(incf y (g1 1))
-	(draw-full-texture-id-right-aligned! :b-register (v2 c1 y))
-	(draw-full-texture-id-right-aligned! :c-register (v2 c2 y))
-	(draw-full-texture-id-right-aligned! :bc-register (v2 c3 y))
-	(set-texture-color! (aval :b cpu-visualization) (aval :b cpu-colors (white)))
-	(draw-full-texture-id! (aval :b cpu-visualization) (v2 c1 y))
-	(set-texture-color! (aval :c cpu-visualization) (aval :c cpu-colors (white)))
-	(draw-full-texture-id! (aval :c cpu-visualization) (v2 c2 y))
-	(set-texture-color! (aval :bc cpu-visualization) (aval :bc cpu-colors (white)))
-	(draw-full-texture-id! (aval :bc cpu-visualization) (v2 c3 y))
-
-	(incf y (g1 1))
-	(draw-full-texture-id-right-aligned! :d-register (v2 c1 y))
-	(draw-full-texture-id-right-aligned! :e-register (v2 c2 y))
-	(draw-full-texture-id-right-aligned! :de-register (v2 c3 y))
-	(set-texture-color! (aval :d cpu-visualization) (aval :d cpu-colors (white)))
-	(draw-full-texture-id! (aval :d cpu-visualization) (v2 c1 y))
-	(set-texture-color! (aval :e cpu-visualization) (aval :e cpu-colors (white)))
-	(draw-full-texture-id! (aval :e cpu-visualization) (v2 c2 y))
-	(set-texture-color! (aval :de cpu-visualization) (aval :de cpu-colors (white)))
-	(draw-full-texture-id! (aval :de cpu-visualization) (v2 c3 y))
-	
-	(incf y (g1 1))
-	(draw-full-texture-id-right-aligned! :h-register (v2 c1 y))
-	(draw-full-texture-id-right-aligned! :l-register (v2 c2 y))
-	(draw-full-texture-id-right-aligned! :hl-register (v2 c3 y))
-	(set-texture-color! (aval :h cpu-visualization) (aval :h cpu-colors (white)))
-	(draw-full-texture-id! (aval :h cpu-visualization) (v2 c1 y))
-	(set-texture-color! (aval :l cpu-visualization) (aval :l cpu-colors (white)))
-	(draw-full-texture-id! (aval :l cpu-visualization) (v2 c2 y))
-	(set-texture-color! (aval :hl cpu-visualization) (aval :hl cpu-colors (white)))
-	(draw-full-texture-id! (aval :hl cpu-visualization) (v2 c3 y)))
-
-      (incf y *grid-size*)
-      (let ((column (+ (g1 9) (x cpu-pos))))
-	(incf y (g1 1))
-	(draw-full-texture-id-right-aligned! :stack-pointer (v2 column y))
-	(set-texture-color! (aval :sp cpu-visualization) (aval :sp cpu-colors (white)))
-	(draw-full-texture-id! (aval :sp cpu-visualization) (v2 column y))
-
-	(draw-full-texture-id-right-aligned! :ime (v2 (+ (g1 18) (x cpu-pos)) y))
-
-	(incf y (g1 1))
-	(draw-full-texture-id-right-aligned! :program-counter (v2 column y))
-	(set-texture-color! (aval :pc cpu-visualization) (aval :pc cpu-colors (white)))
-	(draw-full-texture-id! (aval :pc cpu-visualization) (v2 column y))
-
-	(let ((texture-id (flag-state-texture-id (cpu-ime? cpu))))
-	  (set-texture-color! texture-id (aval :ime? cpu-colors (white)))
-	  (draw-full-texture-id! texture-id (v2 (+ (g1 15) (x cpu-pos)) y)))))))
-
-(defun initialize-cpu-visualization! (id vis)
-  (let ((drawing-id (gensym)))
-    (set-cpu-visualization! id (aset :drawing-id drawing-id vis))
-    (load-text-texture! (aval :title-texture-id vis) :font (aval :title vis))
-    (update-cpu-visualization! vis)
-    (add-drawing! drawing-id (drawing *cpu-state-layer* (fn (draw-cpu-visualization! id))))))
-
-(defun cpu-visualization (title pos cpu-fn previous-cpu-fn)
-  (alist
-   :title title
-   :cpu-fn cpu-fn
-   :previous-cpu-fn previous-cpu-fn
-   :title-texture-id (gensym)
-   :pos pos
-   :pc (gensym)
-   :sp (gensym)
-   :hl (gensym)
-   :l (gensym)
-   :h (gensym)
-   :de (gensym)
-   :e (gensym)
-   :d (gensym)
-   :bc (gensym)
-   :c (gensym)
-   :b (gensym)
-   :af (gensym)
-   :f (gensym)
-   :a (gensym)
-   :colors ()))
-
-(defcpu-visualization current
-    (cpu-visualization "Current" (g2 32 18)
-		       'cpu-current
-		       (fn (or (cpu-previous) (cpu-initial)))))
-(defcpu-visualization previous
-    (cpu-visualization "Previous" (g2 32 2)
-		       (fn (or (cpu-previous) (cpu-initial)))
-		       (fn (or (third *cpus*) (cpu-initial)))))
-
-(defhandler load-cpu-visualization (event)
-	    (event-matcher-initialization-finished)
-  (load-text-texture! :no :font "[No]")
-  (load-text-texture! :yes :font "[Yes]")
-  (load-text-texture! :zero :font "Zero? ")
-  (load-text-texture! :ime :font "IME? ")
-  (load-text-texture! :subtraction :font "Subtraction? ")
-  (load-text-texture! :half-carry :font "Half-carry? ")
-  (load-text-texture! :carry :font "Carry? ")
-  (load-text-texture! :a-register :font "A ")
-  (load-text-texture! :f-register :font "F ")
-  (load-text-texture! :af-register :font "AF ")
-  (load-text-texture! :b-register :font "B ")
-  (load-text-texture! :c-register :font "C ")
-  (load-text-texture! :bc-register :font "BC ")
-  (load-text-texture! :d-register :font "D ")
-  (load-text-texture! :e-register :font "E ")
-  (load-text-texture! :de-register :font "DE ")
-  (load-text-texture! :h-register :font "H ")
-  (load-text-texture! :l-register :font "L ")
-  (load-text-texture! :hl-register :font "HL ")
-  (load-text-texture! :stack-pointer :font "Stack Pointer: ")
-  (load-text-texture! :program-counter :font "Program Counter: ")
-
-  (amap 'initialize-cpu-visualization! *cpu-visualizations*))
-
 (defun flag-state-texture-id (set?)
   (if set? :yes :no))
-
-(defun update-cpu-visualization! (cpu-visualization)
-  (let* ((cpu (funcall (aval :cpu-fn cpu-visualization))))
-    (load-text-texture! (aval :a cpu-visualization) :font (register8-text (cpu-a cpu)))
-    (load-text-texture! (aval :f cpu-visualization) :font (register8-text (cpu-f cpu)))
-    (load-text-texture! (aval :af cpu-visualization) :font (register16-text (cpu-af cpu)))
-    (load-text-texture! (aval :b cpu-visualization) :font (register8-text (cpu-b cpu)))
-    (load-text-texture! (aval :c cpu-visualization) :font (register8-text (cpu-c cpu)))
-    (load-text-texture! (aval :bc cpu-visualization) :font (register16-text (cpu-bc cpu)))
-    (load-text-texture! (aval :d cpu-visualization) :font (register8-text (cpu-d cpu)))
-    (load-text-texture! (aval :e cpu-visualization) :font (register8-text (cpu-e cpu)))
-    (load-text-texture! (aval :de cpu-visualization) :font (register16-text (cpu-de cpu)))
-    (load-text-texture! (aval :h cpu-visualization) :font (register8-text (cpu-h cpu)))
-    (load-text-texture! (aval :l cpu-visualization) :font (register8-text (cpu-l cpu)))
-    (load-text-texture! (aval :hl cpu-visualization) :font (register16-text (cpu-hl cpu)))
-    (load-text-texture! (aval :sp cpu-visualization) :font
-			(let ((*number-base* :hexadecimal))
-			  (register16-text (cpu-sp cpu))))
-    (load-text-texture! (aval :pc cpu-visualization) :font
-			(let ((*number-base* :hexadecimal))
-			  (register16-text (cpu-pc cpu))))))
 
 (defparameter *number-base* :hexadecimal)
 
@@ -1397,24 +1172,6 @@ Test-fn and handle-fn are both functions of event."
 	(union '(:pc) keys)
 	(remove :pc keys))))
 
-(defun cpu-visualization-colors (cpu-visualization)
-  (let* ((cpu (funcall (aval :cpu-fn cpu-visualization)))
-	 (cpu-previous (funcall (aval :previous-cpu-fn cpu-visualization)))
-
-	 (prev-instr-effects (when cpu-previous (instr-effects cpu-previous *memory*)))
-	 (instr-effects (when cpu (instr-effects cpu *memory*)))
-
-	 (modified (instr-affected-keys prev-instr-effects))
-	 (next (instr-affected-keys instr-effects))
-
-	 (just-modified (set-difference modified next))
-	 (just-next (set-difference next modified))
-	 (both (intersection modified next)))
-    (nconc
-     (mapcar (fn (cons % (red))) just-modified)
-     (mapcar (fn (cons % (green))) just-next)
-     (mapcar (fn (cons % (yellow))) both))))
-
 (defun memory-name (addr)
   (cond
     ((<= addr #x3fff) :rom-bank0)
@@ -1468,7 +1225,6 @@ Test-fn and handle-fn are both functions of event."
 
 (defun update-visualizations! ()
   (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
-  (amap (fn (update-cpu-visualization! %%)) *cpu-visualizations*)
 
   (update-lcd-visualizations!)
   ;;(replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
@@ -4124,7 +3880,7 @@ Waits for a reset signal."
 				 (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))))
 
 
-;; TODO: convert cpu-visualizations and memory visualizations to use defvisualization
+;; TODO: convert memory visualizations to use defvisualization
 
 
 ;; TODO: a more compact way to specify & draw tables of values;
@@ -4266,33 +4022,6 @@ Waits for a reset signal."
 	 :font-id font-id
 	 :text text))
 
-(defun drawings (&rest drawings)
-  (alist :type :drawings
-	 :drawings drawings))
-
-(defun texture-drawing (texture-id pos &optional color)
-  (alist :type :texture
-	 :texture-id texture-id
-	 :pos pos
-	 :color color))
-
-(defun right-aligned-drawing (drawing)
-  (aset :right-aligned? t drawing))
-
-(defun adjacent-textures-drawing (pos left-texture-id right-texture-id)
-  (drawings
-   (right-aligned-drawing (texture-drawing left-texture-id pos))
-   (texture-drawing right-texture-id pos)))
-
-(defun rows-drawing (fn top-pos &rest lists)
-  (let* ((pos top-pos))
-    (apply 'drawings
-	   (apply 'mapcar
-		  (lambda (&rest args)
-		    (prog1 (apply fn pos args)
-		      (setq pos (v+ pos (g2 0 1)))))
-		  lists))))
-
 (defun visualization-id (visualization id)
   (list :visualization (aval :id visualization) id))
 
@@ -4317,7 +4046,6 @@ Waits for a reset signal."
 	  (aval :static-texture-specs visualization))
     (update-visualization! visualization)
     (show-visualization! visualization)
-
     (register-handler! (visualization-id visualization :update)
 		       (event-handler (fn (eql (aval :type %) :update-visualization))
 				      (fn (update-visualization! visualization))))
@@ -4338,7 +4066,7 @@ Waits for a reset signal."
 (defmacro with-visualization-ids (id (id-name &rest names) &body body)
   `(let* ,(cons
 	   (list id-name id)
-	   (mapcar (lambda (name) (list name `(list :visualization ,id ,(make-keyword name)))) names))
+	   (mapcar (lambda (name) (list name `(list :visualization ,id-name ,(make-keyword name)))) names))
      ,@body))
 
 (defvar *visualizations2* ())
@@ -4359,31 +4087,222 @@ Waits for a reset signal."
        (command! (unload-visualization! ,vis-name))
        ,id)))
 
-(defun merge-vis (&rest vis)
-  (let* ((result ()))
-    (loop for v in vis do
-      (setq result (amap (fn (cons % (amerge (aval % result) %%))) v)))
+(defun merge-visrs (&rest visrs)
+  (let* ((result ())
+	 (keys (apply 'append (mapcar 'akeys visrs))))
+    (loop for vis in visrs do
+      (mapcar (fn (asetq % (amerge (aval % result) (aval % vis)) result)) keys))
     result))
 
-(defvis :test-vis (id a b d h a-data b-data d-data h-data show hide drawing)
-  (alist :static-texture-specs (alist a (text-texture "A ")
-				      b (text-texture "B ")
-				      d (text-texture "D ")
-				      h (text-texture "H "))
-	 ;; Get reloaded at update time
-	 :dynamic-texture-spec-fns (alist a-data (fn (text-texture (register8-text (cpu-a (cpu-current)))))
-					  b-data (fn (text-texture (register8-text (cpu-b (cpu-current)))))
-					  d-data (fn (text-texture (register8-text (cpu-d (cpu-current)))))
-					  h-data (fn (text-texture (register8-text (cpu-h (cpu-current))))))
-	 :drawings (alist drawing (drawing 8 (rows-drawing
-					      'adjacent-textures-drawing
-					      (g2 4 8)
-					      (list a b d h)
-					      (list a-data b-data d-data h-data))))
+(defun register-color (register-key cpu prev-cpu memory)
+  (let* ((will-change? (and cpu (aval register-key (instr-effects cpu memory))))
+	 (changed? (and prev-cpu (aval register-key (instr-effects prev-cpu memory)))))
+    (cond ((and changed? will-change?) (yellow))
+	  (changed? (red))
+	  (will-change? (green))
+	  (t (white)))))
 
-	 :event-handlers (alist show (display-event-handler
-				      :game
-				      (fn (show-visualization! (get-vis id))))
-				hide (hide-event-handler
-				      :main-panel
-				      (fn (hide-visualization! (get-vis id)))))))
+(defun pc-register-color (cpu prev-cpu memory)
+  (let* ((will-jump? (and cpu (aval :jump? (next-instr cpu memory))))
+	 (jumped? (and prev-cpu (aval :jump? (next-instr prev-cpu memory)))))
+    (cond ((and jumped? will-jump?) (yellow))
+	  (jumped? (red))
+	  (will-jump? (green))
+	  (t (white)))))
+
+(defun for-each-row (fn pos &rest lists)
+  (apply 'mapcar
+	 (lambda (&rest args)
+	   (prog1 (apply fn pos args)
+	     (setq pos (v+ pos (g2 0 1)))))
+	 lists))
+
+(defun draw-cpu-registers! (pos label-texture-ids data-texture-ids register-keys cpu-fn cpu-previous-fn)
+  (for-each-row
+   (lambda (pos left-id right-id register-key)
+     (draw-full-texture-id-right-aligned! left-id pos)
+     (set-texture-color! right-id
+			 (register-color register-key
+					 (funcall cpu-fn)
+					 (funcall cpu-previous-fn)
+					 *memory*))
+     (draw-full-texture-id! right-id pos))
+   pos label-texture-ids data-texture-ids register-keys))
+
+(defmacro if-let (binding if-form else-form)
+  `(let* (,binding)
+     (if ,(car binding)
+	 ,if-form
+	 ,else-form)))
+
+(defun register8-text-texture (register-key cpu-fn)
+  (text-texture
+   (if-let (cpu (funcall cpu-fn))
+     (register8-text (funcall (cpu-register-accessor-name register-key) cpu))
+     "-")))
+
+(defun register16-text-texture (register-key cpu-fn)
+  (text-texture
+   (if-let (cpu (funcall cpu-fn))
+     (register16-text
+      (funcall (cpu-register-accessor-name register-key) cpu))
+     "-")))
+
+(defun flatten (value)
+  (nlet rec ((value value)
+	     (result ()))
+    (cond
+      ((null value) result)
+      ((atom value) (append (list value) result))
+      ((consp value) (rec (cdr value)
+			  (append result (flatten (first value))))))))
+
+(defun join-ids (&rest ids)
+  (flatten ids))
+
+(defun cpu-register8-list-vis (pos vis-id label-texts register-keys
+			       cpu-fn cpu-previous-fn)
+  (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys))
+	 (data-ids (mapcar (fn (join-ids vis-id % :data)) register-keys))
+	 (drawing-id (join-ids vis-id :drawing)))
+    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " "))))
+					 label-ids
+					 label-texts)
+	   ;; Get reloaded at update time
+	   :dynamic-texture-spec-fns
+	   (mapcar (lambda (id key)
+		     (cons id (fn (register8-text-texture key cpu-fn))))
+		   data-ids register-keys)
+
+	   :drawings (alist drawing-id (drawing 3 (fn (draw-cpu-registers! pos
+									   label-ids data-ids
+									   register-keys
+									   cpu-fn cpu-previous-fn)))))))
+
+(defun cpu-register16-list-vis (pos vis-id label-texts register-keys
+				cpu-fn cpu-previous-fn)
+  (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys))
+	 (data-ids (mapcar (fn (join-ids vis-id % :data)) register-keys)))
+    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids label-texts)
+	   ;; Get reloaded at update time
+	   :dynamic-texture-spec-fns
+	   (mapcar (lambda (id key)
+		     (cons id (fn (register16-text-texture key cpu-fn))))
+		   data-ids register-keys)
+
+	   :drawings (alist (join-ids vis-id :drawing)
+			    (drawing 3 (fn (draw-cpu-registers! pos
+								label-ids data-ids
+								register-keys
+								cpu-fn cpu-previous-fn)))))))
+
+(defun cpu-flags-data-ids (register-keys cpu-fn)
+  (mapcar (fn (if (and (funcall cpu-fn)
+		       (funcall
+			(cpu-register-accessor-name %)
+			(funcall cpu-fn)))
+		  :yes
+		  :no))
+	  register-keys))
+
+(defun cpu-flags-list-vis (pos vis-id label-texts register-keys cpu-fn cpu-previous-fn)
+  (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys)))
+    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids label-texts)
+	   :drawings (alist (join-ids vis-id :drawing)
+			    (drawing 3 (fn (draw-cpu-registers! pos
+								label-ids
+								(cpu-flags-data-ids register-keys cpu-fn)
+								register-keys
+								cpu-fn cpu-previous-fn)))))))
+
+(defun static-texts-vis (vis-id texts pos &key right-aligned?)
+  (let* ((text-ids (loop for i from 0 for text in texts collecting (join-ids vis-id :static-text i))))
+    (alist :static-texture-specs (mapcar (fn (cons % (text-texture %%))) text-ids texts)
+	   :drawings (alist (join-ids vis-id :drawing)
+			    (drawing 3 (fn (for-each-row
+					    (fn (if right-aligned?
+						    (draw-full-texture-id-right-aligned! %% %)
+						    (draw-full-texture-id! %% %)))
+					    pos
+					    text-ids)))))))
+(defun static-text-vis (vis-id text pos)
+  (static-texts-vis vis-id (list text) pos))
+
+(defun dynamic-texts-vis (vis-id text-fns color-fns pos &key right-aligned?)
+  (let* ((text-ids (loop for i from 0 below (length text-fns) collecting (join-ids vis-id :dynamic-text i))))
+    (alist :dynamic-texture-spec-fns (mapcar (lambda (id text-fn)
+					       (cons id (fn (text-texture (funcall text-fn)))))
+					     text-ids text-fns)
+	   :drawings (alist (join-ids vis-id :drawing)
+			    (drawing 3 (fn (for-each-row
+					    (lambda (pos id color-fn)
+					      (set-texture-color! id (funcall color-fn))
+					      (if right-aligned?
+						  (draw-full-texture-id-right-aligned! id pos)
+						  (draw-full-texture-id! id pos)))
+					    pos
+					    text-ids
+					    color-fns)))))))
+
+(defun cpu-vis (vis-id pos vis-name cpu-fn cpu-prev-fn)
+  (with-visualization-ids vis-id (id hi-register lo-register combined-register stack-pointer pc pc-data
+				     flags1 flags2 outline title)
+    (merge-visrs
+     (static-text-vis title vis-name (v+ pos (g2 1 -3/2)))
+     (cpu-register8-list-vis (v+ pos (g2 1 3))
+			     hi-register
+			     (list "A" "B" "D" "H")
+			     '(:a :b :d :h)
+			     cpu-fn cpu-prev-fn)
+     (cpu-register8-list-vis (v+ pos (g2 8 3))
+			     lo-register
+			     (list "F" "C" "E" "L")
+			     '(:f :c :e :l)
+			     cpu-fn
+			     cpu-prev-fn)
+     (cpu-register16-list-vis (v+ pos (g2 15 3))
+			      combined-register
+			      (list "AF" "BC" "DE" "HL")
+			      '(:af :bc :de :hl)
+			      cpu-fn
+			      cpu-prev-fn)
+     (cpu-register16-list-vis (v+ pos (g2 9 8)) stack-pointer (list "Stack Pointer:") '(:sp)
+			      cpu-fn cpu-prev-fn)
+     (static-texts-vis pc (list "Program Counter: ") (v+ pos (g2 9 9)) :right-aligned? t)
+     (dynamic-texts-vis pc-data
+			(list (fn (if-let (cpu (funcall cpu-fn))
+				    (hex16-text (cpu-pc cpu))
+				    "-")))
+			(list (fn (pc-register-color
+				   (funcall cpu-fn)
+				   (funcall cpu-prev-fn)
+				   *memory*)))
+			(v+ pos (g2 9 9)))
+     (cpu-flags-list-vis (v+ pos (g2 6 0))
+			 flags1
+			 (list "Zero?" "Half-Carry?")
+			 '(:zero? :half-carry?)
+			 cpu-fn
+			 cpu-prev-fn)
+     (cpu-flags-list-vis (v+ pos (g2 16 0))
+			 flags2
+			 (list "Subtraction?" "Carry?")
+			 '(:subtraction? :carry?)
+			 cpu-fn
+			 cpu-prev-fn)
+     (alist
+      :drawings (alist outline (drawing 4 (fn
+					    (set-color! (white))
+					    (draw-rect! (- (x pos) (g1 1/2))
+							(- (y pos) (g1 1/2))
+							(g1 19)
+							(g1 11)))))))))
+
+(defvis :previous-cpu-vis (id)
+  (cpu-vis id (g2 32 2) "Previous" 'cpu-previous (fn (third *cpus*))))
+(defvis :current-cpu-vis (id)
+  (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
+
+
+#+nil
+(command! (remove-drawing! :mouse-pos))
