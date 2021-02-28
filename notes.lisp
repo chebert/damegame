@@ -533,3 +533,59 @@ register A and stores the result in register A" register-key)
 ;;;; x6000-x7fff: Banking Mode Select. Defaults to 0.
 ;;;;   0: Simple ROM Banking Mode
 ;;;;   1: RAM Banking Mode/Advanced ROM Banking mode.
+
+
+;; Convert to defvis
+;;   LCD-Debug
+;;   memory update
+;;   Game
+;;   (combined) CPU view disassembly and previous disassembly
+;;   instruction description
+;;   interrupt enable states
+;;   mouse position
+;;   mouse cursor
+;; Calculate the width/height of a visualization (to draw a box around it)
+;; For disassembly: show nice text of the disassembly (text-from-disassembly)
+;; organize the views some.
+
+;; New views
+;;   A list of last memory updates (and pcs and cycles they ocurred at)
+;;   A list of last pcs (and cycles they ocurred at)
+;;   A list of lcd mode changes (and cycles they ocurred at)
+;;   A list of currently active breakpoints
+
+;; Always want to see
+;;    buttons to control the simulation
+;;       add: continue to v-blank-start
+
+;; Group views together:
+;;   CPU:
+;;     current cpu state
+;;     Memory that is going to be updated
+;;     previous cpu state
+;;     disassembly
+;;     memory updated
+;;     buttons to change number base
+;;     instruction description
+;;     memory regions around PC, SP, and more?
+;;   LCD Debug
+;;     palettes as bits and colors
+;;     tile-data blocks
+;;     lcd control registers
+;;     lcd status registers
+;;     background tile-map
+;;     window tile-map
+;;     OAM
+;;       tile-data drawn
+;;       flags for OAM
+;;     final LCD screen
+;;   Cartridge:
+;;     current rom-bank
+;;     rom header data
+;;   Game:
+;;     final LCD screen
+;;     current cycle
+
+
+;; Draw relative: specify a percentage
+;;   (of width/height) offset to draw a texture 
