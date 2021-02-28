@@ -3770,16 +3770,6 @@ Waits for a reset signal."
      :update
      (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
 
-(defvisualization :updated-memory
-    (alist :initialization
-	   (fn
-	     (load-text-texture! :updated-memory :font "Memory: -")
-	     (add-drawing! :updated-memory (drawing 1 (fn (draw-full-texture-id! :updated-memory (g2 32 15))))))
-	   :update
-	   (fn
-	     (load-text-texture! :updated-memory :font
-				 (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))))
-
 
 ;; TODO: convert memory visualizations to use defvisualization
 
@@ -4183,11 +4173,6 @@ Waits for a reset signal."
 							(g1 19)
 							(g1 11)))))))))
 
-(defvis :previous-cpu-vis (id)
-  (cpu-vis id (g2 32 2) "Previous" 'cpu-previous (fn (third *cpus*))))
-(defvis :current-cpu-vis (id)
-  (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
-
 (defun range (end &optional (start 0))
   (loop for i from start below end collecting i))
 
@@ -4236,18 +4221,30 @@ Waits for a reset signal."
 			      (range *memory-visualization-byte-count*))
 		      (v+ pos (g2 4 1)))))
 
-(defvis (join-ids :memory :pc) (id)
+
+(defvis :previous-cpu-vis (id)
+  (cpu-vis id (g2 32 2) "Previous" 'cpu-previous (fn (third *cpus*))))
+(defvis :current-cpu-vis (id)
+  (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
+
+(undefvis (join-ids :memory :pc) (id)
   (memory-vis id "PC" (g2 1 3)
 	      (fn (cpu-pc (cpu-current)))
 	      (green)))
-(defvis (join-ids :memory :sp) (id)
+(undefvis (join-ids :memory :sp) (id)
   (memory-vis id "SP" (g2 11 3)
 	      (fn (cpu-sp (cpu-current)))
 	      (color #x45 #xb6 #xfe 255)))
-(defvis (join-ids :memory :hl) (id)
+(undefvis (join-ids :memory :hl) (id)
   (memory-vis id "HL" (g2 21 3)
 	      (fn (cpu-hl (cpu-current)))
 	      (yellow)))
 
 #+nil
 (command! (remove-drawing! :mouse-pos))
+
+(defvis :updated-memory (id)
+  (dynamic-texts-vis (join-ids id :text)
+		     (list (fn (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))
+		     (list (fn (white)))
+		     (g2 32 15)))
