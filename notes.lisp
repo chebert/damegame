@@ -535,6 +535,33 @@ register A and stores the result in register A" register-key)
 ;;;;   1: RAM Banking Mode/Advanced ROM Banking mode.
 
 
+;; TODO: a more compact way to specify & draw tables of values;
+;;        |
+;;        V
+;; Label: Value
+;; Label: Value
+;; Label: Value
+;; Label: Value
+
+;; Table is a layout of labels & values positioned at top-center
+;;  each value has a display type:
+;;     flag [yes/no]
+;;     addresses #x0000
+;;     1-byte numbers
+;;     2-byte numbers
+;;  a value can be different colors
+;;     white (no change)
+;;     green/yellow (executing instr will change value)
+;;     red/yellow (executing last instr changed value)
+
+
+;; To specify the values
+;;   how to get the value itself
+;;   what display type the value has
+;;   how to get the color
+
+
+
 ;; Convert to defvis
 ;;   LCD-Debug
 ;;   memory update

@@ -989,6 +989,7 @@ Test-fn and handle-fn are both functions of event."
   (vector-push-extend (cpu-pc (cpu-current)) *pc-path*)
   (when-aval (memory :memory (instr-effects (cpu-current) *memory*))
     (push (cons (cpu-pc (cpu-current)) memory) *memory-updates*))
+
   (execute! (cpu-current) *memory*))
 
 (defun handle-execute-button-clicked! ()
@@ -3770,35 +3771,6 @@ Waits for a reset signal."
      :update
      (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
 
-
-;; TODO: convert memory visualizations to use defvisualization
-
-
-;; TODO: a more compact way to specify & draw tables of values;
-;;        |
-;;        V
-;; Label: Value
-;; Label: Value
-;; Label: Value
-;; Label: Value
-
-;; Table is a layout of labels & values positioned at top-center
-;;  each value has a display type:
-;;     flag [yes/no]
-;;     addresses #x0000
-;;     1-byte numbers
-;;     2-byte numbers
-;;  a value can be different colors
-;;     white (no change)
-;;     green/yellow (executing instr will change value)
-;;     red/yellow (executing last instr changed value)
-
-
-;; To specify the values
-;;   how to get the value itself
-;;   what display type the value has
-;;   how to get the color
-
 (defun cpu-data-color (cpu-fn previous-cpu-fn key)
   (let* ((cpu (funcall cpu-fn))
 	 (previous-cpu (funcall previous-cpu-fn))
@@ -4078,7 +4050,20 @@ Waits for a reset signal."
 		  :no))
 	  register-keys))
 
+
+(defun flags-vis (vis-id pos names flag-fns color-fns)
+  (let* ((label-ids (mapcar (fn (join-ids vis-id %)) (range (length names)))))
+    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids names)
+	   :drawings (alist (join-ids vis-id :drawing)
+			    (drawing 3 (fn (for-each-row
+					    (lambda (pos label-id flag-fn color-fn)
+					      (draw-full-texture-id-right-aligned! label-id pos)
+					      (let* ((flag-id (if (funcall flag-fn) :yes :no)))
+						(set-texture-color! flag-id (funcall color-fn))
+						(draw-full-texture-id! flag-id pos)))
+					    pos label-ids flag-fns color-fns)))))))
 (defun cpu-flags-list-vis (pos vis-id label-texts register-keys cpu-fn cpu-previous-fn)
+  ;; TODO: Use flags-vis
   (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys)))
     (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids label-texts)
 	   :drawings (alist (join-ids vis-id :drawing)
@@ -4248,3 +4233,52 @@ Waits for a reset signal."
 		     (list (fn (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))
 		     (list (fn (white)))
 		     (g2 32 15)))
+
+(defvis :lcd-debug (id)
+  (let* ((pos (g2 3 3)))
+    (merge-visrs
+     (alist :drawings (alist (join-ids id :outline)
+			     (drawing 8 (fn
+					  (set-color! (white))
+					  (draw-rect! (- (x pos) (g1 1/2))
+						      (- (y pos) (g1 1/2))
+						      (g1 12) (g1 12))))))
+     (static-text-vis (join-ids id :title) "LCD Registers" (v+ pos (g2 0 -3/2)))
+     (static-texts-vis (join-ids id :registers)
+		       '("CmpScanline: "
+			 "Scanline: "
+			 "Mode: "
+			 "DMA Start: "
+			 "Window Tiles: "
+			 "BG Tiles: "
+			 "Object Size: ")
+		       (v+ pos (g2 7 0))
+		       :right-aligned? t)
+     (let* ((text-fns (list (fn (u8-text (lcd-scanline-compare)))
+			    (fn (u8-text (lcd-scanline)))
+			    (fn (let* ((mode (lcd-mode)))
+				  (cond
+				    ((= mode *h-blank-mode*) "H-Blank")
+				    ((= mode *v-blank-mode*) "V-Blank")
+				    ((= mode *oam-mode*) "OAM")
+				    ((= mode *vram-mode*) "OAM/VRAM"))))
+			    (fn (hex16-text (lcd-dma-start)))
+			    (fn (hex16-text (lcdc-window-tiles-addr)))
+			    (fn (hex16-text (lcdc-background-tiles-addr)))
+			    (fn (if (object-size-doubled?) "2x" "1x")))))
+       (dynamic-texts-vis (join-ids id :register-data)
+			  text-fns
+			  (mapcar (fn (lambda () (white))) text-fns)
+			  (v+ pos (g2 7 0))))
+     (let* ((flag-names (list "Coincidence?"
+			      "Display?"
+			      "Window Disp?"
+			      "BG/Win Disp?")))
+       (flags-vis (join-ids id :flags)
+		  (v+ pos (g2 7 7))
+		  flag-names
+		  (list (fn (lcd-coincidence?))
+			(fn (lcdc-display?))
+			(fn (lcdc-window-display?))
+			(fn (lcdc-background/window-display?)))
+		  (mapcar (fn (lambda () (white))) flag-names))))))
