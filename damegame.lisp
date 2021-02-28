@@ -736,101 +736,14 @@ Test-fn and handle-fn are both functions of event."
     (when texture
       (texture-color-mod! texture (r color) (g color) (b color)))))
 
-
-(defun memory-visualization (title pos start-addr-ref byte-text-fn)
-  (let ((ids (make-array (list *memory-visualization-byte-count*))))
-    (loop for i below (length ids)
-	  do (setf (aref ids i) (gensym)))
-    (alist :pos pos
-	   :start-addr-ref start-addr-ref
-	   :texture-ids ids
-	   :title title
-	   :title-texture-id (gensym)
-	   :byte-text-fn byte-text-fn)))
 (defparameter *memory-visualization-byte-count* 24)
-
-(defun draw-memory-visualization! (cpu memory-visualization-id)
-  (let* ((memory-visualization (get-memory-visualization memory-visualization-id))
-	 (ids (aval :texture-ids memory-visualization))
-	 (pos (aval :pos memory-visualization))
-	 (start-addr (funcall (aval :start-addr-ref memory-visualization))))
-    (draw-full-texture-id! (aval :title-texture-id memory-visualization) pos)
-    (loop for i below (length ids)
-	  do
-	     (let ((addr (+ i start-addr))
-		   (texture-id (aref ids i)))
-	       (set-texture-color! texture-id 
-				   (cond
-				     ((= addr (cpu-pc cpu)) (green))
-				     ((= addr (cpu-sp cpu)) (blue))
-				     ((= addr (cpu-hl cpu)) (yellow))
-				     (t (white))))
-	       (draw-full-texture-id! texture-id (v+ pos (g2 0 (1+ i))))))))
-(defun update-memory-visualization! (memory memory-visualization)
-  (let* ((ids (aval :texture-ids memory-visualization))
-	 (byte-text-fn (aval :byte-text-fn memory-visualization))
-	 (start-addr (funcall (aval :start-addr-ref memory-visualization))))
-    (loop for i below (length ids)
-	  do (load-text-texture! (aref ids i)
-				 :font
-				 (format nil "~A: ~A"
-					 (hex16-text (+ i start-addr))
-					 (funcall byte-text-fn (mem-byte (+ i start-addr) memory)))))))
 
 (defun start-addr (focus-addr)
   (min (max (- focus-addr (/ *memory-visualization-byte-count* 2)) 0) (- #xffff *memory-visualization-byte-count*)))
 
-(defvar *memory-visualizations* ())
-(defun get-memory-visualization (id)
-  (aval id *memory-visualizations*))
-(defun set-memory-visualization! (id value)
-  (asetq id value *memory-visualizations*))
-
-(defun remove-memory-visualization! (id)
-  (let* ((vis (get-memory-visualization id)))
-    (when vis
-      (let* ((drawing-id (aval :drawing-id vis)))
-	(remove-drawing! drawing-id)
-	(setq *memory-visualizations* (aremove *memory-visualizations* id))))))
-
-(defmacro defmemory-visualization (name memory-visualization)
-  `(progn
-     (command!
-       (set-memory-visualization! ',name ,memory-visualization)
-       (when (gethash :font *fonts*)
-	 (initialize-memory-visualization! ',name (get-memory-visualization ',name))))
-     ',name))
-(defmacro undefmemory-visualization (name &rest args)
-  (declare (ignore args))
-  `(command! (remove-memory-visualization! ',name)))
-
-(defun draw-memory-visualizations! ()
-  (amap (fn (draw-memory-visualization! (cpu-current) %)) *memory-visualizations*))
-
-(defun initialize-memory-visualization! (id memory-visualization)
-  (let* ((drawing-id (gensym)))
-    (set-memory-visualization! id (aset :drawing-id drawing-id memory-visualization))
-    (update-memory-visualization! *memory* memory-visualization)
-    ;;(add-drawing! drawing-id (drawing 1 (fn (draw-memory-visualization! (cpu-current) id))))
-    (load-text-texture! (aval :title-texture-id memory-visualization) :font
-			(aval :title memory-visualization))))
-
-(defmemory-visualization pc (memory-visualization "PC" (g2 1 3) (fn (start-addr (cpu-pc (cpu-current))))
-						  'register8-text))
-(defmemory-visualization stack (memory-visualization "Stack" (g2 11 3) (fn (start-addr (cpu-sp (cpu-current))))
-						     'register8-text))
-(defmemory-visualization hl (memory-visualization "HL" (g2 21 3) (fn (start-addr (cpu-hl (cpu-current))))
-						  'register8-text))
-
 (defvar *main-panel* :memory)
 (defun draw-memory-visualizations? ()
   (eql *main-panel* :memory))
-
-(defhandler handle-initialize-memory-visualization (event)
-	    (event-matcher-initialization-finished)
-  (amap 'initialize-memory-visualization! *memory-visualizations*)
-  (add-drawing! :memory-visualizations (drawing 1 (fn (when (draw-memory-visualizations?)
-							(draw-memory-visualizations!))))))
 
 (defun flag-state-texture-id (set?)
   (if set? :yes :no))
@@ -1224,8 +1137,6 @@ Test-fn and handle-fn are both functions of event."
 			       "-")))
 
 (defun update-visualizations! ()
-  (amap (fn (update-memory-visualization! *memory* %%)) *memory-visualizations*)
-
   (update-lcd-visualizations!)
   ;;(replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*)
   (notify-handlers! (alist :type :update-visualization)))
@@ -3380,16 +3291,6 @@ Waits for a reset signal."
 			   (+ (g1 14) (scroll-y))
 			   160 144))))
 
-;; Display/Hide Memory Visualizations (when toggling memory/lcd vis)
-(defhandler handle-display-memory-visualizations (event)
-	    (event-display-matcher :memory-visualizations)
-  (setq *main-panel* :memory)
-  (amap 'initialize-memory-visualization! *memory-visualizations*)
-  (add-drawing! :memory-visualizations (drawing 1 (fn (draw-memory-visualizations!)))))
-(defhandler handle-hide-memory-visualizations (event)
-	    (event-hide-matcher :main-panel)
-  (remove-drawing! :memory-visualizations))
-
 ;; TODO: buttons should have ids on them
 
 (defun interrupt-enable-register ()
@@ -4287,6 +4188,66 @@ Waits for a reset signal."
 (defvis :current-cpu-vis (id)
   (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
 
+(defun range (end &optional (start 0))
+  (loop for i from start below end collecting i))
+
+(defun memory-color (addr)
+  ;; NOTE this only shows if the CPU changed memory (not if the LCD/audio device changed memory
+  ;; TODO
+  (let* ((cpu (cpu-current))
+	 (prev-cpu (cpu-previous))
+
+	 (memory-updates (and cpu (aval :memory (instr-effects cpu *memory*))))
+	 (prev-memory-updates (and prev-cpu (aval :memory (instr-effects prev-cpu *memory*))))
+
+	 (will-change? (member addr memory-updates :key 'first))
+	 (changed? (member addr prev-memory-updates :key 'first)))
+    (cond ((and changed? will-change?) (yellow))
+	  (changed? (red))
+	  (will-change? (green))
+	  (t (white)))))
+
+(defun memory-vis (id title-text pos current-addr-fn highlight-color)
+  (merge-visrs
+   (static-text-vis (join-ids id :title) title-text pos)
+   (dynamic-texts-vis (join-ids id :address)
+		      ;; Address texts
+		      (mapcar (fn (lambda ()
+				    (concat (hex16-text (+ % (start-addr (funcall current-addr-fn))))
+					    ": ")))
+			      (range *memory-visualization-byte-count*))
+		      ;; Address colored to highlight color if it matches the current-addr-fn
+		      (mapcar (fn (lambda ()
+				    (let* ((current-addr (funcall current-addr-fn)))
+				      (if (= current-addr (+ % (start-addr current-addr)))
+					  highlight-color
+					  (white)))))
+			      (range *memory-visualization-byte-count*))
+		      (v+ pos (g2 4 1))
+		      :right-aligned? t)
+   
+   (dynamic-texts-vis (join-ids id :address :data)
+		      ;; Memory data texts
+		      (mapcar (fn (lambda ()
+				    (register8-text (mem-byte (+ % (start-addr (funcall current-addr-fn)))))))
+			      (range *memory-visualization-byte-count*))
+		      ;; Color the memory data if the memory was/will be changed
+		      (mapcar (fn (lambda () (memory-color (+ % (start-addr (funcall current-addr-fn))))))
+			      (range *memory-visualization-byte-count*))
+		      (v+ pos (g2 4 1)))))
+
+(defvis (join-ids :memory :pc) (id)
+  (memory-vis id "PC" (g2 1 3)
+	      (fn (cpu-pc (cpu-current)))
+	      (green)))
+(defvis (join-ids :memory :sp) (id)
+  (memory-vis id "SP" (g2 11 3)
+	      (fn (cpu-sp (cpu-current)))
+	      (color #x45 #xb6 #xfe 255)))
+(defvis (join-ids :memory :hl) (id)
+  (memory-vis id "HL" (g2 21 3)
+	      (fn (cpu-hl (cpu-current)))
+	      (yellow)))
 
 #+nil
 (command! (remove-drawing! :mouse-pos))
