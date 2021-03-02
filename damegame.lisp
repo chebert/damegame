@@ -4271,8 +4271,26 @@ Waits for a reset signal."
 				       (incf i))))))
 (defparameter *tile-map-size* 256)
 
+(defun tile-map-vis (id tile-map-fn pos)
+  (pixel-buffer-vis id *tile-map-size* *tile-map-size*
+		    (fn (tile-map-pixels (funcall tile-map-fn) (8000-addressing-mode?)))
+		    pos))
+
+(defun tile-data-block-vis (id block-fn pos)
+  (apply 'merge-visrs
+	 (map-grid (lambda (x y index)
+		     (pixel-buffer-vis (join-ids id x y)
+				       8 8
+				       (fn (tile-data-pixels
+					    (tile-data-from-block (funcall block-fn) index)
+					    (default-palette-colors)))
+				       (v+ pos (g2 x y) (v2 1 1))
+				       (v+ (g2 1 1) (v2 -2 -2))))
+		   16 8)))
+
 (defvis :lcd-debug (id)
-  (let* ((pos (g2 3 3)))
+  (let* ((pos (g2 3 3))
+	 (text-offset (g2 1/2 3/2)))
     (merge-visrs
      (alist :drawings (alist (join-ids id :outline)
 			     (drawing 8 (fn
@@ -4281,26 +4299,21 @@ Waits for a reset signal."
 						      (+ (y pos) (g1 1))
 						      (g1 12) (g1 12))))))
 
-     (pixel-buffer-vis (join-ids id :background-tile-map) *tile-map-size* *tile-map-size*
-		       (fn (tile-map-pixels (background-tile-map) (8000-addressing-mode?)))
-		       (v+ pos (g2 12 0)))
+     (tile-map-vis (join-ids id :background-tile-map)
+		   'background-tile-map
+		   (v+ pos (g2 12 0)))
 
-     (pixel-buffer-vis (join-ids id :window-tile-map) *tile-map-size* *tile-map-size*
-		       (fn (tile-map-pixels (window-tile-map) (8000-addressing-mode?)))
-		       (v+ pos (g2 12 13)))
+     (tile-map-vis (join-ids id :window-tile-map)
+		   'window-tile-map
+		   (v+ pos (g2 12 13)))
 
-     (apply 'merge-visrs
-	    (map-grid (lambda (x y index)
-			(pixel-buffer-vis (join-ids id :tile-data x y)
-					  8 8
-					  (fn (tile-data-pixels
-					       (tile-data-from-block (tile-data-block0) index)
-					       (default-palette-colors)))
-					  (v+ pos (g2 0 13) (g2 x y) (v2 1 1))
-					  (v+ (g2 1 1) (v2 -2 -2))))
-		      16 8))
+     (tile-data-block-vis (join-ids id :tile-data-block)
+			  'tile-data-block0
+			  (v+ pos (g2 0 13)))
 
-     (static-text-vis (join-ids id :title) "LCD Registers" (v+ pos (g2 1/2 0)))
+     (static-text-vis (join-ids id :title)
+		      "LCD Registers"
+		      (v+ pos (g2 1/2 0)))
      (static-texts-vis (join-ids id :registers)
 		       '("CmpScanline: "
 			 "Scanline: "
@@ -4309,7 +4322,7 @@ Waits for a reset signal."
 			 "Window Tiles: "
 			 "BG Tiles: "
 			 "Object Size: ")
-		       (v+ pos (g2 (+ 7 1/2) 3/2))
+		       (v+ pos (g2 7 0) text-offset)
 		       :right-aligned? t)
      (let* ((text-fns (list (fn (u8-text (lcd-scanline-compare)))
 			    (fn (u8-text (lcd-scanline)))
@@ -4326,13 +4339,13 @@ Waits for a reset signal."
        (dynamic-texts-vis (join-ids id :register-data)
 			  text-fns
 			  (mapcar (fn (lambda () (white))) text-fns)
-			  (v+ pos (g2 (+ 1/2 7) 3/2))))
+			  (v+ pos (g2 7 0) text-offset)))
      (let* ((flag-names (list "Coincidence?"
 			      "Display?"
 			      "Window Disp?"
 			      "BG/Win Disp?")))
        (flags-vis (join-ids id :flags)
-		  (v+ pos (g2 (+ 1/2 7) (+ 7 3/2)))
+		  (v+ pos (g2 7 7) text-offset)
 		  flag-names
 		  (list (fn (lcd-coincidence?))
 			(fn (lcdc-display?))
