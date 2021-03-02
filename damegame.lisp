@@ -2837,10 +2837,13 @@ Waits for a reset signal."
 		  (aref rgba-pixels (+ 3 (* i 4))) (a color)))
     rgba-pixels))
 
+(defun tile-data-pixels (tile-data palette-colors &optional sprite?)
+  (rgba-pixels-from-colors
+   (tile-data-colors tile-data palette-colors sprite?)))
+
 (defun fill-tile-data-texture! (tile-texture tile-data palette-colors &optional sprite?)
   (replace-pixel-buffer! tile-texture
-			 (rgba-pixels-from-colors
-			  (tile-data-colors tile-data palette-colors sprite?))))
+			 (tile-data-pixels tile-data palette-colors sprite?)))
 
 (defun tile-data-from-block (tile-data-block index)
   (let* ((start (* index 16)))
@@ -2930,7 +2933,7 @@ Waits for a reset signal."
 	      (aref rgba-pixels (+ 2 byte-index)) (b color)
 	      (aref rgba-pixels (+ 3 byte-index)) (a color))))))
 
-(defun fill-tile-map-texture! (tile-map 8000-addressing-mode?)
+(defun tile-map-pixels (tile-map 8000-addressing-mode?)
   (let* ((tile-addresses (tile-addresses tile-map 8000-addressing-mode?))
 	 (rgba-pixels (make-array (list (* 4 8 8 32 32)) :element-type '(unsigned-byte 8))))
     (loop for addr in tile-addresses
@@ -2938,7 +2941,10 @@ Waits for a reset signal."
 	    (let* ((tile-data (subseq *memory* addr (+ addr 16)))
 		   (colors (tile-data-colors tile-data (default-palette-colors) nil)))
 	      (copy-tile-map-pixels-from-tile-data! rgba-pixels i colors)))
-    (replace-pixel-buffer! *tile-map-texture* rgba-pixels)))
+    rgba-pixels))
+
+(defun fill-tile-map-texture! (tile-map 8000-addressing-mode?)
+  (replace-pixel-buffer! *tile-map-texture* (tile-map-pixels tile-map 8000-addressing-mode?)))
 
 (defun lcdc-register ()
   (mem-byte #xff40))
@@ -3884,6 +3890,11 @@ Waits for a reset signal."
   (alist :type :text-texture
 	 :font-id font-id
 	 :text text))
+(defun pixel-buffer-texture (width height data-fn)
+  (alist :type :pixel-buffer-texture
+	 :width width
+	 :height height
+	 :data-fn data-fn))
 
 (defun visualization-id (visualization id)
   (list :visualization (aval :id visualization) id))
@@ -3907,6 +3918,12 @@ Waits for a reset signal."
   (do-when-initialized
     (amap (fn (load-texture-spec! % %%))
 	  (aval :static-texture-specs visualization))
+    (amap (fn
+	    (setf (gethash % *textures*)
+		  (create-pixel-buffer-texture!
+		   (aval :width %%)
+		   (aval :height %%))))
+	  (aval :pixel-buffer-specs visualization))
     (update-visualization! visualization)
     (show-visualization! visualization)
     (register-handler! (visualization-id visualization :update)
@@ -3915,7 +3932,10 @@ Waits for a reset signal."
     (amap 'register-handler! (aval :event-handlers visualization))))
 (defun update-visualization! (visualization)
   (amap (fn (load-texture-spec! % (funcall %%)))
-	(aval :dynamic-texture-spec-fns visualization)))
+	(aval :dynamic-texture-spec-fns visualization))
+  (amap (fn (replace-pixel-buffer! (gethash % *textures*)
+				   (funcall (aval :data-fn %%))))
+	(aval :pixel-buffer-specs visualization)))
 (defun show-visualization! (visualization)
   (amap (fn (add-drawing! % %%)) (aval :drawings visualization)))
 (defun hide-visualization! (visualization)
@@ -4083,6 +4103,15 @@ Waits for a reset signal."
 						    (draw-full-texture-id! %% %)))
 					    pos
 					    text-ids)))))))
+
+(defun pixel-buffer-vis (vis-id width height pixel-buffer-data-fn pos &optional (dest-dims (v2 width height)))
+  (let* ((texture-id (join-ids vis-id :pixel-buffer)))
+    (alist :pixel-buffer-specs (alist texture-id (pixel-buffer-texture width height pixel-buffer-data-fn))
+	   :drawings (alist (join-ids vis-id :pixel-buffer)
+			    (drawing 3 (fn (draw-texture! (gethash texture-id *textures*)
+							  0 0 width height
+							  (x pos) (y pos) (x dest-dims) (y dest-dims))))))))
+
 (defun static-text-vis (vis-id text pos)
   (static-texts-vis vis-id (list text) pos))
 
@@ -4234,16 +4263,44 @@ Waits for a reset signal."
 		     (list (fn (white)))
 		     (g2 32 15)))
 
+(defun map-grid (fn width height &optional (start-x 0) (start-y 0))
+  (let* ((i 0))
+    (loop for y from start-y below height
+	  appending (loop for x from start-x below width
+			  collecting (prog1 (funcall fn x y i)
+				       (incf i))))))
+(defparameter *tile-map-size* 256)
+
 (defvis :lcd-debug (id)
   (let* ((pos (g2 3 3)))
     (merge-visrs
      (alist :drawings (alist (join-ids id :outline)
 			     (drawing 8 (fn
 					  (set-color! (white))
-					  (draw-rect! (- (x pos) (g1 1/2))
-						      (- (y pos) (g1 1/2))
+					  (draw-rect! (x pos)
+						      (+ (y pos) (g1 1))
 						      (g1 12) (g1 12))))))
-     (static-text-vis (join-ids id :title) "LCD Registers" (v+ pos (g2 0 -3/2)))
+
+     (pixel-buffer-vis (join-ids id :background-tile-map) *tile-map-size* *tile-map-size*
+		       (fn (tile-map-pixels (background-tile-map) (8000-addressing-mode?)))
+		       (v+ pos (g2 12 0)))
+
+     (pixel-buffer-vis (join-ids id :window-tile-map) *tile-map-size* *tile-map-size*
+		       (fn (tile-map-pixels (window-tile-map) (8000-addressing-mode?)))
+		       (v+ pos (g2 12 13)))
+
+     (apply 'merge-visrs
+	    (map-grid (lambda (x y index)
+			(pixel-buffer-vis (join-ids id :tile-data x y)
+					  8 8
+					  (fn (tile-data-pixels
+					       (tile-data-from-block (tile-data-block0) index)
+					       (default-palette-colors)))
+					  (v+ pos (g2 0 13) (g2 x y) (v2 1 1))
+					  (v+ (g2 1 1) (v2 -2 -2))))
+		      16 8))
+
+     (static-text-vis (join-ids id :title) "LCD Registers" (v+ pos (g2 1/2 0)))
      (static-texts-vis (join-ids id :registers)
 		       '("CmpScanline: "
 			 "Scanline: "
@@ -4252,7 +4309,7 @@ Waits for a reset signal."
 			 "Window Tiles: "
 			 "BG Tiles: "
 			 "Object Size: ")
-		       (v+ pos (g2 7 0))
+		       (v+ pos (g2 (+ 7 1/2) 3/2))
 		       :right-aligned? t)
      (let* ((text-fns (list (fn (u8-text (lcd-scanline-compare)))
 			    (fn (u8-text (lcd-scanline)))
@@ -4269,13 +4326,13 @@ Waits for a reset signal."
        (dynamic-texts-vis (join-ids id :register-data)
 			  text-fns
 			  (mapcar (fn (lambda () (white))) text-fns)
-			  (v+ pos (g2 7 0))))
+			  (v+ pos (g2 (+ 1/2 7) 3/2))))
      (let* ((flag-names (list "Coincidence?"
 			      "Display?"
 			      "Window Disp?"
 			      "BG/Win Disp?")))
        (flags-vis (join-ids id :flags)
-		  (v+ pos (g2 7 7))
+		  (v+ pos (g2 (+ 1/2 7) (+ 7 3/2)))
 		  flag-names
 		  (list (fn (lcd-coincidence?))
 			(fn (lcdc-display?))
