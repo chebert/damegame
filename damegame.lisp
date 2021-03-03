@@ -1018,12 +1018,6 @@ Test-fn and handle-fn are both functions of event."
 					     (g1 29)
 					     (g1 (1+ (length lines))))))))))
 
-(defvisualization :instruction-description
-    (alist :initialization
-	   (fn (initialize-description! (aval :description (next-instr (cpu-current) *memory*))))
-	   :update
-	   (fn (initialize-description! (aval :description (next-instr (cpu-current) *memory*))))))
-
 #+nil
 (command! (reset!))
 
@@ -3751,24 +3745,36 @@ Waits for a reset signal."
   (alist :type :text-texture
 	 :font-id font-id
 	 :text text))
-(defun pixel-buffer-texture (width height data-fn)
+(defun pixel-buffer-texture (width height data)
   (alist :type :pixel-buffer-texture
 	 :width width
 	 :height height
-	 :data-fn data-fn))
+	 :data data))
 
 (defun visualization-id (visualization id)
   (list :visualization (aval :id visualization) id))
 
-(defun visualization-texture-ids (visualization)
-  (let* ((static-texture-specs (aval :static-texture-specs visualization))
-	 (dynamic-texture-spec-fns (aval :dynamic-texture-spec-fns visualization)))
-    (append (akeys static-texture-specs)
-	    (akeys dynamic-texture-spec-fns))))
+(defun initialize-spec! (id spec)
+  (ecase (aval :type spec)
+    ((:text-texture :text-block-spec) (update-spec! id spec))
+    (:pixel-buffer-texture
+     (setf (gethash id *textures*)
+	   (create-pixel-buffer-texture!
+	    (aval :width spec)
+	    (aval :height spec))))))
 
-(defun load-texture-spec! (id texture-spec)
-  (ecase (aval :type texture-spec)
-    (:text-texture (load-text-texture! id (aval :font-id texture-spec) (aval :text texture-spec)))))
+(defun update-spec! (id spec)
+  (ecase (aval :type spec)
+    (:text-texture (load-text-texture! id (aval :font-id spec) (aval :text spec)))
+    (:pixel-buffer-texture (replace-pixel-buffer! (gethash id *textures*)
+						  (aval :data spec)))
+    (:text-block-spec (update-text-block! id (text-block-spec-lines spec)))))
+
+(defun unload-spec! (id spec)
+  (ecase (aval :type spec)
+    (:text-texture (unload-texture! id))
+    (:pixel-buffer-texture (unload-texture! id))
+    (:text-block-spec (unload-text-block-textures! id))))
 
 (defmacro do-when-initialized (&body body)
   `(if *initialization-finished?*
@@ -3777,33 +3783,24 @@ Waits for a reset signal."
 
 (defun initialize-visualization! (visualization)
   (do-when-initialized
-    (amap (fn (load-texture-spec! % %%))
-	  (aval :static-texture-specs visualization))
-    (amap (fn
-	    (setf (gethash % *textures*)
-		  (create-pixel-buffer-texture!
-		   (aval :width %%)
-		   (aval :height %%))))
-	  (aval :pixel-buffer-specs visualization))
-    (update-visualization! visualization)
+    (amap (fn (initialize-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization))
+    (amap 'initialize-spec! (aval :static-specs visualization))
+    
     (show-visualization! visualization)
     (register-handler! (visualization-id visualization :update)
 		       (event-handler (fn (eql (aval :type %) :update-visualization))
 				      (fn (update-visualization! visualization))))
     (amap 'register-handler! (aval :event-handlers visualization))))
 (defun update-visualization! (visualization)
-  (amap (fn (load-texture-spec! % (funcall %%)))
-	(aval :dynamic-texture-spec-fns visualization))
-  (amap (fn (replace-pixel-buffer! (gethash % *textures*)
-				   (funcall (aval :data-fn %%))))
-	(aval :pixel-buffer-specs visualization)))
+  (amap (fn (update-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization)))
 (defun show-visualization! (visualization)
-  (amap (fn (add-drawing! % %%)) (aval :drawings visualization)))
+  (amap 'add-drawing! (aval :drawings visualization)))
 (defun hide-visualization! (visualization)
   (amap (fn (remove-drawing! %)) (aval :drawings visualization)))
 (defun unload-visualization! (visualization)
+  (amap (fn (unload-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization))
+  (amap 'unload-spec! (aval :static-specs visualization))
   (hide-visualization! visualization)
-  (mapcar 'unload-texture! (visualization-texture-ids visualization))
   (remove-handler! (visualization-id visualization :update))
   (amap (fn (remove-handler! %)) (aval :event-handlers visualization)))
 
@@ -3896,11 +3893,11 @@ Waits for a reset signal."
   (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys))
 	 (data-ids (mapcar (fn (join-ids vis-id % :data)) register-keys))
 	 (drawing-id (join-ids vis-id :drawing)))
-    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " "))))
-					 label-ids
-					 label-texts)
+    (alist :static-specs (mapcar (fn (cons % (text-texture (concat %% " "))))
+				 label-ids
+				 label-texts)
 	   ;; Get reloaded at update time
-	   :dynamic-texture-spec-fns
+	   :dynamic-spec-fns
 	   (mapcar (lambda (id key)
 		     (cons id (fn (text-texture
 				   (if-let (cpu (funcall cpu-fn))
@@ -3934,7 +3931,7 @@ Waits for a reset signal."
 
 (defun flags-vis (vis-id pos names flag-fns color-fns)
   (let* ((label-ids (mapcar (fn (join-ids vis-id %)) (range (length names)))))
-    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids names)
+    (alist :static-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids names)
 	   :drawings (alist (join-ids vis-id :drawing)
 			    (drawing 3 (fn (for-each-row
 					    (lambda (pos label-id flag-fn color-fn)
@@ -3946,7 +3943,7 @@ Waits for a reset signal."
 (defun cpu-flags-list-vis (pos vis-id label-texts register-keys cpu-fn cpu-previous-fn)
   ;; TODO: Use flags-vis
   (let* ((label-ids (mapcar (fn (join-ids vis-id %)) register-keys)))
-    (alist :static-texture-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids label-texts)
+    (alist :static-specs (mapcar (fn (cons % (text-texture (concat %% " ")))) label-ids label-texts)
 	   :drawings (alist (join-ids vis-id :drawing)
 			    (drawing 3 (fn (draw-cpu-registers! pos
 								label-ids
@@ -3956,7 +3953,7 @@ Waits for a reset signal."
 
 (defun static-texts-vis (vis-id texts pos &key right-aligned?)
   (let* ((text-ids (loop for i from 0 for text in texts collecting (join-ids vis-id :static-text i))))
-    (alist :static-texture-specs (mapcar (fn (cons % (text-texture %%))) text-ids texts)
+    (alist :static-specs (mapcar (fn (cons % (text-texture %%))) text-ids texts)
 	   :drawings (alist (join-ids vis-id :drawing)
 			    (drawing 3 (fn (for-each-row
 					    (fn (if right-aligned?
@@ -3967,7 +3964,8 @@ Waits for a reset signal."
 
 (defun pixel-buffer-vis (vis-id width height pixel-buffer-data-fn pos &optional (dest-dims (v2 width height)))
   (let* ((texture-id (join-ids vis-id :pixel-buffer)))
-    (alist :pixel-buffer-specs (alist texture-id (pixel-buffer-texture width height pixel-buffer-data-fn))
+    (alist :dynamic-spec-fns (alist texture-id (fn (pixel-buffer-texture width height
+									 (funcall pixel-buffer-data-fn))))
 	   :drawings (alist (join-ids vis-id :pixel-buffer)
 			    (drawing 3 (fn (draw-texture! (gethash texture-id *textures*)
 							  0 0 width height
@@ -3978,9 +3976,9 @@ Waits for a reset signal."
 
 (defun dynamic-texts-vis (vis-id text-fns color-fns pos &key right-aligned?)
   (let* ((text-ids (loop for i from 0 below (length text-fns) collecting (join-ids vis-id :dynamic-text i))))
-    (alist :dynamic-texture-spec-fns (mapcar (lambda (id text-fn)
-					       (cons id (fn (text-texture (funcall text-fn)))))
-					     text-ids text-fns)
+    (alist :dynamic-spec-fns (mapcar (lambda (id text-fn)
+				       (cons id (fn (text-texture (funcall text-fn)))))
+				     text-ids text-fns)
 	   :drawings (alist (join-ids vis-id :drawing)
 			    (drawing 3 (fn (for-each-row
 					    (lambda (pos id color-fn)
@@ -3992,6 +3990,61 @@ Waits for a reset signal."
 					    text-ids
 					    color-fns)))))))
 
+(defun draw-text-block! (text-block-id lines pos)
+  (let* ((num-lines (length lines)))
+    (for-each-row
+     (lambda (pos index)
+       (draw-full-texture-id! (join-ids text-block-id index) pos))
+     pos (range num-lines))))
+
+(defun ensure-list (v)
+  (if (listp v)
+      v
+      (list v)))
+
+(defun unload-text-block-textures! (text-block-id)
+  (let* ((ids ()))
+    (maphash
+     (fn
+       (when (> (mismatch (ensure-list text-block-id) (ensure-list %)) (length text-block-id))
+	 (push % ids)))
+     *textures*)
+    (mapcar 'unload-texture! ids)))
+
+(defun update-text-block! (text-block-id lines)
+  (unload-text-block-textures! text-block-id)
+  (mapcar (lambda (line index)
+	    (load-text-texture! (join-ids text-block-id index)
+				:font
+				line))
+	  lines
+	  (range (length lines))))
+
+(defun text-block-spec (text line-length)
+  (alist :type :text-block-spec
+	 :text text
+	 :line-length line-length))
+
+(defun text-block-spec-lines (spec)
+  (word-wrap (aval :text spec) (aval :line-length spec)))
+
+;; Visualization
+;;; Update
+;;;   Called once for static resources
+;;;   Called once per visualization update for dynamic resources
+;;; Draw
+;;;   Called once per frame
+;;; Unload
+;;;   Called once when at the end
+;;; Show
+;;;   called once when initialized; once every time the show event occurs
+
+(defun dynamic-text-block-vis (id pos text-block-spec-fn)
+  (alist :dynamic-spec-fns (alist id text-block-spec-fn)
+	 :drawings
+	 (alist id (drawing 8 (fn (draw-text-block! id
+						    (text-block-spec-lines (funcall text-block-spec-fn))
+						    pos))))))
 
 (defun cpu-vis (vis-id pos vis-name cpu-fn cpu-prev-fn)
   (with-visualization-ids vis-id (id hi-register lo-register combined-register stack-pointer pc pc-data
@@ -4225,3 +4278,19 @@ Waits for a reset signal."
 			(fn (lcdc-window-display?))
 			(fn (lcdc-background/window-display?)))
 		  (mapcar (fn (lambda () (white))) flag-names))))))
+
+(defvis :instruction-description (id)
+  (let* ((pos (g2 1 30))
+	 (text-block-fn (fn (text-block-spec (aval :description (next-instr (cpu-current) *memory*))
+					     56))))
+    (merge-visrs
+     (dynamic-text-block-vis (join-ids id :text-block)
+			     (v+ pos (g2 1/2 1/2))
+			     text-block-fn)
+     (alist :drawings
+	    (alist (join-ids id :outline)
+		   (drawing 3 (fn
+				(let* ((num-lines (length (text-block-spec-lines
+							   (funcall text-block-fn)))))
+				  (set-color! (white))
+				  (draw-rect! (x pos) (y pos) (g1 29) (g1 (1+ num-lines)))))))))))
