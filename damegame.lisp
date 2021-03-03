@@ -1024,28 +1024,6 @@ Test-fn and handle-fn are both functions of event."
 	   :update
 	   (fn (initialize-description! (aval :description (next-instr (cpu-current) *memory*))))))
 
-(defvisualization :next-disassembly
-    (alist :initialization
-	   (fn
-	     (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*))
-	     (add-drawing! :disassembly-next (full-texture-drawing 1 :disassembly-next (g2 32 29))))
-
-	   :update
-	   (fn (load-text-texture! :disassembly-next :font (disassembly-text (cpu-current) *memory*)))))
-
-(defvisualization :disassembly
-    (alist :initialization
-	   (fn
-	     (load-text-texture! :disassembly :font "(Disassembly)")
-	     (add-drawing! :disassembly (full-texture-drawing 1 :disassembly (g2 32 13))))
-	   :update
-	   (fn
-	     (let* ((cpu-previous (cpu-previous)))
-	       (load-text-texture! :disassembly :font
-				   (if cpu-previous
-				       (disassembly-text cpu-previous *memory*)
-				       "(Disassembly)"))))))
-
 #+nil
 (command! (reset!))
 
@@ -4131,11 +4109,14 @@ Waits for a reset signal."
 					    text-ids
 					    color-fns)))))))
 
+
 (defun cpu-vis (vis-id pos vis-name cpu-fn cpu-prev-fn)
   (with-visualization-ids vis-id (id hi-register lo-register combined-register stack-pointer pc pc-data
 				     flags1 flags2 outline title)
     (merge-visrs
      (static-text-vis title vis-name (v+ pos (g2 1 -3/2)))
+
+     
      (cpu-register8-list-vis (v+ pos (g2 1 3))
 			     hi-register
 			     (list "A" "B" "D" "H")
@@ -4185,7 +4166,16 @@ Waits for a reset signal."
 					    (draw-rect! (- (x pos) (g1 1/2))
 							(- (y pos) (g1 1/2))
 							(g1 19)
-							(g1 11)))))))))
+							(g1 11))))))
+     (dynamic-texts-vis
+      (join-ids id :disassembly)
+      (list (fn (let* ((cpu (funcall cpu-fn))
+		       (disassembly (when cpu (disassemble-instr cpu *memory*))))
+		  (if disassembly
+		      (text-from-disassembly (aset :pc (cpu-pc cpu) (disassemble-instr cpu *memory*)))
+		      "(Disassembly)"))))
+      (list (fn (white)))
+      (v+ pos (g2 0 11))))))
 
 (defun range (end &optional (start 0))
   (loop for i from start below end collecting i))
