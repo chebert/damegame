@@ -4214,17 +4214,33 @@ Waits for a reset signal."
 				       (v+ (g2 1 1) (v2 -2 -2))))
 		   16 8)))
 
+(defun draw-color-palette-colors! (pos palette-addr sprite-palette?)
+  (loop for color in (palette-colors-from-color-palette-addr palette-addr)
+	for i from 0 below 4 do
+	  (set-color! (if (and sprite-palette? (= i 0))
+			  (color 255 0 255 255)
+			  color))
+	  (fill-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))
+	  (set-color! (red 50))
+	  (draw-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))))
+
 (defvis :lcd-debug (id)
   (let* ((pos (g2 3 3))
 	 (text-offset (g2 1/2 3/2)))
     (merge-visrs
-     (alist :drawings (alist (join-ids id :outline)
-			     (drawing 8 (fn
-					  (set-color! (white))
-					  (draw-rect! (x pos)
-						      (+ (y pos) (g1 1))
-						      (g1 12) (g1 12))))))
 
+     (static-texts-vis (join-ids id :palette-texts)
+		       '("BG" "OBJ0" "OBJ1")
+		       (v+ pos (g2 3 21))
+		       :right-aligned? t)
+     (alist :drawings (alist (join-ids id :palettes)
+			     (drawing 3 (fn (for-each-row
+					     (lambda (pos palette-addr sprite-palette?)
+					       (draw-color-palette-colors! pos palette-addr sprite-palette?))
+					     (v+ pos (g2 3 21))
+					     (list *bg-color-palette-addr* #xff48 #xff49)
+					     '(nil t t))))))
+     
      (tile-map-vis (join-ids id :background-tile-map)
 		   'background-tile-map
 		   (v+ pos (g2 12 0)))
@@ -4237,6 +4253,12 @@ Waits for a reset signal."
 			  'tile-data-block0
 			  (v+ pos (g2 0 13)))
 
+     (alist :drawings (alist (join-ids id :registers-outline)
+			     (drawing 8 (fn
+					  (set-color! (white))
+					  (draw-rect! (x pos)
+						      (+ (y pos) (g1 1))
+						      (g1 12) (g1 12))))))
      (static-text-vis (join-ids id :title)
 		      "LCD Registers"
 		      (v+ pos (g2 1/2 0)))
