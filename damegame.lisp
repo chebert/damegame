@@ -228,28 +228,12 @@ From the plist (id value id2 value2 ...)"
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *resets* ()
-    "A-list of variable-name, to (fn) which resets the variable-name.")
-  (defvar *visualizations* ()))
+    "A-list of variable-name, to (fn) which resets the variable-name."))
 
 (defmacro defreset-var (var-name reset-form &optional documentation)
   `(progn
      (defvar ,var-name nil ,documentation)
      (asetq ',var-name (lambda () ,reset-form) *resets*)))
-(defmacro defvisualization (id visualization)
-  (let* ((vis-name (gensym)))
-    `(if *running?*
-	 (command!
-	   (let* ((,vis-name ,visualization))
-	     (asetq ,id ,vis-name *visualizations*)
-	     (register-visualization! ,id ,vis-name)))
-	 (asetq ,id ,visualization *visualizations*))))
-(defmacro undefvisualization (id &rest ignored)
-  (declare (ignore ignored))
-  `(if *running?*
-       (command!
-	 (remove-visuaulization! ,id)
-	 (setq *visualizations* (aremove *visualizations* ,id)))
-       (setq *visualizations* (aremove *visualizations* ,id))))
 
 ;; TODO: If we start adding to/removing from *DRAWINGS* frequently, then
 ;; something like a binary tree may be better
@@ -455,15 +439,23 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
 	 (load-text-texture! :no :font "[No]")
 	 (load-text-texture! :yes :font "[Yes]")
 	 
-	 (amap 'register-visualization! *visualizations*)
-	 (amap (fn (initialize-visualization! %%)) *visualizations2*)
+	 (amap (fn (initialize-visualization! %%)) *visualizations*)
+
 	 (notify-handlers! (event-initialization-finished))
-	 (setq *initialization-finished?* t)
+
+	 ;; TODO: more events for more phases
+	 ;;   reset-vars reset
+	 ;;   sdl-started
+	 ;;   font-loaded
+	 ;;   visualizations initialized
+	 ;;   etc.
+
+	 (switch-main-panel! :memory)
 
 	 (unless *system-initialized?*
 	   (reset!)
 	   (setq *system-initialized?* t))
-
+	 (setq *initialization-finished?* t)
 	 (main-loop!))
     (maphash (fn (close-font! %%)) *fonts*)
     (maphash (fn (free-texture! %%)) *textures*)
@@ -979,7 +971,7 @@ Test-fn and handle-fn are both functions of event."
 
   (loop for i from 0 below (length *lcd-pixel-buffer*)
 	do (setf (aref *lcd-pixel-buffer* i) 255))
-  (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
+  (replace-pixel-buffer! (gethash *lcd-texture-id* *textures*) *lcd-pixel-buffer*))
 
 (defreset-var *pc-path* (make-array (* 512 1024) :adjustable t :fill-pointer 0))
 (defreset-var *memory-updates* ())
@@ -3027,32 +3019,16 @@ Waits for a reset signal."
 	     (draw-sprite-texture! tile/pattern-number palette-colors
 				   (v+ pos (g2 x y))))))))))
 
-(defun display-memory-visualiztions! ()
-  (mapcar
-   'event!
-   (list
-    (alist :type :hide :id :main-panel)
-    (alist :type :display :id :memory-visualizations))))
-(defun display-lcd-visualiztions! ()
-  (mapcar
-   'event!
-   (list
-    (alist :type :hide :id :main-panel)
-    (alist :type :display :id :lcd-visualizations))))
+(defun switch-main-panel! (id)
+  (notify-handlers! (alist :type :hide :id :main-panel))
+  (notify-handlers! (alist :type :display :id id)))
 
 (defbutton memory (button "Memory" 1 (g2 1 28) :font)
-  (unless (draw-memory-visualizations?)
-    (display-memory-visualiztions!)))
+  (switch-main-panel! :memory))
 (defbutton lcd-debug (button "LCD Debug" 1 (g2 5 28) :font)
-  (when (not (eql :lcd-debug *main-panel*))
-    (display-lcd-visualiztions!)))
+  (switch-main-panel! :lcd-debug))
 (defbutton game (button "Game" 1 (g2 10 28) :font)
-  (when (not (eql :game *main-panel*))
-    (mapcar
-     'event!
-     (list
-      (alist :type :hide :id :main-panel)
-      (alist :type :display :id :game)))))
+  (switch-main-panel! :main-lcd))
 
 (defun button-spec (id button on-click-fn)
   "A button spec used for create-button!, uses a button spec for defbutton."
@@ -3176,84 +3152,6 @@ Waits for a reset signal."
    (event-hide-matcher panel-id)
    (fn
      (funcall fn))))
-
-(defvisualization :lcd-debug
-    (alist :initialization
-	   (fn (case *main-panel*
-		 (:memory (display-memory-visualiztions!))
-		 (:lcd-debug (display-lcd-visualiztions!))))
-	   :update
-	   (fn (update-lcd-visualizations!))
-	   :display-event-handler
-	   (display-event-handler
-	    :lcd-visualizations
-	    (fn
-	      (setq *main-panel* :lcd-debug)
-	      (update-lcd-visualizations!)
-
-	      (mapcar 'create-button! (lcd-buttons))
-	      (add-drawing! :lcd-visualizations (drawing 1 (fn (draw-lcd-visualizations!))))
-	      (add-drawing! :background-scroll (background-scroll-drawing))))
-	   :hide-event-handler
-	   (hide-event-handler
-	    :main-panel
-	    (fn
-	      (mapcar (fn (remove-button! (aval :id %))) (lcd-buttons))
-	      (mapcar 'remove-drawing! '(:lcd-visualizations :background-scroll))))))
-
-(defun draw-lcd-visualizations! ()
-  (draw-sprites! (g2 16 14))
-  (draw-tile-data-textures! (g2 3 5))
-  (draw-color-palettes!)
-  (draw-full-texture! *tile-map-texture* (g1 3) (g1 14))
-  (draw-full-texture-id! :tile-map-pos (g2 10 27))
-
-  ;; TODO: Modulate colors based on what has/hasn't changed.
-  (let* ((column 27)
-	 (y 6))
-    (draw-full-texture-id-right-aligned! :lcdc-display? (g2 column y))
-    (draw-full-texture-id! (if (lcdc-display?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-background/window-display? (g2 column y))
-    (draw-full-texture-id! (if (lcdc-background/window-display?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-window-disp? (g2 column y))
-    (draw-full-texture-id! (if (lcdc-window-display?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-object-display? (g2 column y))
-    (draw-full-texture-id! (if (lcdc-object-display?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-window-tiles (g2 column y))
-    (draw-full-texture-id! :lcdc-window-tiles-data (g2 column y))
-    
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-bg-tiles (g2 column y))
-    (draw-full-texture-id! :lcdc-bg-tiles-data (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcdc-object-size (g2 column y))
-    (draw-full-texture-id! :lcdc-object-size-data (g2 column y)))
-
-  (let* ((column 24)
-	 (y 21))
-    (draw-full-texture-id-right-aligned! :lcd-status-scanline (g2 column y))
-    (draw-full-texture-id! :lcd-status-scanline-data (g2 column y))
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcd-status-compare-scanline (g2 column y))
-    (draw-full-texture-id! :lcd-status-compare-scanline-data (g2 column y))
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcd-status-mode (g2 column y))
-    (draw-full-texture-id! :lcd-status-mode-data (g2 column y))
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcd-status-coincidence? (g2 column y))
-    (draw-full-texture-id! (if (lcd-coincidence?) :yes :no) (g2 column y))
-    (incf y)
-    (draw-full-texture-id-right-aligned! :lcd-status-dma-address (g2 column y))
-    (draw-full-texture-id! :lcd-status-dma-address-data (g2 column y))))
 
 (defun background-scroll-drawing ()
   (drawing 3 (fn
@@ -3692,55 +3590,6 @@ Waits for a reset signal."
 	    (format s "~A: ~A~%" (car %) (updated-memory-text (cdr %))))
 	  (reverse (remove 7 *memory-updates* :key 'car))))
 
-(defun register-visualization! (id visualization)
-  (if *initialization-finished?*
-      (funcall (aval :initialization visualization))
-      (register-handler! (cons :initialization id)
-			 (event-handler (event-matcher-initialization-finished)
-					(aval :initialization visualization))))
-  (when-aval (display-event-handler :display-event-handler visualization)
-    (register-handler! (cons :display id) display-event-handler))
-  (when-aval (hide-event-handler :hide-event-handler visualization)
-    (register-handler! (cons :hide id) hide-event-handler))
-  (let* ((update-event-handler (event-handler (event-matcher-update-visualization)
-					      (aval :update visualization))))
-    (register-handler! (cons :update id) update-event-handler)))
-
-(defun remove-visuaulization! (id)
-  (remove-handler! (cons :initialization id))
-  (remove-handler! (cons :display id))
-  (remove-handler! (cons :hide id))
-  (remove-handler! (cons :update id)))
-
-(defun visualization (&key initialization update display-event-handler hide-event-handler)
-  (alist :type :visualization
-	 :initialization initialization
-	 :update update
-	 :display-event-handler display-event-handler
-	 :hide-event-handler hide-event-handler))
-
-(defvisualization :main-lcd
-    (visualization
-     :initialization
-     (fn
-       (ensure-pixel-buffer-texture-loaded! :lcd 160 144)
-       (loop for i from 0 below (length *lcd-pixel-buffer*)
-	     do (setf (aref *lcd-pixel-buffer* i) 255))
-       (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))
-     :display-event-handler
-     (display-event-handler
-      :game
-      (fn
-	(setq *main-panel* :game)
-	(add-drawing! :lcd (drawing 3 (fn (let* ((texture (gethash :lcd *textures*)))
-					    (draw-texture! texture
-							   0 0 (texture-width texture) (texture-height texture)
-							   (g1 2) (g1 3) (* 160 3) (* 144 3))))))))
-     :hide-event-handler
-     (hide-event-handler :main-panel (fn (remove-drawing! :lcd)))
-     :update
-     (fn (replace-pixel-buffer! (gethash :lcd *textures*) *lcd-pixel-buffer*))))
-
 (defun text-texture (text &optional (font-id :font))
   (alist :type :text-texture
 	 :font-id font-id
@@ -3794,8 +3643,10 @@ Waits for a reset signal."
 (defun update-visualization! (visualization)
   (amap (fn (update-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization)))
 (defun show-visualization! (visualization)
+  (print (list 'showing (aval :id visualization)))
   (amap 'add-drawing! (aval :drawings visualization)))
 (defun hide-visualization! (visualization)
+  (print (list 'hiding (aval :id visualization)))
   (amap (fn (remove-drawing! %)) (aval :drawings visualization)))
 (defun unload-visualization! (visualization)
   (amap (fn (unload-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization))
@@ -3810,21 +3661,21 @@ Waits for a reset signal."
 	   (mapcar (lambda (name) (list name `(list :visualization ,id-name ,(make-keyword name)))) names))
      ,@body))
 
-(defvar *visualizations2* ())
-(defun get-vis (id) (aval id *visualizations2*))
+(defvar *visualizations* ())
+(defun get-vis (id) (aval id *visualizations*))
 (defmacro defvis (id (id-name &rest names) &body visualization-alist)
   (let* ((vis-name (gensym)))
     `(let* ((,vis-name (with-visualization-ids ,id ,(cons id-name names)
 			 (amerge (alist :id ,id)
 				 ,@visualization-alist))))
-       (asetq ,id ,vis-name *visualizations2*)
+       (asetq ,id ,vis-name *visualizations*)
        (command! (initialize-visualization! ,vis-name))
        ,id)))
 (defmacro undefvis (id &body ignored)
   (declare (ignore ignored))
   (let* ((vis-name (gensym)))
-    `(let* ((,vis-name (aval ,id *visualizations2*)))
-       (setq *visualizations2* (aremove *visualizations2* ,id))
+    `(let* ((,vis-name (aval ,id *visualizations*)))
+       (setq *visualizations* (aremove *visualizations* ,id))
        (command! (unload-visualization! ,vis-name))
        ,id)))
 
@@ -3963,13 +3814,12 @@ Waits for a reset signal."
 					    text-ids)))))))
 
 (defun pixel-buffer-vis (vis-id width height pixel-buffer-data-fn pos &optional (dest-dims (v2 width height)))
-  (let* ((texture-id (join-ids vis-id :pixel-buffer)))
-    (alist :dynamic-spec-fns (alist texture-id (fn (pixel-buffer-texture width height
-									 (funcall pixel-buffer-data-fn))))
-	   :drawings (alist (join-ids vis-id :pixel-buffer)
-			    (drawing 3 (fn (draw-texture! (gethash texture-id *textures*)
-							  0 0 width height
-							  (x pos) (y pos) (x dest-dims) (y dest-dims))))))))
+  (alist :dynamic-spec-fns (alist vis-id (fn (pixel-buffer-texture width height
+								   (funcall pixel-buffer-data-fn))))
+	 :drawings (alist vis-id
+			  (drawing 3 (fn (draw-texture! (gethash vis-id *textures*)
+							0 0 width height
+							(x pos) (y pos) (x dest-dims) (y dest-dims)))))))
 
 (defun static-text-vis (vis-id text pos)
   (static-texts-vis vis-id (list text) pos))
@@ -4167,19 +4017,6 @@ Waits for a reset signal."
 (defvis :current-cpu-vis (id)
   (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
 
-(undefvis (join-ids :memory :pc) (id)
-  (memory-vis id "PC" (g2 1 3)
-	      (fn (cpu-pc (cpu-current)))
-	      (green)))
-(undefvis (join-ids :memory :sp) (id)
-  (memory-vis id "SP" (g2 11 3)
-	      (fn (cpu-sp (cpu-current)))
-	      (color #x45 #xb6 #xfe 255)))
-(undefvis (join-ids :memory :hl) (id)
-  (memory-vis id "HL" (g2 21 3)
-	      (fn (cpu-hl (cpu-current)))
-	      (yellow)))
-
 #+nil
 (command! (remove-drawing! :mouse-pos))
 
@@ -4224,35 +4061,24 @@ Waits for a reset signal."
 	  (set-color! (red 50))
 	  (draw-rect! (+ (g1 i) (x pos)) (y pos) (g1 1) (g1 1))))
 
-(defvis :lcd-debug (id)
-  (let* ((pos (g2 3 3))
-	 (text-offset (g2 1/2 3/2)))
+(defun lcd-color-palettes-vis (id pos)
+  (merge-visrs
+   (static-texts-vis (join-ids id :palette-texts)
+		     '("BG" "OBJ0" "OBJ1")
+		     pos
+		     :right-aligned? t)
+   (alist :drawings (alist (join-ids id :palettes)
+			   (drawing 3 (fn (for-each-row
+					   (lambda (pos palette-addr sprite-palette?)
+					     (draw-color-palette-colors! pos palette-addr sprite-palette?))
+					   pos
+					   (list *bg-color-palette-addr* #xff48 #xff49)
+					   '(nil t t))))))))
+
+(defun lcd-registers-vis (id pos)
+  (let* ((text-offset (g2 1/2 3/2)))
     (merge-visrs
-
-     (static-texts-vis (join-ids id :palette-texts)
-		       '("BG" "OBJ0" "OBJ1")
-		       (v+ pos (g2 3 21))
-		       :right-aligned? t)
-     (alist :drawings (alist (join-ids id :palettes)
-			     (drawing 3 (fn (for-each-row
-					     (lambda (pos palette-addr sprite-palette?)
-					       (draw-color-palette-colors! pos palette-addr sprite-palette?))
-					     (v+ pos (g2 3 21))
-					     (list *bg-color-palette-addr* #xff48 #xff49)
-					     '(nil t t))))))
      
-     (tile-map-vis (join-ids id :background-tile-map)
-		   'background-tile-map
-		   (v+ pos (g2 12 0)))
-
-     (tile-map-vis (join-ids id :window-tile-map)
-		   'window-tile-map
-		   (v+ pos (g2 12 13)))
-
-     (tile-data-block-vis (join-ids id :tile-data-block)
-			  'tile-data-block0
-			  (v+ pos (g2 0 13)))
-
      (alist :drawings (alist (join-ids id :registers-outline)
 			     (drawing 8 (fn
 					  (set-color! (white))
@@ -4301,6 +4127,31 @@ Waits for a reset signal."
 			(fn (lcdc-background/window-display?)))
 		  (mapcar (fn (lambda () (white))) flag-names))))))
 
+(defun main-panel-vis (id)
+  (alist :event-handlers
+	 (alist (join-ids id :show) (display-event-handler id (fn (show-visualization! (get-vis id))))
+		(join-ids id :hide) (hide-event-handler :main-panel (fn (hide-visualization! (get-vis id)))))))
+
+(defvis :lcd-debug (id)
+  (let* ((pos (g2 3 3)))
+    (merge-visrs
+     (lcd-color-palettes-vis id (v+ pos (g2 3 21)))
+     
+     (tile-map-vis (join-ids id :background-tile-map)
+		   'background-tile-map
+		   (v+ pos (g2 12 0)))
+
+     (tile-map-vis (join-ids id :window-tile-map)
+		   'window-tile-map
+		   (v+ pos (g2 12 13)))
+
+     (tile-data-block-vis (join-ids id :tile-data-block)
+			  'tile-data-block0
+			  (v+ pos (g2 0 13)))
+
+     (lcd-registers-vis id pos)
+     (main-panel-vis id))))
+
 (defvis :instruction-description (id)
   (let* ((pos (g2 1 30))
 	 (text-block-fn (fn (text-block-spec (aval :description (next-instr (cpu-current) *memory*))
@@ -4316,3 +4167,31 @@ Waits for a reset signal."
 							   (funcall text-block-fn)))))
 				  (set-color! (white))
 				  (draw-rect! (x pos) (y pos) (g1 29) (g1 (1+ num-lines)))))))))))
+(defvar *lcd-texture-id*)
+(defvis :main-lcd (id pixel-buffer)
+  (merge-visrs
+   (progn
+     (setq *lcd-texture-id* pixel-buffer)
+     (pixel-buffer-vis pixel-buffer 160 144 (fn *lcd-pixel-buffer*)
+		       (g2 2 3)
+		       (v2 (* 160 3) (* 144 3))))
+   (main-panel-vis id)))
+
+(defvis :memory (id)
+  (merge-visrs
+   (memory-vis (join-ids id :pc) "PC" (g2 1 3)
+	       (fn (cpu-pc (cpu-current)))
+	       (green))
+   
+   (memory-vis (join-ids :memory :sp) "SP" (g2 11 3)
+	       (fn (cpu-sp (cpu-current)))
+	       (color #x45 #xb6 #xfe 255))
+
+   (memory-vis (join-ids :memory :hl) "HL" (g2 21 3)
+	       (fn (cpu-hl (cpu-current)))
+	       (yellow))
+
+   (main-panel-vis id)))
+
+(definit initialize-main-panel
+  (switch-main-panel! :memory))
