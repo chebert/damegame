@@ -470,6 +470,7 @@ and starts the update loop, then afterwards closes SDL and cleans up the applica
     (setq *initialization-finished?* nil
 	  *running?* nil)
     (setq *commands* ())
+    (setq *buttons* ())
     (quit!)))
 
 (defun event-matcher-update-visualization ()
@@ -538,6 +539,7 @@ Test-fn and handle-fn are both functions of event."
 	 :pos pos
 	 :font-id font-id))
 
+(defvar *compiled-buttons* ())
 (defvar *buttons* ())
 (defun get-button (button-id)
   (aval button-id *buttons*))
@@ -546,7 +548,6 @@ Test-fn and handle-fn are both functions of event."
 
 ;; Initialization: rect, loads texture-id, create drawing-id
 (defun initialize-button! (button-id)
-  (print (list 'initializing button-id (get-button button-id)))
   (let* ((button (get-button button-id))
 	 (texture-id (gensym))
 	 (font-id (aval :font-id button))
@@ -582,6 +583,7 @@ Test-fn and handle-fn are both functions of event."
 
 (defhandler handle-intialize-buttons (event)
 	    (event-matcher-initialization-finished)
+  (setq *buttons* *compiled-buttons*)
   (amap (fn (initialize-button! %)) *buttons*))
 
 ;;; Lifetime of a button
@@ -631,6 +633,7 @@ Test-fn and handle-fn are both functions of event."
 		   (event-matcher-button-clicked ',name)
 	 ,@on-click)
        (command!
+	 (asetq ',name ,button-name *compiled-buttons*)
 	 (set-button! ',name ,button-name)
 	 (when (gethash (aval :font-id ,button-name) *fonts*)
 	   (initialize-button! ',name)))
@@ -639,6 +642,7 @@ Test-fn and handle-fn are both functions of event."
   (declare (ignore args))
   `(progn
      (undefhandler ,(symbolicate 'handle- name '-clicked!))
+     (setq *compiled-buttons* (aremove *compiled-buttons* ',name))
      (command! (remove-button! ',name))))
 
 
