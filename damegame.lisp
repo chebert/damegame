@@ -546,6 +546,7 @@ Test-fn and handle-fn are both functions of event."
 
 ;; Initialization: rect, loads texture-id, create drawing-id
 (defun initialize-button! (button-id)
+  (print (list 'initializing button-id (get-button button-id)))
   (let* ((button (get-button button-id))
 	 (texture-id (gensym))
 	 (font-id (aval :font-id button))
@@ -616,7 +617,7 @@ Test-fn and handle-fn are both functions of event."
       (set-button! button-id (aset :pressed? t button)))))
 (defun button-handle-mouse-up! (button-id)
   "Process the effects on the button associated button-id of the left mouse button being released"
-  (let* ((button (get-button button-id)))
+  (when-let (button (get-button button-id))
     (when (and (aval :pressed? button) (aval :hovered? button))
       (notify-handlers! (event-button-clicked button-id)))
     ;; set pressed? to nil
@@ -3034,73 +3035,28 @@ Waits for a reset signal."
   "A button spec used for create-button!, uses a button spec for defbutton."
   (amerge button (alist :id id :on-click-fn on-click-fn)))
 
-(defun register-button-handler! (button)
-  (register-handler! (aval :click-handler-id button)
-		     (button-clicked-event-handler (aval :id button)
-						   (aval :on-click-fn button))))
-
-(defun update-button! (old-button button)
-  (let* ((new-button (amerge old-button button)))
-    (register-button-handler! new-button)
-    (load-text-texture! (aval :texture-id new-button)
-			(aval :font-id new-button)
-			(aval :text new-button))
-    (set-button! (aval :id button) new-button)))
-
-(defun button-clicked-event-handler (button-id on-click-fn)
-  (event-handler
-   (EVENT-MATCHER-BUTTON-CLICKED button-id)
-   on-click-fn))
-
-(defun create-button! (button)
-  (let* ((id (aval :id button))
-	 (old-button (get-button id)))
-    (cond
-      (old-button (update-button! old-button button))
-      (t
-       (let* ((button (aset :click-handler-id (gensym) button)))
-	 (register-button-handler! button)
-	 (set-button! id button)
-	 (initialize-button! id))))
-    id))
-
 (defvar *lcd-visualization-current-tile-data-block* 0)
 
-(defun lcd-buttons ()
+(defun lcd-buttons (pos)
   (list
    (button-spec
     :tile-data-block0
-    (button "Blk0" 1 (g2 3 13) :font)
+    (button "Blk0" 1 (v+ pos (g2 0 0)) :font)
     (fn
       (setq *lcd-visualization-current-tile-data-block* 0)
-      (initialize-block-visualization!)))
+      (update-visualizations!)))
    (button-spec
     :tile-data-block1
-    (button "Blk1" 1 (g2 6 13) :font)
+    (button "Blk1" 1 (v+ pos (g2 3 0)) :font)
     (fn
       (setq *lcd-visualization-current-tile-data-block* 1)
-      (initialize-block-visualization!)))
+      (update-visualizations!)))
    (button-spec
     :tile-data-block2
-    (button "Blk2" 1 (g2 9 13) :font)
+    (button "Blk2" 1 (v+ pos (g2 6 0)) :font)
     (fn
       (setq *lcd-visualization-current-tile-data-block* 2)
-      (initialize-block-visualization!)))
-   
-   (button-spec
-    :background
-    (button "BG" 1 (g2 3 27) :font)
-    (fn
-      (setq *draw-background-tile-map?* t)
-      (initialize-background-visualization!)
-      (add-drawing! :background-scroll (background-scroll-drawing))))
-   (button-spec
-    :window
-    (button "Window" 1 (g2 5 27) :font)
-    (fn
-      (setq *draw-background-tile-map?* nil)
-      (initialize-background-visualization!)
-      (remove-drawing! :background-scroll)))))
+      (update-visualizations!)))))
 
 (defun event-display-matcher (id)
   (fn (and (eql (aval :type %) :display)
@@ -3634,6 +3590,14 @@ Waits for a reset signal."
   (do-when-initialized
     (amap (fn (initialize-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization))
     (amap 'initialize-spec! (aval :static-specs visualization))
+
+    (amap (lambda (id button)
+	    (set-button! id button)
+	    (initialize-button! id)
+	    (register-handler! (list id :clicked)
+			       (event-handler (lambda (event) (event-button-clicked? event id))
+					      (aval :on-click-fn button))))
+	  (aval :buttons visualization))
     
     (show-visualization! visualization)
     (register-handler! (visualization-id visualization :update)
@@ -3643,10 +3607,14 @@ Waits for a reset signal."
 (defun update-visualization! (visualization)
   (amap (fn (update-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization)))
 (defun show-visualization! (visualization)
-  (print (list 'showing (aval :id visualization)))
+  (amap (fn
+	  (remove-button! %)
+	  (set-button! % %%)
+	  (initialize-button! %))
+	(aval :buttons visualization))
   (amap 'add-drawing! (aval :drawings visualization)))
 (defun hide-visualization! (visualization)
-  (print (list 'hiding (aval :id visualization)))
+  (amap (fn (remove-button! %)) (aval :buttons visualization))
   (amap (fn (remove-drawing! %)) (aval :drawings visualization)))
 (defun unload-visualization! (visualization)
   (amap (fn (unload-spec! % (funcall %%))) (aval :dynamic-spec-fns visualization))
@@ -4040,16 +4008,19 @@ Waits for a reset signal."
 		    pos))
 
 (defun tile-data-block-vis (id block-fn pos)
-  (apply 'merge-visrs
-	 (map-grid (lambda (x y index)
-		     (pixel-buffer-vis (join-ids id x y)
-				       8 8
-				       (fn (tile-data-pixels
-					    (tile-data-from-block (funcall block-fn) index)
-					    (default-palette-colors)))
-				       (v+ pos (g2 x y) (v2 1 1))
-				       (v+ (g2 1 1) (v2 -2 -2))))
-		   16 8)))
+  (merge-visrs
+   (apply 'merge-visrs
+	  (map-grid (lambda (x y index)
+		      (pixel-buffer-vis (join-ids id x y)
+					8 8
+					(fn (tile-data-pixels
+					     (tile-data-from-block (funcall block-fn) index)
+					     (default-palette-colors)))
+					(v+ pos (g2 x y) (v2 1 1))
+					(v+ (g2 1 1) (v2 -2 -2))))
+		    16 8))
+   (alist :buttons (let* ((buttons (lcd-buttons (v+ pos (g2 0 8)))))
+		     (mapcar (fn (cons (aval :id %) %)) buttons)))))
 
 (defun draw-color-palette-colors! (pos palette-addr sprite-palette?)
   (loop for color in (palette-colors-from-color-palette-addr palette-addr)
@@ -4133,20 +4104,23 @@ Waits for a reset signal."
 		(join-ids id :hide) (hide-event-handler :main-panel (fn (hide-visualization! (get-vis id)))))))
 
 (defvis :lcd-debug (id)
-  (let* ((pos (g2 3 3)))
+  (let* ((pos (g2 3 2)))
     (merge-visrs
-     (lcd-color-palettes-vis id (v+ pos (g2 3 21)))
+     (lcd-color-palettes-vis id (v+ pos (g2 3 22)))
      
      (tile-map-vis (join-ids id :background-tile-map)
 		   'background-tile-map
-		   (v+ pos (g2 12 0)))
+		   (v+ pos (g2 14 0)))
 
      (tile-map-vis (join-ids id :window-tile-map)
 		   'window-tile-map
-		   (v+ pos (g2 12 13)))
+		   (v+ pos (g2 14 13)))
 
      (tile-data-block-vis (join-ids id :tile-data-block)
-			  'tile-data-block0
+			  (fn (ecase *lcd-visualization-current-tile-data-block*
+				(0 (tile-data-block0))
+				(1 (tile-data-block1))
+				(2 (tile-data-block2))))
 			  (v+ pos (g2 0 13)))
 
      (lcd-registers-vis id pos)
