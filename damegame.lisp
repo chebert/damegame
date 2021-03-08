@@ -3145,8 +3145,8 @@ Waits for a reset signal."
   `(defhandler ,name (event) (event-matcher-initialization-finished)
      ,@body))
 
-(defvis :interrupt-enable-register (id flags)
-  (let* ((pos (g2 59 2))
+(defvis :interrupt-enable-register (id title flags outline)
+  (let* ((pos (g2 52 2))
 	 (flag-names '("V-Blank: "
 		       "LCD: "
 		       "Timer: "
@@ -3156,19 +3156,22 @@ Waits for a reset signal."
 		       "OAM: "
 		       "V-Blank: "
 		       "H-Blank: ")))
-    (flags-vis flags
-	       pos
-	       flag-names
-	       (list (fn (interrupt-v-blank-enabled?))
-		     (fn (interrupt-timer-enabled?))
-		     (fn (interrupt-serial-enabled?))
-		     (fn (interrupt-joypad-enabled?))
-		     (fn (interrupt-lcd-enabled?))
-		     (fn (lcds-coincidence-interrupt-enabled?))
-		     (fn (lcds-oam-interrupt-enabled?))
-		     (fn (lcds-v-blank-interrupt-enabled?))
-		     (fn (lcds-h-blank-interrupt-enabled?)))
-	       (mapcar (fn (fn (white))) flag-names))))
+    (merge-visrs
+     (outline-vis outline pos (g2 10 10))
+     (static-text-vis title "Interrupts" (v+ pos (g2 0 -3/2)))
+     (flags-vis flags
+		(v+ pos (g2 7 0))
+		flag-names
+		(list (fn (interrupt-v-blank-enabled?))
+		      (fn (interrupt-timer-enabled?))
+		      (fn (interrupt-serial-enabled?))
+		      (fn (interrupt-joypad-enabled?))
+		      (fn (interrupt-lcd-enabled?))
+		      (fn (lcds-coincidence-interrupt-enabled?))
+		      (fn (lcds-oam-interrupt-enabled?))
+		      (fn (lcds-v-blank-interrupt-enabled?))
+		      (fn (lcds-h-blank-interrupt-enabled?)))
+		(mapcar (fn (fn (white))) flag-names)))))
 
 (defun mode0-dots (num-sprites)
   (- 376 (mode3-dots num-sprites)))
