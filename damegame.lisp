@@ -3141,62 +3141,34 @@ Waits for a reset signal."
 (defun interrupt-joypad-enabled? ()
   (bit-set? 4 (interrupt-enable-register)))
 
-(defun draw-interrupt-enabled-visualization! ()
-  (let* ((column 59)
-	 (y 2))
-    (draw-full-texture-id-right-aligned! :interrupt-v-blank (g2 column y))
-    (draw-full-texture-id! (if (interrupt-v-blank-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-timer (g2 column y))
-    (draw-full-texture-id! (if (interrupt-timer-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-serial (g2 column y))
-    (draw-full-texture-id! (if (interrupt-timer-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-joypad (g2 column y))
-    (draw-full-texture-id! (if (interrupt-joypad-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-lcd (g2 column y))
-    (draw-full-texture-id! (if (interrupt-lcd-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-lcd-coincidence (g2 column y))
-    (draw-full-texture-id! (if (lcds-coincidence-interrupt-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-lcd-oam (g2 column y))
-    (draw-full-texture-id! (if (lcds-oam-interrupt-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-lcd-v-blank (g2 column y))
-    (draw-full-texture-id! (if (lcds-v-blank-interrupt-enabled?) :yes :no) (g2 column y))
-
-    (incf y)
-    (draw-full-texture-id-right-aligned! :interrupt-lcd-h-blank (g2 column y))
-    (draw-full-texture-id! (if (lcds-h-blank-interrupt-enabled?) :yes :no) (g2 column y))))
-
 (defmacro definit (name &body body)
   `(defhandler ,name (event) (event-matcher-initialization-finished)
      ,@body))
 
-(definit handle-initialize-interrupt-enabled-visualization
-  (load-text-texture! :interrupt-v-blank :font "V-Blank: ")
-  (load-text-texture! :interrupt-lcd :font "LCD: ")
-  (load-text-texture! :interrupt-timer :font "Timer: ")
-  (load-text-texture! :interrupt-serial :font "Serial: ")
-  (load-text-texture! :interrupt-joypad :font "Joypad: ")
-  
-  (load-text-texture! :interrupt-lcd-coincidence :font "Coincidence: ")
-  (load-text-texture! :interrupt-lcd-oam :font "OAM: ")
-  (load-text-texture! :interrupt-lcd-v-blank :font "V-Blank: ")
-  (load-text-texture! :interrupt-lcd-h-blank :font "H-Blank: ")
-  (add-drawing! :interrupts-enabled (drawing 3 (fn (draw-interrupt-enabled-visualization!)))))
-
+(defvis :interrupt-enable-register (id flags)
+  (let* ((pos (g2 59 2))
+	 (flag-names '("V-Blank: "
+		       "LCD: "
+		       "Timer: "
+		       "Serial: "
+		       "Joypad: "
+		       "Coincidence: "
+		       "OAM: "
+		       "V-Blank: "
+		       "H-Blank: ")))
+    (flags-vis flags
+	       pos
+	       flag-names
+	       (list (fn (interrupt-v-blank-enabled?))
+		     (fn (interrupt-timer-enabled?))
+		     (fn (interrupt-serial-enabled?))
+		     (fn (interrupt-joypad-enabled?))
+		     (fn (interrupt-lcd-enabled?))
+		     (fn (lcds-coincidence-interrupt-enabled?))
+		     (fn (lcds-oam-interrupt-enabled?))
+		     (fn (lcds-v-blank-interrupt-enabled?))
+		     (fn (lcds-h-blank-interrupt-enabled?)))
+	       (mapcar (fn (fn (white))) flag-names))))
 
 (defun mode0-dots (num-sprites)
   (- 376 (mode3-dots num-sprites)))
@@ -3868,6 +3840,16 @@ Waits for a reset signal."
 						    (text-block-spec-lines (funcall text-block-spec-fn))
 						    pos))))))
 
+
+(defun outline-vis (vis-id top-left dims)
+  (alist
+   :drawings (alist vis-id (drawing 4 (fn
+					(set-color! (white))
+					(draw-rect! (- (x top-left) (g1 1/2))
+						    (- (y top-left) (g1 1/2))
+						    (x dims)
+						    (y dims)))))))
+
 (defun cpu-vis (vis-id pos vis-name cpu-fn cpu-prev-fn)
   (with-visualization-ids vis-id (id hi-register lo-register combined-register stack-pointer pc pc-data
 				     flags1 flags2 outline title)
@@ -3918,13 +3900,8 @@ Waits for a reset signal."
 			 '(:subtraction? :carry?)
 			 cpu-fn
 			 cpu-prev-fn)
-     (alist
-      :drawings (alist outline (drawing 4 (fn
-					    (set-color! (white))
-					    (draw-rect! (- (x pos) (g1 1/2))
-							(- (y pos) (g1 1/2))
-							(g1 19)
-							(g1 11))))))
+
+     (outline-vis outline pos (g2 19 11))
      (dynamic-texts-vis
       (join-ids id :disassembly)
       (list (fn (let* ((cpu (funcall cpu-fn))
@@ -4053,13 +4030,11 @@ Waits for a reset signal."
 (defun lcd-registers-vis (id pos)
   (let* ((text-offset (g2 1/2 3/2)))
     (merge-visrs
+
+     (outline-vis (join-ids id :registers-outline)
+		  (v+ pos text-offset)
+		  (g2 12 12))
      
-     (alist :drawings (alist (join-ids id :registers-outline)
-			     (drawing 8 (fn
-					  (set-color! (white))
-					  (draw-rect! (x pos)
-						      (+ (y pos) (g1 1))
-						      (g1 12) (g1 12))))))
      (static-text-vis (join-ids id :title)
 		      "LCD Registers"
 		      (v+ pos (g2 1/2 0)))
