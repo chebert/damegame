@@ -252,7 +252,7 @@ From the plist (id value id2 value2 ...)"
   (setq *drawings* (aremove *drawings* drawing-id))
   (sort-drawings-by-layer!))
 
-(defun color (r g b a)
+(defun color (r g b &optional (a 255))
   "Create an RGBA representation of a color"
   (vector r g b a))
 (defun r (color)
@@ -363,7 +363,7 @@ updates based on timestep, and renders to the screen."
   ;; Update based on time-step
 
   ;; Render to the screen
-  (set-draw-color! 0 0 0 255)
+  (set-color! (bg-color))
   (clear!)
   (amap (fn (funcall (aval :fn %%))) *drawings*)
   (present!)
@@ -577,9 +577,9 @@ Test-fn and handle-fn are both functions of event."
 
 (defun button-color (button)
   (cond
-    ((aval :pressed? button) (red))
-    ((aval :hovered? button) (grey 128))
-    (t (grey 60))))
+    ((aval :pressed? button) (button-bg-active-color))
+    ((aval :hovered? button) (button-bg-hovered-color))
+    (t (button-bg-color))))
 
 (defhandler handle-intialize-buttons (event)
 	    (event-matcher-initialization-finished)
@@ -596,6 +596,7 @@ Test-fn and handle-fn are both functions of event."
     (set-color! (button-color button))
     (fill-rect! (x rect) (y rect) (w rect) (h rect))
 
+    (set-texture-color! texture-id (text-color))
     (draw-full-texture-id! texture-id pos)))
 
 ;; Watch for mouse-motion, mouse-down, and mouse-up
@@ -1009,7 +1010,7 @@ Test-fn and handle-fn are both functions of event."
 
       (add-drawing! :instruction-description-box
 		    (drawing 1 (fn
-				 (set-color! (white))
+				 (set-color! (outline-color))
 				 (draw-rect! (truncate (g1 .5))
 					     (truncate (g1 29.5))
 					     (g1 29)
@@ -3158,7 +3159,7 @@ Waits for a reset signal."
 		       "H-Blank: ")))
     (merge-visrs
      (outline-vis outline pos (g2 10 10))
-     (static-text-vis title "Interrupts" (v+ pos (g2 0 -3/2)))
+     (static-text-vis title "Interrupts" (v+ pos (g2 0 -3/2)) (title-color))
      (flags-vis flags
 		(v+ pos (g2 7 0))
 		flag-names
@@ -3171,7 +3172,7 @@ Waits for a reset signal."
 		      (fn (lcds-oam-interrupt-enabled?))
 		      (fn (lcds-v-blank-interrupt-enabled?))
 		      (fn (lcds-h-blank-interrupt-enabled?)))
-		(mapcar (fn (fn (white))) flag-names)))))
+		(mapcar (fn (fn (text-color))) flag-names)))))
 
 (defun mode0-dots (num-sprites)
   (- 376 (mode3-dots num-sprites)))
@@ -3636,18 +3637,18 @@ Waits for a reset signal."
 (defun register-color (register-key cpu prev-cpu memory)
   (let* ((will-change? (and cpu (akey? register-key (instr-effects cpu memory))))
 	 (changed? (and prev-cpu (akey? register-key (instr-effects prev-cpu memory)))))
-    (cond ((and changed? will-change?) (yellow))
-	  (changed? (red))
-	  (will-change? (green))
-	  (t (white)))))
+    (cond ((and changed? will-change?) (text-changed-and-will-change-color))
+	  (changed? (text-changed-color))
+	  (will-change? (text-will-change-color))
+	  (t (text-color)))))
 
 (defun pc-register-color (cpu prev-cpu memory)
   (let* ((will-jump? (and cpu (aval :jump? (next-instr cpu memory))))
 	 (jumped? (and prev-cpu (aval :jump? (next-instr prev-cpu memory)))))
-    (cond ((and jumped? will-jump?) (yellow))
-	  (jumped? (red))
-	  (will-jump? (green))
-	  (t (white)))))
+    (cond ((and jumped? will-jump?) (text-changed-and-will-change-color))
+	  (jumped? (text-changed-color))
+	  (will-jump? (text-will-change-color))
+	  (t (text-color)))))
 
 (defun for-each-row (fn pos &rest lists)
   (apply 'mapcar
@@ -3659,6 +3660,7 @@ Waits for a reset signal."
 (defun draw-cpu-registers! (pos label-texture-ids data-texture-ids register-keys cpu-fn cpu-previous-fn)
   (for-each-row
    (lambda (pos left-id right-id register-key)
+     (set-texture-color! left-id (text-color))
      (draw-full-texture-id-right-aligned! left-id pos)
      (set-texture-color! right-id
 			 (register-color register-key
@@ -3733,6 +3735,7 @@ Waits for a reset signal."
 	   :drawings (alist (join-ids vis-id :drawing)
 			    (drawing 3 (fn (for-each-row
 					    (lambda (pos label-id flag-fn color-fn)
+					      (set-texture-color! label-id (text-color))
 					      (draw-full-texture-id-right-aligned! label-id pos)
 					      (let* ((flag-id (if (funcall flag-fn) :yes :no)))
 						(set-texture-color! flag-id (funcall color-fn))
@@ -3749,16 +3752,20 @@ Waits for a reset signal."
 								register-keys
 								cpu-fn cpu-previous-fn)))))))
 
-(defun static-texts-vis (vis-id texts pos &key right-aligned?)
+(defun static-texts-vis (vis-id texts colors pos &key right-aligned?)
+  (assert (listp colors))
   (let* ((text-ids (loop for i from 0 for text in texts collecting (join-ids vis-id :static-text i))))
     (alist :static-specs (mapcar (fn (cons % (text-texture %%))) text-ids texts)
 	   :drawings (alist (join-ids vis-id :drawing)
 			    (drawing 3 (fn (for-each-row
-					    (fn (if right-aligned?
-						    (draw-full-texture-id-right-aligned! %% %)
-						    (draw-full-texture-id! %% %)))
+					    (fn
+					      (set-texture-color! %% %%%)
+					      (if right-aligned?
+						  (draw-full-texture-id-right-aligned! %% %)
+						  (draw-full-texture-id! %% %)))
 					    pos
-					    text-ids)))))))
+					    text-ids
+					    colors)))))))
 
 (defun pixel-buffer-vis (vis-id width height pixel-buffer-data-fn pos &optional (dest-dims (v2 width height)))
   (alist :dynamic-spec-fns (alist vis-id (fn (pixel-buffer-texture width height
@@ -3768,8 +3775,8 @@ Waits for a reset signal."
 							0 0 width height
 							(x pos) (y pos) (x dest-dims) (y dest-dims)))))))
 
-(defun static-text-vis (vis-id text pos)
-  (static-texts-vis vis-id (list text) pos))
+(defun static-text-vis (vis-id text pos color)
+  (static-texts-vis vis-id (list text) (list color) pos))
 
 (defun dynamic-texts-vis (vis-id text-fns color-fns pos &key right-aligned?)
   (let* ((text-ids (loop for i from 0 below (length text-fns) collecting (join-ids vis-id :dynamic-text i))))
@@ -3847,7 +3854,7 @@ Waits for a reset signal."
 (defun outline-vis (vis-id top-left dims)
   (alist
    :drawings (alist vis-id (drawing 4 (fn
-					(set-color! (white))
+					(set-color! (outline-color))
 					(draw-rect! (- (x top-left) (g1 1/2))
 						    (- (y top-left) (g1 1/2))
 						    (x dims)
@@ -3857,7 +3864,7 @@ Waits for a reset signal."
   (with-visualization-ids vis-id (id hi-register lo-register combined-register stack-pointer pc pc-data
 				     flags1 flags2 outline title)
     (merge-visrs
-     (static-text-vis title vis-name (v+ pos (g2 1 -3/2)))
+     (static-text-vis title vis-name (v+ pos (g2 1 -3/2)) (title-color))
 
      
      (cpu-register8-list-vis (v+ pos (g2 1 3))
@@ -3880,7 +3887,7 @@ Waits for a reset signal."
      (cpu-register16-list-vis (v+ pos (g2 9 8)) stack-pointer (list "Stack Pointer:") '(:sp)
 			      cpu-fn cpu-prev-fn)
      
-     (static-texts-vis pc (list "Program Counter: ") (v+ pos (g2 9 9)) :right-aligned? t)
+     (static-texts-vis pc (list "Program Counter: ") (list (text-color)) (v+ pos (g2 9 9)) :right-aligned? t)
      (dynamic-texts-vis pc-data
 			(list (fn (if-let (cpu (funcall cpu-fn))
 				    (hex16-text (cpu-pc cpu))
@@ -3912,7 +3919,7 @@ Waits for a reset signal."
 		  (if disassembly
 		      (text-from-disassembly (aset :pc (cpu-pc cpu) (disassemble-instr cpu *memory*)))
 		      "(Disassembly)"))))
-      (list (fn (white)))
+      (list (fn (text-color)))
       (v+ pos (g2 0 11))))))
 
 (defun range (end &optional (start 0))
@@ -3929,14 +3936,14 @@ Waits for a reset signal."
 
 	 (will-change? (member addr memory-updates :key 'first))
 	 (changed? (member addr prev-memory-updates :key 'first)))
-    (cond ((and changed? will-change?) (yellow))
-	  (changed? (red))
-	  (will-change? (green))
-	  (t (white)))))
+    (cond ((and changed? will-change?) (text-changed-and-will-change-color))
+	  (changed? (text-changed-color))
+	  (will-change? (text-will-change-color))
+	  (t (text-color)))))
 
 (defun memory-vis (id title-text pos current-addr-fn highlight-color)
   (merge-visrs
-   (static-text-vis (join-ids id :title) title-text pos)
+   (static-text-vis (join-ids id :title) title-text pos (title-color))
    (dynamic-texts-vis (join-ids id :address)
 		      ;; Address texts
 		      (mapcar (fn (lambda ()
@@ -3948,7 +3955,7 @@ Waits for a reset signal."
 				    (let* ((current-addr (funcall current-addr-fn)))
 				      (if (= current-addr (+ % (start-addr current-addr)))
 					  highlight-color
-					  (white)))))
+					  (text-color)))))
 			      (range *memory-visualization-byte-count*))
 		      (v+ pos (g2 4 1))
 		      :right-aligned? t)
@@ -3975,7 +3982,7 @@ Waits for a reset signal."
 (defvis :updated-memory (id)
   (dynamic-texts-vis (join-ids id :text)
 		     (list (fn (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))
-		     (list (fn (white)))
+		     (list (fn (text-color)))
 		     (g2 32 15)))
 
 (defun map-grid (fn width height &optional (start-x 0) (start-y 0))
@@ -4020,6 +4027,7 @@ Waits for a reset signal."
   (merge-visrs
    (static-texts-vis (join-ids id :palette-texts)
 		     '("BG" "OBJ0" "OBJ1")
+		     (list (title-color) (title-color) (title-color))
 		     pos
 		     :right-aligned? t)
    (alist :drawings (alist (join-ids id :palettes)
@@ -4040,17 +4048,20 @@ Waits for a reset signal."
      
      (static-text-vis (join-ids id :title)
 		      "LCD Registers"
-		      (v+ pos (g2 1/2 0)))
-     (static-texts-vis (join-ids id :registers)
-		       '("CmpScanline: "
-			 "Scanline: "
-			 "Mode: "
-			 "DMA Start: "
-			 "Window Tiles: "
-			 "BG Tiles: "
-			 "Object Size: ")
-		       (v+ pos (g2 7 0) text-offset)
-		       :right-aligned? t)
+		      (v+ pos (g2 1/2 0))
+		      (title-color))
+     (let* ((names '("CmpScanline: "
+		     "Scanline: "
+		     "Mode: "
+		     "DMA Start: "
+		     "Window Tiles: "
+		     "BG Tiles: "
+		     "Object Size: ")))
+       (static-texts-vis (join-ids id :registers)
+			 names
+			 (mapcar (fn (text-color)) names)
+			 (v+ pos (g2 7 0) text-offset)
+			 :right-aligned? t))
      (let* ((text-fns (list (fn (u8-text (lcd-scanline-compare)))
 			    (fn (u8-text (lcd-scanline)))
 			    (fn (let* ((mode (lcd-mode)))
@@ -4065,7 +4076,7 @@ Waits for a reset signal."
 			    (fn (if (object-size-doubled?) "2x" "1x")))))
        (dynamic-texts-vis (join-ids id :register-data)
 			  text-fns
-			  (mapcar (fn (lambda () (white))) text-fns)
+			  (mapcar (fn (lambda () (text-color))) text-fns)
 			  (v+ pos (g2 7 0) text-offset)))
      (let* ((flag-names (list "Coincidence?"
 			      "Display?"
@@ -4078,7 +4089,7 @@ Waits for a reset signal."
 			(fn (lcdc-display?))
 			(fn (lcdc-window-display?))
 			(fn (lcdc-background/window-display?)))
-		  (mapcar (fn (lambda () (white))) flag-names))))))
+		  (mapcar (fn (lambda () (text-color))) flag-names))))))
 
 (defun main-panel-vis (id)
   (alist :event-handlers
@@ -4121,7 +4132,7 @@ Waits for a reset signal."
 		   (drawing 3 (fn
 				(let* ((num-lines (length (text-block-spec-lines
 							   (funcall text-block-fn)))))
-				  (set-color! (white))
+				  (set-color! (outline-color))
 				  (draw-rect! (x pos) (y pos) (g1 29) (g1 (1+ num-lines)))))))))))
 (defvar *lcd-texture-id*)
 (defvis :main-lcd (id pixel-buffer)
@@ -4137,17 +4148,44 @@ Waits for a reset signal."
   (merge-visrs
    (memory-vis (join-ids id :pc) "PC" (g2 1 3)
 	       (fn (cpu-pc (cpu-current)))
-	       (green))
+	       (pc-color))
    
    (memory-vis (join-ids :memory :sp) "SP" (g2 11 3)
 	       (fn (cpu-sp (cpu-current)))
-	       (color #x45 #xb6 #xfe 255))
+	       (sp-color))
 
    (memory-vis (join-ids :memory :hl) "HL" (g2 21 3)
 	       (fn (cpu-hl (cpu-current)))
-	       (yellow))
+	       (hl-color))
 
    (main-panel-vis id)))
 
 (definit initialize-main-panel
   (switch-main-panel! :memory))
+
+(defun bg-color ()
+  (color 13 2 33))
+(defun title-color ()
+  (color 255 56 100))
+(defun outline-color ()
+  (color 255 56 100))
+(defun text-color ()
+  (color 45 226 230))
+(defun pc-color ()
+  (color 246 1 157))
+(defun sp-color ()
+  (color 146 0 117))
+(defun hl-color ()
+  (color 249 200 14))
+(defun button-bg-color ()
+  (color 46 33 87))
+(defun button-bg-hovered-color ()
+  (color 253 55 119))
+(defun button-bg-active-color ()
+  (color 253 29 83))
+(defun text-will-change-color ()
+  (color 255 67 101))
+(defun text-changed-color ()
+  (color 249 200 14))
+(defun text-changed-and-will-change-color ()
+  (color 255 108 17))
