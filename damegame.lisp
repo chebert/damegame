@@ -3767,11 +3767,13 @@ Waits for a reset signal."
 					    text-ids
 					    color-fns)))))))
 
-(defun draw-text-block! (text-block-id lines pos)
+(defun draw-text-block! (text-block-id lines pos color)
   (let* ((num-lines (length lines)))
     (for-each-row
      (lambda (pos index)
-       (draw-full-texture-id! (join-ids text-block-id index) pos))
+       (let* ((texture-id (join-ids text-block-id index)))
+	 (set-texture-color! texture-id color)
+	 (draw-full-texture-id! texture-id pos)))
      pos (range num-lines))))
 
 (defun ensure-list (v)
@@ -3797,10 +3799,11 @@ Waits for a reset signal."
 	  lines
 	  (range (length lines))))
 
-(defun text-block-spec (text line-length)
+(defun text-block-spec (text line-length color)
   (alist :type :text-block-spec
 	 :text text
-	 :line-length line-length))
+	 :line-length line-length
+	 :color color))
 
 (defun text-block-spec-lines (spec)
   (word-wrap (aval :text spec) (aval :line-length spec)))
@@ -3819,9 +3822,11 @@ Waits for a reset signal."
 (defun dynamic-text-block-vis (id pos text-block-spec-fn)
   (alist :dynamic-spec-fns (alist id text-block-spec-fn)
 	 :drawings
-	 (alist id (drawing 8 (fn (draw-text-block! id
-						    (text-block-spec-lines (funcall text-block-spec-fn))
-						    pos))))))
+	 (alist id (drawing 8 (fn (let* ((spec (funcall text-block-spec-fn)))
+				    (draw-text-block! id
+						      (text-block-spec-lines spec)
+						      pos
+						      (aval :color spec))))))))
 
 
 (defun outline-vis (vis-id top-left dims)
@@ -4155,7 +4160,8 @@ Waits for a reset signal."
 (defvis :instruction-description (id)
   (let* ((pos (g2 1 30))
 	 (text-block-fn (fn (text-block-spec (aval :description (next-instr (cpu-current) *memory*))
-					     56))))
+					     56
+					     (text-color)))))
     (merge-visrs
      (dynamic-text-block-vis (join-ids id :text-block)
 			     (v+ pos (g2 1/2 1/2))
