@@ -4198,3 +4198,168 @@ Waits for a reset signal."
 	       (hl-color))
 
    (main-panel-vis id)))
+
+
+;; Entitiy System: mostly pure-functional
+
+;;; A system of entities that are loosely coupled, and can communicate asynchronously via events.
+;;;   event: an occurrence. may not be for anyone in particular
+
+;;; (handle-event system entity event) => (new-entity . events)
+;;;   system is the last state of the entities
+
+;;; a system is a flat list of entities
+
+;;; (dispatch-event system event) => system
+;;;   each entity would handle event (in no particular order)
+;;;   the events would be collated, and dispatched again until
+;;;      - no more events are left to dispatch
+;;;      - some event limit is met (to avoid infinite loops)
+
+;;; (id entity) => unique id of the entity
+
+(defun handle-result (entity events)
+  (alist :entity entity
+	 :events events))
+
+;; several ways we could write handle-event
+;;   (defgeneric handle-event (system entity event))
+;;     => dispatch on both entity-type and event-type
+
+#+nil
+(defmethod handle-event (system (entity button) (event left-mouse-released))
+  (if (and (button-active? system button) (mouse-inside? system (button-rect entity)))
+      (handle-result (button-deactivated button) (list (button-click-event button)))
+      (handle-result (button-deactivated button) '())))
+
+;; second way to write handle-event
+(defun handle-event (system entity event)
+  (funcall entity :handle-event system event))
+
+;; Not functional...
+#+nil
+(defun button-entity (rect)
+  (let* ((active? nil)
+	 (hovered? nil))
+    (lambda (message &rest args)
+      (ecase message
+	(:handle-event
+	 (let* ((system (first args))
+		(event (second args)))
+	   (cond
+	     ((left-mouse-released? event)
+	      (setq active? nil)
+	      (list (button-click-event button))
+	      '()))))))))
+
+;; a third way to write handle-event (no generics)
+#+nil
+(defun handle-event (system entity event)
+  (cond
+    ((button? entity)
+     (cond
+       ((left-mouse-released? event)
+	;;...
+	)
+       ;;...
+       ))
+    ;;...
+    ))
+
+;; Predicate dispatching (best of both worlds?)
+#+nil
+(define-generic handle-event (system entity event)
+  (handle-result entity '()))
+
+#+nil
+(define-method handle-event (system (entity 'button?) (event 'left-mouse-released?))
+  ;;...
+  )
+
+;; handle-event stores a
+;;   table of predicate-list -> implementation
+;;   & default implementation
+
+;; (handle-event system entity event)
+;;   maps over table looking to find the implementation that matches, and calls that
+;;   otherwise calls default implementation
+
+(defvar *add-method!* (gensym))
+(defvar *get-methods* (gensym))
+(defun make-generic (default-impl)
+  (let* ((methods ()))
+    (lambda (&rest args)
+      (cond
+	((eq (first args) *add-method!*)
+	 (let* ((predicates (second args))
+		(impl (third args)))
+	   (push (cons predicates impl) methods)))
+	((eq (first args) *get-methods*) (append methods (list (cons t default-impl))))
+	(t (let* ((method (find-if (lambda (predicates)
+				     (predicates-match-args? predicates args))
+				   methods
+				   :key 'car)))
+	     (if method
+		 (apply (cdr method) args)
+		 (apply default-impl args))))))))
+
+(defun predicates-match-args? (predicates args)
+  (every (lambda (predicate arg)
+	   (or (eq t predicate) (funcall predicate arg)))
+	 predicates args))
+
+(defmacro define-generic (name args &body default-impl)
+  `(progn
+     (setf (symbol-function ',name) (make-generic (lambda ,args ,@default-impl)))
+     ',name))
+
+(defun add-method! (generic-function predicates impl)
+  (funcall generic-function *add-method!* predicates impl))
+(defun get-methods (generic-function)
+  (funcall generic-function *get-methods*))
+
+(defmacro define-method (name args-and-predicates &body impl)
+  `(add-method! ',name
+		(list ,@(mapcar (lambda (arg-and-predicate)
+				  (if (listp arg-and-predicate)
+				      (second arg-and-predicate)
+				      t))
+				args-and-predicates))
+		(lambda ,(mapcar
+			  (lambda (arg-and-predicate)
+			    (if (listp arg-and-predicate)
+				(first arg-and-predicate)
+				arg-and-predicate))
+			  args-and-predicates)
+		  ,@impl)))
+
+(define-generic handle-event (system entity event)
+  (handle-result (list :updated-with entity event)
+		 '()))
+
+(defun dispatch-event (system event)
+  (let* ((handle-results (mapcar (lambda (entity)
+				   (handle-event system entity event))
+				 system))
+	 (system2 (mapcar (lambda (result) (aval :entity result))
+			  handle-results))
+	 (events (apply 'append (mapcar (lambda (result) (aval :events result))
+					handle-results))))
+    (cons system2 events)))
+
+(defparameter *dispatch-event-limit* 100000)
+(defun dispatch-events (system events)
+  (loop while events
+	for i below *dispatch-event-limit* do
+	  (let* ((result
+		   (reduce (lambda (result event)
+			     (let* ((result2 (dispatch-event (car result) event)))
+			       (cons (car result2) (append (cdr result) (cdr result2)))))
+			   events
+			   :initial-value (cons system '()))))
+	    (setq system (car result)
+		  events (cdr result))))
+  (cons system events))
+
+
+(dispatch-events '(:e1 :e2 :e3) '(:ev1 :ev2 :ev3))
