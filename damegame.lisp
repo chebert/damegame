@@ -3146,33 +3146,6 @@ Waits for a reset signal."
   `(defhandler ,name (event) (event-matcher-initialization-finished)
      ,@body))
 
-(defvis :interrupt-enable-register (id title flags outline)
-  (let* ((pos (g2 52 2))
-	 (flag-names '("V-Blank: "
-		       "LCD: "
-		       "Timer: "
-		       "Serial: "
-		       "Joypad: "
-		       "Coincidence: "
-		       "OAM: "
-		       "V-Blank: "
-		       "H-Blank: ")))
-    (merge-visrs
-     (outline-vis outline pos (g2 10 10))
-     (static-text-vis title "Interrupts" (v+ pos (g2 0 -3/2)) (title-color))
-     (flags-vis flags
-		(v+ pos (g2 7 0))
-		flag-names
-		(list (fn (interrupt-v-blank-enabled?))
-		      (fn (interrupt-timer-enabled?))
-		      (fn (interrupt-serial-enabled?))
-		      (fn (interrupt-joypad-enabled?))
-		      (fn (interrupt-lcd-enabled?))
-		      (fn (lcds-coincidence-interrupt-enabled?))
-		      (fn (lcds-oam-interrupt-enabled?))
-		      (fn (lcds-v-blank-interrupt-enabled?))
-		      (fn (lcds-h-blank-interrupt-enabled?)))
-		(mapcar (fn (fn (text-color))) flag-names)))))
 
 (defun mode0-dots (num-sprites)
   (- 376 (mode3-dots num-sprites)))
@@ -3970,21 +3943,6 @@ Waits for a reset signal."
 			      (range *memory-visualization-byte-count*))
 		      (v+ pos (g2 4 1)))))
 
-
-(defvis :previous-cpu-vis (id)
-  (cpu-vis id (g2 32 2) "Previous" 'cpu-previous (fn (third *cpus*))))
-(defvis :current-cpu-vis (id)
-  (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
-
-#+nil
-(command! (remove-drawing! :mouse-pos))
-
-(defvis :updated-memory (id)
-  (dynamic-texts-vis (join-ids id :text)
-		     (list (fn (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))
-		     (list (fn (text-color)))
-		     (g2 32 15)))
-
 (defun map-grid (fn width height &optional (start-x 0) (start-y 0))
   (let* ((i 0))
     (loop for y from start-y below height
@@ -4096,6 +4054,81 @@ Waits for a reset signal."
 	 (alist (join-ids id :show) (display-event-handler id (fn (show-visualization! (get-vis id))))
 		(join-ids id :hide) (hide-event-handler :main-panel (fn (hide-visualization! (get-vis id)))))))
 
+(definit initialize-main-panel
+  (switch-main-panel! :memory))
+
+(defun bg-color ()
+  (color 13 2 33))
+(defun title-color ()
+  (color 255 56 100))
+(defun outline-color ()
+  (color 255 56 100))
+(defun text-color ()
+  (color 45 226 230))
+(defun pc-color ()
+  (color 246 1 157))
+(defun sp-color ()
+  (color 146 0 117))
+(defun hl-color ()
+  (color 249 200 14))
+(defun button-bg-color ()
+  (color 46 33 87))
+(defun button-bg-hovered-color ()
+  (color 253 55 119))
+(defun button-bg-active-color ()
+  (color 253 29 83))
+(defun text-will-change-color ()
+  (color 255 67 101))
+(defun text-changed-color ()
+  (color 249 200 14))
+(defun text-changed-and-will-change-color ()
+  (color 255 108 17))
+
+
+(defvis :interrupt-enable-register (id title flags outline)
+  (let* ((pos (g2 52 2))
+	 (flag-names '("V-Blank: "
+		       "LCD: "
+		       "Timer: "
+		       "Serial: "
+		       "Joypad: "
+		       "Coincidence: "
+		       "OAM: "
+		       "V-Blank: "
+		       "H-Blank: ")))
+    (merge-visrs
+     (outline-vis outline pos (g2 10 10))
+     (static-text-vis title "Interrupts" (v+ pos (g2 0 -3/2)) (title-color))
+     (flags-vis flags
+		(v+ pos (g2 7 0))
+		flag-names
+		(list (fn (interrupt-v-blank-enabled?))
+		      (fn (interrupt-timer-enabled?))
+		      (fn (interrupt-serial-enabled?))
+		      (fn (interrupt-joypad-enabled?))
+		      (fn (interrupt-lcd-enabled?))
+		      (fn (lcds-coincidence-interrupt-enabled?))
+		      (fn (lcds-oam-interrupt-enabled?))
+		      (fn (lcds-v-blank-interrupt-enabled?))
+		      (fn (lcds-h-blank-interrupt-enabled?)))
+		(mapcar (fn (fn (text-color))) flag-names)))))
+
+
+(defvis :previous-cpu-vis (id)
+  (cpu-vis id (g2 32 2) "Previous" 'cpu-previous (fn (third *cpus*))))
+(defvis :current-cpu-vis (id)
+  (cpu-vis id (g2 32 18) "Current" 'cpu-current 'cpu-previous))
+
+#+nil
+(command! (remove-drawing! :mouse-pos))
+
+(defvis :updated-memory (id)
+  (dynamic-texts-vis (join-ids id :text)
+		     (list (fn (updated-memory-text (aval :memory (instr-effects (cpu-current) *memory*)))))
+		     (list (fn (text-color)))
+		     (g2 32 15)))
+
+
 (defvis :lcd-debug (id)
   (let* ((pos (g2 3 2)))
     (merge-visrs
@@ -4159,33 +4192,3 @@ Waits for a reset signal."
 	       (hl-color))
 
    (main-panel-vis id)))
-
-(definit initialize-main-panel
-  (switch-main-panel! :memory))
-
-(defun bg-color ()
-  (color 13 2 33))
-(defun title-color ()
-  (color 255 56 100))
-(defun outline-color ()
-  (color 255 56 100))
-(defun text-color ()
-  (color 45 226 230))
-(defun pc-color ()
-  (color 246 1 157))
-(defun sp-color ()
-  (color 146 0 117))
-(defun hl-color ()
-  (color 249 200 14))
-(defun button-bg-color ()
-  (color 46 33 87))
-(defun button-bg-hovered-color ()
-  (color 253 55 119))
-(defun button-bg-active-color ()
-  (color 253 29 83))
-(defun text-will-change-color ()
-  (color 255 67 101))
-(defun text-changed-color ()
-  (color 249 200 14))
-(defun text-changed-and-will-change-color ()
-  (color 255 108 17))
