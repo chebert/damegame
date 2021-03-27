@@ -1530,6 +1530,17 @@ Test-fn and handle-fn are both functions of event."
 
    (list
     (ld-instr-spec #b00110110 :imm8 :@hl)
+    #||
+    =>
+    ((:LONG?) (:INSTR-SIZE . 2) (:PC + PC 2) (:OPCODE . 54) (:CYCLES . 3)
+    (:DESCRIPTION
+    . "Load the contents of the 8-bit immediate operand into the memory @HL.")
+    (:NAME :LD :@HL :IMM8) (:MEMORY ((CPU-HL CPU) IMM8))
+    (:DISASSEMBLY (:IMM8 REGISTER8-TEXT IMM8))
+    (:BINDINGS (IMM8 (MEM-BYTE (1+ PC) MEMORY))))
+
+    ||#
+
     (ld-instr-spec #b00001010 :@bc :a)
     (ld-instr-spec #b00011010 :@de :a)
     (ld-instr-spec #b11110010 :@c :a)
@@ -4341,8 +4352,8 @@ Waits for a reset signal."
   (let* ((handle-results (mapcar (lambda (entity)
 				   (handle-event system entity event))
 				 system))
-	 (system2 (mapcar (lambda (result) (aval :entity result))
-			  handle-results))
+	 (system2 (remove nil (mapcar (lambda (result) (aval :entity result))
+				      handle-results)))
 	 (events (apply 'append (mapcar (lambda (result) (aval :events result))
 					handle-results))))
     (cons system2 events)))
