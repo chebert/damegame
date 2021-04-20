@@ -1,42 +1,84 @@
 (in-package #:example)
 
 (for-macros
-  (defvar *examples* (make-hash-table)))
+  (defvar *examples-table* (make-hash-table)))
 
-(define (set-example! symbol example)
-  (setf (gethash symbol *examples*) example))
+(define (get-examples symbol)
+  (gethash symbol *examples-table*))
+(define (set-examples! symbol examples)
+  (setf (gethash symbol *examples-table*) examples))
 
-(define (remove-example! symbol)
-  (remhash symbol *examples*))
+(define (remove-examples! symbol)
+  (remhash symbol *examples-table*))
 
-(define (make-example value-promise expected-promise)
-  (cons value-promise expected-promise))
+(define-struct example
+    (value-promise expected-promise
+     value-form expected-form))
+
 (define (example-value example)
-  (force (car example)))
+  (force (example-value-promise example)))
 (define (example-expected-value example)
-  (force (cdr example)))
+  (force (example-expected-promise example)))
 
-(defmacro define-example (name expected-form &body value-body)
-  `(for-macros
-     (set-example! ',name (make-example (delay ,@value-body)
-					(delay ,expected-form)))
-     ',name))
+(define (example-spec->make-example-form example-spec)
+  (cond
+    ((list? example-spec)
+     (let ((length (length example-spec)))
+       (cond
+	 ((= 1 length)
+	  (let ((test-form (first example-spec)))
+	    `(make-example (delay ,test-form)
+			   (delay t)
+			   ',test-form
+			   t)))
+	 ((= 2 length)
+	  (let ((value-form (first example-spec))
+		(expected-form (second example-spec)))
+	    `(make-example (delay ,value-form)
+			   (delay ,expected-form)
+			   ',value-form
+			   ',expected-form)))
+	 (t
+	  (error "Expected example-spec of the form (TEST) or (VALUE EXPECTED).")))))
+    (t (error "Expected example-spec of the form (TEST) or (VALUE EXPECTED)."))))
 
-(defmacro undefine-example (name &rest ignored)
-  (declare (ignore ignored))
-  `(for-macros
-     (remove-example! ,name)))
+(export
+ (defmacro define-examples (name &body example-specs)
+   `(for-macros
+      (set-examples! ',name (list ,@(map #'example-spec->make-example-form example-specs)))
+      ',name)))
 
-(define (check-example name example)
+(export
+ (defmacro undefine-examples (name &rest ignored)
+   (declare (ignore ignored))
+   `(for-macros
+      (remove-examples! ,name))))
+
+(define (check-example symbol example)
   (let ((value (example-value example))
 	(expected (example-expected-value example)))
     (unless (equal? value expected)
-      (error "CHECK-EXAMPLE: ~S. Expected ~S. Got ~S" name expected value))))
+      (error "CHECK-EXAMPLE ~S: Expected ~S but got ~S." symbol expected value))))
 
-(define (check-examples)
-  (maphash #'check-example *examples*)
-  (hash-table-count *examples*))
+(export
+ (define (check-examples symbol)
+   (let ((examples (get-examples symbol)))
+     (for-each (lcurry #'check-example symbol)
+	       examples)
+     (length examples))))
 
-(define-example check-examples
-    6
-  (+ 1 2 3))
+(export
+ (define (check-all-examples)
+   (maphash (lambda (symbol examples)
+	      (declare (ignore examples))
+	      (check-examples symbol))
+	    *examples-table*)
+   (hash-table-count *examples-table*)))
+
+(define-examples check-examples
+  ((+ 1 2 3) 6))
+
+
+(defpackage-form :example)
+
+

@@ -1254,7 +1254,6 @@ Test-fn and handle-fn are both functions of event."
 	  (rec (rest sets) (cons element arguments)))
 	(funcall fn (reverse arguments)))))
 
-
 (defun map-cartesian (fn &rest sets)
   (let ((result ()))
     (apply 'for-each-cartesian (fn (push (funcall fn %) result)) sets)
@@ -1515,16 +1514,6 @@ Test-fn and handle-fn are both functions of event."
 
    (list
     (ld-instr-spec #b00110110 :imm8 :@hl)
-    #||
-    =>
-    ((:LONG?) (:INSTR-SIZE . 2) (:PC + PC 2) (:OPCODE . 54) (:CYCLES . 3)
-    (:DESCRIPTION
-    . "Load the contents of the 8-bit immediate operand into the memory @HL.")
-    (:NAME :LD :@HL :IMM8) (:MEMORY ((CPU-HL CPU) IMM8))
-    (:DISASSEMBLY (:IMM8 REGISTER8-TEXT IMM8))
-    (:BINDINGS (IMM8 (MEM-BYTE (1+ PC) MEMORY))))
-
-    ||#
 
     (ld-instr-spec #b00001010 :@bc :a)
     (ld-instr-spec #b00011010 :@de :a)
@@ -1553,10 +1542,10 @@ Test-fn and handle-fn are both functions of event."
     (ld-instr-spec #b00010010 :a :@de)
 
     (ld-instr-spec #b00100010 :a :@hli)
-    (ld-instr-spec #b00110010 :a :@hld))))
+    (ld-instr-spec #b00110010 :a :@hld)))
 
-(defun imm16 (addr memory)
-  (combined-register (mem-byte (1+ addr) memory) (mem-byte addr memory)))
+  (defun imm16 (addr memory)
+    (combined-register (mem-byte (1+ addr) memory) (mem-byte addr memory))))
 
 ;; S2.2
 (defun ld-16bit-instr-specs ()
@@ -2099,8 +2088,12 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
   (append
    ;; RLCA, RLC r, RLC (HL)
    (rotate-group-instr-specs :rlc #b00000000 'rlc-instr-spec)
+   "Rotate the contents of A to the left 1 bit,
+placing the 7th bit of A into the 0th bit of A and the into carry bit."
    ;; RLA, RL r, RL (HL)
    (rotate-group-instr-specs :rl #b00010000 'rl-instr-spec)
+   "Rotate the contents of A to the left 1 bit,
+placing the carry bit in the 0th bit of A, and setting the carry bit to the 7th bit of A."
    ;; RRCA, RRC r, RRC (HL)
    (rotate-group-instr-specs :rrc #b00001000 'rrc-instr-spec)
    ;; RRA, RR r, RR (HL)

@@ -1,38 +1,64 @@
 ;;;; package.lisp
 
-(defpackage #:example
-  (:use #:schemeish.schemeish)
-  (:export
-   #:check-examples
-   #:define-example
-   #:undefine-example))
+(DEFPACKAGE #:EXAMPLE
+  (:USE #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:CHECK-ALL-EXAMPLES
+           #:CHECK-EXAMPLES
+           #:DEFINE-EXAMPLES
+           #:UNDEFINE-EXAMPLES))
 
-(defpackage #:geometry
-  (:use #:schemeish.schemeish #:example)
-  (:export
-   #:make-v2
-   #:v2-x
-   #:v2-y
-   #:make-point
-   #:point-x
-   #:point-y
-   #:make-offset
-   #:offset-x
-   #:offset-y
-   #:v2-zero
-   #:v2+
-   #:v2-
-   #:make-rect
-   #:rect-x
-   #:rect-y
-   #:rect-width
-   #:rect-height
-   #:RECT?
-   #:V2?
-   #:point?
-   #:offset?
-   #:in-range?
-   #:point-in-rect?))
+(DEFPACKAGE #:GEOMETRY
+  (:USE #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:IN-RANGE?
+           #:MAKE-OFFSET
+           #:MAKE-POINT
+           #:MAKE-RECT
+           #:MAKE-V2
+           #:OFFSET
+           #:OFFSET-X
+           #:OFFSET-Y
+           #:OFFSET?
+           #:POINT
+           #:POINT-IN-RECT?
+           #:POINT-X
+           #:POINT-Y
+           #:POINT?
+           #:RECT
+           #:RECT-HEIGHT
+           #:RECT-WIDTH
+           #:RECT-X
+           #:RECT-Y
+           #:RECT?
+           #:V2
+           #:V2+
+           #:V2-
+           #:V2-X
+           #:V2-Y
+           #:V2-ZERO
+           #:V2?))
+
+(DEFPACKAGE #:BINARY
+  (:USE #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:BIT-RESET
+           #:BIT-RESET?
+           #:BIT-SET
+           #:BIT-SET?
+           #:BIT-VALUE
+           #:BIT-VALUE-SET
+           #:DECIMAL-ADJUSTED-ARITHMETIC
+           #:DECIMAL-ADJUSTED-ARITHMETIC-CARRY?
+           #:HIGH-BYTE
+           #:HIGH-NIBBLE
+           #:LOW-BYTE
+           #:LOW-NIBBLE
+           #:ROTATE-LEFT
+           #:ROTATE-RIGHT
+           #:SWAP-NIBBLES
+           #:U16
+           #:U16->S16
+           #:U8
+           #:U8->S8))
+
 
 (defpackage #:sdl-wrapper
   (:use #:cl #:sb-alien)

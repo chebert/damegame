@@ -9,6 +9,7 @@
   :depends-on ("schemeish")
   :components ((:file "package")
 	       (:file "example")
+	       (:file "binary")
 	       (:file "geometry")
 	       (:file "sdl-wrapper")
                (:file "damegame")))
