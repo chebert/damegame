@@ -6,6 +6,9 @@
   :license  "Specify license here"
   :version "0.0.1"
   :serial t
+  :depends-on ("schemeish")
   :components ((:file "package")
+	       (:file "example")
+	       (:file "geometry")
 	       (:file "sdl-wrapper")
                (:file "damegame")))

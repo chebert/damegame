@@ -616,3 +616,287 @@ register A and stores the result in register A" register-key)
 
 ;; Draw relative: specify a percentage
 ;;   (of width/height) offset to draw a texture 
+
+
+
+;; Entitiy System: mostly pure-functional
+
+;;; A system of entities that are loosely coupled, and can communicate asynchronously via events.
+;;;   event: an occurrence. may not be for anyone in particular
+
+;;; (handle-event system entity event) => (new-entity . events)
+;;;   system is the last state of the entities
+
+;;; a system is a flat list of entities
+
+;;; (dispatch-event system event) => system
+;;;   each entity would handle event (in no particular order)
+;;;   the events would be collated, and dispatched again until
+;;;      - no more events are left to dispatch
+;;;      - some event limit is met (to avoid infinite loops)
+
+;;; (id entity) => unique id of the entity
+
+(defun handle-result (entity events)
+  (alist :entity entity
+	 :events events))
+
+;; several ways we could write handle-event
+;;   (defgeneric handle-event (system entity event))
+;;     => dispatch on both entity-type and event-type
+
+#+nil
+(defmethod handle-event (system (entity button) (event left-mouse-released))
+  (if (and (button-active? system button) (mouse-inside? system (button-rect entity)))
+      (handle-result (button-deactivated button) (list (button-click-event button)))
+      (handle-result (button-deactivated button) '())))
+
+;; second way to write handle-event
+(defun handle-event (system entity event)
+  (funcall entity :handle-event system event))
+
+;; Not functional...
+#+nil
+(defun button-entity (rect)
+  (let* ((active? nil)
+	 (hovered? nil))
+    (lambda (message &rest args)
+      (ecase message
+	(:handle-event
+	 (let* ((system (first args))
+		(event (second args)))
+	   (cond
+	     ((left-mouse-released? event)
+	      (setq active? nil)
+	      (list (button-click-event button))
+	      '()))))))))
+
+;; a third way to write handle-event (no generics)
+#+nil
+(defun handle-event (system entity event)
+  (cond
+    ((button? entity)
+     (cond
+       ((left-mouse-released? event)
+	;;...
+	)
+       ;;...
+       ))
+    ;;...
+    ))
+
+;; Predicate dispatching (best of both worlds?)
+#+nil
+(define-generic handle-event (system entity event)
+  (handle-result entity '()))
+
+#+nil
+(define-method handle-event (system (entity 'button?) (event 'left-mouse-released?))
+  ;;...
+  )
+
+;; handle-event stores a
+;;   table of predicate-list -> implementation
+;;   & default implementation
+
+;; (handle-event system entity event)
+;;   maps over table looking to find the implementation that matches, and calls that
+;;   otherwise calls default implementation
+
+(defvar *add-method!* (gensym))
+(defvar *get-methods* (gensym))
+(defun make-generic (default-impl)
+  (let* ((methods ()))
+    (lambda (&rest args)
+      (cond
+	((eq (first args) *add-method!*)
+	 (let* ((predicates (second args))
+		(impl (third args)))
+	   (push (cons predicates impl) methods)))
+	((eq (first args) *get-methods*) (append methods (list (cons t default-impl))))
+	(t (let* ((method (find-if (lambda (predicates)
+				     (predicates-match-args? predicates args))
+				   methods
+				   :key 'car)))
+	     (if method
+		 (apply (cdr method) args)
+		 (apply default-impl args))))))))
+
+(defun predicates-match-args? (predicates args)
+  (every (lambda (predicate arg)
+	   (or (eq t predicate) (funcall predicate arg)))
+	 predicates args))
+
+(defmacro define-generic (name args &body default-impl)
+  `(progn
+     (setf (symbol-function ',name) (make-generic (lambda ,args ,@default-impl)))
+     ',name))
+
+(defun add-method! (generic-function predicates impl)
+  (funcall generic-function *add-method!* predicates impl))
+(defun get-methods (generic-function)
+  (funcall generic-function *get-methods*))
+
+(defmacro define-method (name args-and-predicates &body impl)
+  `(add-method! ',name
+		(list ,@(mapcar (lambda (arg-and-predicate)
+				  (if (listp arg-and-predicate)
+				      (second arg-and-predicate)
+				      t))
+				args-and-predicates))
+		(lambda ,(mapcar
+			  (lambda (arg-and-predicate)
+			    (if (listp arg-and-predicate)
+				(first arg-and-predicate)
+				arg-and-predicate))
+			  args-and-predicates)
+		  ,@impl)))
+
+(define-generic handle-event (system entity event)
+  (handle-result (list :updated-with entity event)
+		 '()))
+
+(defun dispatch-event (system event)
+  (let* ((handle-results (mapcar (lambda (entity)
+				   (handle-event system entity event))
+				 system))
+	 (system2 (remove nil (mapcar (lambda (result) (aval :entity result))
+				      handle-results)))
+	 (events (apply 'append (mapcar (lambda (result) (aval :events result))
+					handle-results))))
+    (cons system2 events)))
+
+(defparameter *dispatch-event-limit* 100000)
+(defun dispatch-events (system events)
+  (loop while events
+	for i below *dispatch-event-limit* do
+	  (let* ((result
+		   (reduce (lambda (result event)
+			     (let* ((result2 (dispatch-event (car result) event)))
+			       (cons (car result2) (append (cdr result) (cdr result2)))))
+			   events
+			   :initial-value (cons system '()))))
+	    (setq system (car result)
+		  events (cdr result))))
+  (cons system events))
+
+
+(dispatch-events '(:e1 :e2 :e3) '(:ev1 :ev2 :ev3))
+
+
+
+;; Sub-instructions
+(append
+ ;; <value>: ((reg reg-name))
+ ;;          ((const val))
+ ;;          ((op op-name) . op-args)
+ ;;          ((fetch val))
+ ;; <addr>: (reg reg-name)
+ ;;         (const value)
+ ;; <target>: (reg reg-name)
+ ;;           (high reg-name)
+ ;;           (low reg-name)
+ ;;           (flag flag-name)
+ ;; <condition>: flag-name
+ ;;              (not flag-name)
+ ;; <dest>: ((const val)
+ ;;          (reg reg-name))
+ 
+ ;; (assign <target> <value>)
+ ;; (flag flag-name <value>)
+ ;; (mem-set <addr> <value>)
+ ;; (goto <dest>)
+ ;; (branch <condition> <dest>)
+ ;; (advance-pc)
+ (ld-8bit-instr-specs)
+ ;; (assign reg-name <value>)
+
+ ;; PUSH:
+ ;;   (assign (reg sp) (op 1-) sp)
+ ;;   (mem-set (reg sp) (op high-byte) <value>)
+ ;;   (assign (reg sp) (op 1-) sp)
+ ;;   (mem-set (reg sp) (op low-byte) <value>)
+ 
+ ;; POP:
+ ;;   (assign (high reg-name) (fetch (reg sp)))
+ ;;   (assign sp (op 1+) sp)
+ ;;   (assign (low reg-name) (fetch (reg sp)))
+ ;;   (assign sp (op 1+) sp)
+
+ ;; LDHL SP,s8
+ ;;   (flag subtraction? (const nil)) 
+ ;;   (flag zero? (const nil)) 
+ ;;   (flag carry? (op carry-16?) (reg sp) (const s8)) 
+ ;;   (flag half-carry? (op half-carry16?) (reg sp) (const s8)) 
+ ;;   (assign (reg hl) (op +) (const s8) (reg sp))
+ (ld-16bit-instr-specs)
+ ;; ADD b
+ ;;   (flag subtraction? (const nil))
+ ;;   (flag carry? (op carry8?) (reg a) (reg b))
+ ;;   (flag half-carry? (op half-carry8?) (reg a) (reg b))
+ ;;   (assign (reg a) (op +) (reg a) (reg b))
+ ;;   (flag zero? (op zero?) (reg a))
+
+ ;; XOR l
+ ;;   (flag subtraction? (const nil))
+ ;;   (flag carry? (const nil))
+ ;;   (flag half-carry? (const nil))
+ ;;   (assign (reg a) (op xor) (reg a) (reg l))
+ ;;   (flag zero? (op zero?) (reg a))
+ (8bit-alu-instr-specs)
+
+ ;; ADD HL, SP
+ ;;   (flag subtraction? (const nil)))
+ ;;   (flag carry? (op carry16?) (reg hl) (reg data))
+ ;;   (flag half-carry? (op half-carry16?) (reg hl) (reg data))
+ ;;   (assign (reg hl) (op +s16) (reg hl) (reg sp))
+ ;;   (flag zero? (op zero?) (reg hl))
+ (16bit-alu-op-instr-specs)
+ (rotate-shift-instr-specs)
+ (bit-instr-specs)
+
+ ;; JP imm16
+ ;;   (assign (low imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (assign (high imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (goto (reg imm16))
+ ;; JP not-Carry
+ ;;   (assign (low imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (assign (high imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (branch (not carry?) (reg imm16))
+ ;; JP Carry?
+ ;;   (assign (low imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (assign (high imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (branch carry? (reg imm16))
+ ;; JP (HL)
+ ;;   (goto (reg hl))
+ ;; JR imm8
+ ;;   (assign imm16 (const 0))
+ ;;   (assign (low imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (goto (op +) (reg imm16) (reg pc))
+ (jump-instr-specs)
+
+ ;; Call imm16
+ ;;   (assign (low imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (assign (high imm16) (op pc-byte))
+ ;;   (advance-pc)
+ ;;   (assign (reg sp) (op 1-) sp)
+ ;;   (mem-set (reg sp) (op high-byte) (reg pc))
+ ;;   (assign (reg sp) (op 1-) sp)
+ ;;   (mem-set (reg sp) (op low-byte) (reg pc))
+ ;;   (goto (reg imm16))
+
+ ;; Ret
+ ;;   (assign (high imm16) (fetch (reg sp)))
+ ;;   (assign sp (op 1+) sp)
+ ;;   (assign (low imm16) (fetch (reg sp)))
+ ;;   (goto (reg imm16))
+ (call-and-return-instr-specs)
+ (general-purpose-arithmetic-instr-specs))

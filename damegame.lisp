@@ -14,15 +14,6 @@
   (defvar *running?* nil)
   (defvar *initialization-finished?* nil))
 
-(defmacro when-let ((name condition-form) &body body)
-  `(let* ((,name ,condition-form))
-     (when ,name
-       ,@body)))
-
-(defmacro when-aval ((name key alist) &body body)
-  `(when-let (,name (aval ,key ,alist))
-     ,@body))
-
 (defmacro command! (&body body)
   `(if *running?*
        (push (fn ,@body) *commands*)
@@ -36,7 +27,6 @@
 (defmacro undeftest (name &rest unused)
   (declare (ignore unused))
   `(remhash ',name *tests*))
-
 
 (defmacro fn (&body body)
   "Creates an anaphoric lambda with optional arguments % %% %%%."
@@ -72,12 +62,6 @@
 (defparameter *audio-frequency* 48000 "The sample playback frequency for the audio buffer.")
 (defparameter *audio-channels* 2
   "The number of audio channels (e.g. 1 for mono, 2 for stereo, etc.)")
-
-(defmacro nlet (name bindings &body body)
-  "Named let for convenient recursion."
-  `(labels ((,name ,(mapcar 'first bindings)
-	      ,@body))
-     (,name ,@(mapcar 'second bindings))))
 
 (defmacro check (form)
   "Throws a helpful error if FORM is not truthy."
@@ -173,8 +157,8 @@ Removes events from the queue."
 (defun alist (&rest plist)
   "Create an association list ((id . value) (id2 . value2)...)
 From the plist (id value id2 value2 ...)"
-  (nlet rec ((plist plist)
-	     (result ()))
+  (let rec ((plist plist)
+	    (result ()))
     (if plist
 	(let ((key (first plist))
 	      (value (second plist))
@@ -246,7 +230,7 @@ From the plist (id value id2 value2 ...)"
 
 (defun sort-drawings-by-layer! ()
   "Sort *drawings* by layer."
-  (setq *drawings* (sort *drawings* #'< :key (fn (aval :layer (cdr %))))))
+  (setq *drawings* (cl:sort *drawings* #'< :key (fn (aval :layer (cdr %))))))
 (defun remove-drawing! (drawing-id)
   "Removes the associated drawing from *drawings*"
   (setq *drawings* (aremove *drawings* drawing-id))
@@ -620,7 +604,7 @@ Test-fn and handle-fn are both functions of event."
       (set-button! button-id (aset :pressed? t button)))))
 (defun button-handle-mouse-up! (button-id)
   "Process the effects on the button associated button-id of the left mouse button being released"
-  (when-let (button (get-button button-id))
+  (and-let* ((button (get-button button-id)))
     (when (and (aval :pressed? button) (aval :hovered? button))
       (notify-handlers! (event-button-clicked button-id)))
     ;; set pressed? to nil
@@ -918,7 +902,8 @@ Test-fn and handle-fn are both functions of event."
 	   (size (min length max-length)))
       (loop for i below size
 	    do (setf (aref *memory* (+ i start-addr)) (read-byte stream))))))
-(defparameter *cart-filename* "Legend of Zelda, The - Link's Awakening (USA, Europe).gb")
+;;(defparameter *cart-filename* "Legend of Zelda, The - Link's Awakening (USA, Europe).gb")
+(defparameter *cart-filename* "tetris.gb")
 
 (defun hi-byte (u16)
   (truncate (logand #xFF00 u16) 256))
@@ -985,7 +970,7 @@ Test-fn and handle-fn are both functions of event."
 (defun step-cpus! ()
   (setq *cpus* (list (cpu-current) (copy-cpu (cpu-current)) (cpu-previous)))
   (vector-push-extend (cpu-pc (cpu-current)) *pc-path*)
-  (when-aval (memory :memory (instr-effects (cpu-current) *memory*))
+  (and-let* ((memory (aval :memory (instr-effects (cpu-current) *memory*))))
     (push (cons (cpu-pc (cpu-current)) memory) *memory-updates*))
 
   (execute! (cpu-current) *memory*))
@@ -1253,7 +1238,7 @@ Test-fn and handle-fn are both functions of event."
      (setf
       ,@(compile-set-flags instr-spec)
       ,@(compile-register-sets instr-spec)
-      ,@(when-aval (ime? :ime? instr-spec)
+      ,@(and-let* ((ime? (aval :ime? instr-spec)))
 	  `((cpu-ime? ,*cpu-name*) ,ime?)))
      ,(aval :cycles instr-spec)))
 
@@ -1261,8 +1246,8 @@ Test-fn and handle-fn are both functions of event."
 (defparameter *register-codes* '(0 1 2 3 4 5 7))
 
 (defun for-each-cartesian (fn &rest sets)
-  (nlet rec ((sets sets)
-	     (arguments ()))
+  (let rec ((sets sets)
+	    (arguments ()))
     (if sets
 	;; TODO: optimize
 	(loop for element in (first sets) do
@@ -1633,6 +1618,7 @@ result in HL."
 	    :subtraction? nil
 	    :half-carry? '(bit-carry? 11 sp s8)
 	    :carry? '(bit-carry? 15 sp s8)))
+    
     
     (merge-instr-specs
      (ld-instr-spec #b00001000 :sp :@imm16)
@@ -2597,15 +2583,15 @@ Waits for a reset signal."
 		 (= (cpu-pc cpu) #x2b))
 
 ;; TODO: label modes with defparameters
-(undefbreakpoint vblank-start (cpu memory)
-		 (and *lcd-start-cycle*
-		      (not
-		       (eql (lcd-mode) (lcd-mode-from-cycles (- *current-cycle*
-								*lcd-start-cycle*)
-							     0)))
-		      (eql 1 (lcd-mode-from-cycles (- *current-cycle*
-						      *lcd-start-cycle*)
-						   0))))
+(defbreakpoint vblank-start (cpu memory)
+  (and *lcd-start-cycle*
+       (not
+	(eql (lcd-mode) (lcd-mode-from-cycles (- *current-cycle*
+						 *lcd-start-cycle*)
+					      0)))
+       (eql 1 (lcd-mode-from-cycles (- *current-cycle*
+				       *lcd-start-cycle*)
+				    0))))
 
 (undefbreakpoint wait-loop (cpu memory)
 		 (let* ((pc (cpu-pc cpu)))
@@ -3416,10 +3402,10 @@ Waits for a reset signal."
 	  nil))))
 
 (defun instr-addrs (memory start-pc)
-  (nlet rec ((visited-pcs ())
-	     (to-visit-pcs (list start-pc)))
+  (let rec ((visited-pcs ())
+	    (to-visit-pcs (list start-pc)))
     (if (null to-visit-pcs)
-	(sort visited-pcs #'<)
+	(cl:sort visited-pcs #'<)
 	(let* ((pc (first to-visit-pcs)))
 	  (rec (union visited-pcs (list pc))
 	       (append (remove pc to-visit-pcs)
@@ -3458,8 +3444,8 @@ Waits for a reset signal."
 (undefbreakpoint update-scroll-y (cpu memory)
 		 (member (cpu-pc cpu) '(#x86)))
 
-(defbreakpoint end-of-bios (cpu memory)
-  (>= (cpu-pc cpu) #x100))
+(undefbreakpoint end-of-bios (cpu memory)
+		 (>= (cpu-pc cpu) #x100))
 
 (defun memory-bank (rom bank)
   (subseq rom (* bank (* 16 1024)) (* (1+ bank) (* 16 1024))))
@@ -3661,8 +3647,8 @@ Waits for a reset signal."
 	 ,else-form)))
 
 (defun flatten (value)
-  (nlet rec ((value value)
-	     (result ()))
+  (let rec ((value value)
+	    (result ()))
     (cond
       ((null value) result)
       ((atom value) (append (list value) result))
@@ -4209,168 +4195,3 @@ Waits for a reset signal."
 	       (hl-color))
 
    (main-panel-vis id)))
-
-
-;; Entitiy System: mostly pure-functional
-
-;;; A system of entities that are loosely coupled, and can communicate asynchronously via events.
-;;;   event: an occurrence. may not be for anyone in particular
-
-;;; (handle-event system entity event) => (new-entity . events)
-;;;   system is the last state of the entities
-
-;;; a system is a flat list of entities
-
-;;; (dispatch-event system event) => system
-;;;   each entity would handle event (in no particular order)
-;;;   the events would be collated, and dispatched again until
-;;;      - no more events are left to dispatch
-;;;      - some event limit is met (to avoid infinite loops)
-
-;;; (id entity) => unique id of the entity
-
-(defun handle-result (entity events)
-  (alist :entity entity
-	 :events events))
-
-;; several ways we could write handle-event
-;;   (defgeneric handle-event (system entity event))
-;;     => dispatch on both entity-type and event-type
-
-#+nil
-(defmethod handle-event (system (entity button) (event left-mouse-released))
-  (if (and (button-active? system button) (mouse-inside? system (button-rect entity)))
-      (handle-result (button-deactivated button) (list (button-click-event button)))
-      (handle-result (button-deactivated button) '())))
-
-;; second way to write handle-event
-(defun handle-event (system entity event)
-  (funcall entity :handle-event system event))
-
-;; Not functional...
-#+nil
-(defun button-entity (rect)
-  (let* ((active? nil)
-	 (hovered? nil))
-    (lambda (message &rest args)
-      (ecase message
-	(:handle-event
-	 (let* ((system (first args))
-		(event (second args)))
-	   (cond
-	     ((left-mouse-released? event)
-	      (setq active? nil)
-	      (list (button-click-event button))
-	      '()))))))))
-
-;; a third way to write handle-event (no generics)
-#+nil
-(defun handle-event (system entity event)
-  (cond
-    ((button? entity)
-     (cond
-       ((left-mouse-released? event)
-	;;...
-	)
-       ;;...
-       ))
-    ;;...
-    ))
-
-;; Predicate dispatching (best of both worlds?)
-#+nil
-(define-generic handle-event (system entity event)
-  (handle-result entity '()))
-
-#+nil
-(define-method handle-event (system (entity 'button?) (event 'left-mouse-released?))
-  ;;...
-  )
-
-;; handle-event stores a
-;;   table of predicate-list -> implementation
-;;   & default implementation
-
-;; (handle-event system entity event)
-;;   maps over table looking to find the implementation that matches, and calls that
-;;   otherwise calls default implementation
-
-(defvar *add-method!* (gensym))
-(defvar *get-methods* (gensym))
-(defun make-generic (default-impl)
-  (let* ((methods ()))
-    (lambda (&rest args)
-      (cond
-	((eq (first args) *add-method!*)
-	 (let* ((predicates (second args))
-		(impl (third args)))
-	   (push (cons predicates impl) methods)))
-	((eq (first args) *get-methods*) (append methods (list (cons t default-impl))))
-	(t (let* ((method (find-if (lambda (predicates)
-				     (predicates-match-args? predicates args))
-				   methods
-				   :key 'car)))
-	     (if method
-		 (apply (cdr method) args)
-		 (apply default-impl args))))))))
-
-(defun predicates-match-args? (predicates args)
-  (every (lambda (predicate arg)
-	   (or (eq t predicate) (funcall predicate arg)))
-	 predicates args))
-
-(defmacro define-generic (name args &body default-impl)
-  `(progn
-     (setf (symbol-function ',name) (make-generic (lambda ,args ,@default-impl)))
-     ',name))
-
-(defun add-method! (generic-function predicates impl)
-  (funcall generic-function *add-method!* predicates impl))
-(defun get-methods (generic-function)
-  (funcall generic-function *get-methods*))
-
-(defmacro define-method (name args-and-predicates &body impl)
-  `(add-method! ',name
-		(list ,@(mapcar (lambda (arg-and-predicate)
-				  (if (listp arg-and-predicate)
-				      (second arg-and-predicate)
-				      t))
-				args-and-predicates))
-		(lambda ,(mapcar
-			  (lambda (arg-and-predicate)
-			    (if (listp arg-and-predicate)
-				(first arg-and-predicate)
-				arg-and-predicate))
-			  args-and-predicates)
-		  ,@impl)))
-
-(define-generic handle-event (system entity event)
-  (handle-result (list :updated-with entity event)
-		 '()))
-
-(defun dispatch-event (system event)
-  (let* ((handle-results (mapcar (lambda (entity)
-				   (handle-event system entity event))
-				 system))
-	 (system2 (remove nil (mapcar (lambda (result) (aval :entity result))
-				      handle-results)))
-	 (events (apply 'append (mapcar (lambda (result) (aval :events result))
-					handle-results))))
-    (cons system2 events)))
-
-(defparameter *dispatch-event-limit* 100000)
-(defun dispatch-events (system events)
-  (loop while events
-	for i below *dispatch-event-limit* do
-	  (let* ((result
-		   (reduce (lambda (result event)
-			     (let* ((result2 (dispatch-event (car result) event)))
-			       (cons (car result2) (append (cdr result) (cdr result2)))))
-			   events
-			   :initial-value (cons system '()))))
-	    (setq system (car result)
-		  events (cdr result))))
-  (cons system events))
-
-
-(dispatch-events '(:e1 :e2 :e3) '(:ev1 :ev2 :ev3))

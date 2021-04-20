@@ -1,5 +1,39 @@
 ;;;; package.lisp
 
+(defpackage #:example
+  (:use #:schemeish.schemeish)
+  (:export
+   #:check-examples
+   #:define-example
+   #:undefine-example))
+
+(defpackage #:geometry
+  (:use #:schemeish.schemeish #:example)
+  (:export
+   #:make-v2
+   #:v2-x
+   #:v2-y
+   #:make-point
+   #:point-x
+   #:point-y
+   #:make-offset
+   #:offset-x
+   #:offset-y
+   #:v2-zero
+   #:v2+
+   #:v2-
+   #:make-rect
+   #:rect-x
+   #:rect-y
+   #:rect-width
+   #:rect-height
+   #:RECT?
+   #:V2?
+   #:point?
+   #:offset?
+   #:in-range?
+   #:point-in-rect?))
+
 (defpackage #:sdl-wrapper
   (:use #:cl #:sb-alien)
   (:export
@@ -78,4 +112,5 @@
    #:elapsed-milliseconds))
 
 (defpackage #:damegame
-  (:use #:cl #:sdl-wrapper))
+  (:shadowing-import-from #:cl #:lambda)
+  (:use #:schemeish.schemeish #:sdl-wrapper))
