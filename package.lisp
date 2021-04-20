@@ -1,6 +1,7 @@
 ;;;; package.lisp
 
 (DEFPACKAGE #:EXAMPLE
+  (:DOCUMENTATION "Provides tools for adding examples/tests.")
   (:USE #:SCHEMEISH.SCHEMEISH)
   (:EXPORT #:CHECK-ALL-EXAMPLES
            #:CHECK-EXAMPLES
@@ -8,6 +9,7 @@
            #:UNDEFINE-EXAMPLES))
 
 (DEFPACKAGE #:GEOMETRY
+  (:DOCUMENTATION "Provides tools for working with geometric figures: 2d-vectors, points, offsets, axis-aligned rectangles.")
   (:USE #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
   (:EXPORT #:IN-RANGE?
            #:MAKE-OFFSET
@@ -38,8 +40,14 @@
            #:V2?))
 
 (DEFPACKAGE #:BINARY
+  (:DOCUMENTATION "Provides functions for working with binary numbers including:
+ - constructing/deconstructing unsigned and signed 8-bit and 16-bit integers
+ - Decimal-adjusted arithmetic operations
+ - Rotate and shift operations
+ - Setting/resetting individual bits.")
   (:USE #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
-  (:EXPORT #:BIT-RESET
+  (:EXPORT #:BIN8-STRING
+           #:BIT-RESET
            #:BIT-RESET?
            #:BIT-SET
            #:BIT-SET?
@@ -47,17 +55,23 @@
            #:BIT-VALUE-SET
            #:DECIMAL-ADJUSTED-ARITHMETIC
            #:DECIMAL-ADJUSTED-ARITHMETIC-CARRY?
+           #:HEX16-STRING
+           #:HEX8-STRING
            #:HIGH-BYTE
            #:HIGH-NIBBLE
            #:LOW-BYTE
            #:LOW-NIBBLE
            #:ROTATE-LEFT
            #:ROTATE-RIGHT
+           #:S16-STRING
+           #:S8-STRING
            #:SWAP-NIBBLES
            #:U16
            #:U16->S16
+           #:U16-STRING
            #:U8
-           #:U8->S8))
+           #:U8->S8
+           #:U8-STRING))
 
 
 (defpackage #:sdl-wrapper
