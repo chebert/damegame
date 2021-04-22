@@ -1,5 +1,16 @@
 (in-package #:binary)
+
 (install-syntax!)
+
+
+(export
+ (define (bit-shift-left byte amount)
+   "Shift byte left by amount."
+   (ash byte amount)))
+(export
+ (define (bit-shift-right byte amount)
+   "Shift byte right by amount"
+   (ash byte (- amount))))
 
 (export
  (define (u8 value)
@@ -8,29 +19,6 @@
 
 (define-examples u8
   ((u8 #xfff) #xff))
-
-(export
- (define (low-byte u16)
-   "The low byte of an unsigned 16-bit integer."
-   (u8 u16)))
-
-(export
- (define (high-byte u16)
-   "The high byte of an unsigned 16-bit integer."
-   (u8 (ash u16 -8))))
-
-(define-examples low-byte
-  ((low-byte #xDEAD) #xAD))
-(define-examples high-byte
-  ((high-byte #xDEAD) #xDE))
-
-(export
- (define (u16 high-byte low-byte)
-   "Return a u16 constructed from two u8 bytes."
-   (+ (ash high-byte 8) low-byte)))
-
-(define-examples u16
-  ((u16 #xde #xad) #xdead))
 
 (export
  (define (u8->s8 byte)
@@ -45,6 +33,34 @@
   ((u8->s8 255) -1))
 
 (export
+ (define (low-byte u16)
+   "The low byte of an unsigned 16-bit integer."
+   (u8 u16)))
+
+(export
+ (define (high-byte u16)
+   "The high byte of an unsigned 16-bit integer."
+   (u8 (bit-shift-right u16 8))))
+
+(define-examples low-byte
+  ((low-byte #xDEAD) #xAD))
+(define-examples high-byte
+  ((high-byte #xDEAD) #xDE))
+
+(export
+ (define (value->u16 value)
+   "Retrun a u16 truncated from value."
+   (logand #xffff value)))
+
+(export
+ (define (u16 high-byte low-byte)
+   "Return a u16 constructed from two u8 bytes."
+   (+ (bit-shift-left high-byte 8) low-byte)))
+
+(define-examples u16
+  ((u16 #xde #xad) #xdead))
+
+(export
  (define (u16->s16 u16)
    "Return the signed value of a 16-bit unsigned integer."
    (if (<= u16 #x7FFF)
@@ -57,13 +73,21 @@
   ((u16->s16 #xffff) -1))
 
 (export
+ (define (byte-complement byte)
+   "Returns the logical complement of byte."
+   (logxor byte #xFF)))
+
+(define-examples byte-complement
+  ((byte-complement #b10011101) #b01100010))
+
+(export
  (define (bit-set byte bit-index)
    "Set the bit at bit-index."
-   (logior (ash 1 bit-index) byte)))
+   (logior (bit-shift-left 1 bit-index) byte)))
 (export
  (define (bit-reset byte bit-index)
    "Reset the bit at bit-index."
-   (logand (- #xff (ash 1 bit-index)) byte)))
+   (logand (byte-complement (bit-shift-left 1 bit-index)) byte)))
 
 (define-examples bit-set
   ((bit-set #b11001101 4) #b11011101))
@@ -139,7 +163,6 @@ bit7 will be the 7th bit in the new byte."
      values)
    '(#b11001010 1)))
 
-
 (export
  (define (low-nibble byte)
    "Return the lower 4-bits of a byte."
@@ -194,7 +217,6 @@ For subtraction:
 	(when (or half-carry? (> low-digit 9)) (incf adjustment #x06))))
      (+ byte adjustment))))
 
-
 (define (prefix-string string minimum-length prefix-char)
   "Prefixes string with prefix-char to ensure that that the resulting string has at least minimum-length characters."
   (let ((len (length string)))
@@ -232,7 +254,129 @@ For subtraction:
 (export
  (define u16-string #'number->string))
 
-(check-all-examples)
+(define-examples string
+  ((bin8-string #b101) "#b00000101")
+  ((hex8-string #xDEAD) "#xDEAD")
+  ((s8-string #xff) "-1")
+  ((u8-string #xff) "255")
+  ((hex16-string #xBEEFCAFE) "#xBEEFCAFE")
+  ((s16-string #xffff) "-1")
+  ((u16-string #xffff) "65535"))
+
+
+(export
+ (define (bit-mask num-bits)
+   "Return a bit-mask that accepts all bits up to num-bits"
+   (1- (bit-shift-left 1 num-bits))))
+
+(define-examples bit-mask
+  ((bit-mask 4) #b1111))
+
+
+(export
+ (define (bit-mask-matches? mask byte)
+   "Tests to see if byte matches the mask."
+   (= mask (logand mask byte))))
+
+(define-examples bit-mask-matches?
+  ((bit-mask-matches? #b101 #b101))
+  ((bit-mask-matches? #b101 #b111))
+  ((not (bit-mask-matches? #b101 #b001))))
+
+(export
+ (define (bit-extract byte low-bit-index num-bits)
+   "Extract num-bits from byte starting at low-bit-index."
+   (logand (bit-mask num-bits) (bit-shift-right byte low-bit-index))))
+
+(define-examples bit-extract
+  ((bit-extract #b10011010 1 4) #b1101))
+
+(export
+ (define (bit-carry? from-bit-index a b)
+   "True if there is a carry from FROM-BIT-INDEX to the next when adding a to b."
+   (let ((bit-index (1+ from-bit-index)))
+     (let ((mask (bit-mask bit-index)))
+       (let ((masked-a (logand mask a))
+	     (masked-b (logand mask b)))
+	 (bit-set? (+ masked-a masked-b) bit-index))))))
+
+(define-examples bit-carry?
+  ((bit-carry? 2 #b100 #b101))
+  ((bit-carry? 2 #b111100 #b000101))
+  ((not (bit-carry? 3 #b100 #b111)))
+  ((not (bit-carry? 1 #b100 #b110)))
+
+  ((not (bit-carry? 2 #b011 #b100)))
+  ((bit-carry? 2 #b011 #b101)))
+
+
+(export
+ (define (bit-carry-with-carry? from-bit-index a b carry)
+   "True if there is a carry from FROM-BIT-INDEX to the next when adding A+B+CARRY."
+   (or (bit-carry? from-bit-index a b)
+       (bit-carry? from-bit-index (+ a b) carry))))
+
+(define-examples bit-carry-with-carry?
+  ((not (bit-carry-with-carry? 1 #b01 #b10 0)))
+  ((bit-carry-with-carry? 1 #b01 #b10 1))
+  ((bit-carry-with-carry? 1 #b11 #b10 0))
+  ((bit-carry-with-carry? 1 #b11 #b10 1)))
+
+(export
+ (define (bit-borrow? bit-index a b)
+   "True if there is a borrow from bit-index when performing a-b."
+   (let* ((mask (bit-mask (1- bit-index))))
+     (< (logand a mask) (logand b mask)))))
+
+(define-examples bit-borrow?
+  ((bit-borrow? 4 #b011 #b101))
+  ((bit-borrow? 4 #b110 #b111))
+  ((bit-borrow? 4 #b111110 #b000111))
+  ((bit-borrow? 4 #b000110 #b111111))
+
+  ((not (bit-borrow? 3 #b1111 #b0010))))
+
+(export
+ (define (bit-borrow-with-carry? bit-index a b carry)
+   "True if there is a borrow from bit-index when performing a-b-CARRY."
+   (or (bit-borrow? bit-index a b)
+       (bit-borrow? bit-index (- a b) carry))))
+
+(define-examples bit-borrow-with-carry?
+  ((bit-borrow-with-carry? 3 #b00 #b00 1))
+  ((not (bit-borrow-with-carry? 3 #b00 #b00 0)))
+  ((not (bit-borrow-with-carry? 3 #b11 #b11 0)))
+  ((bit-borrow-with-carry? 3 #b11 #b11 1))
+
+  ((bit-borrow-with-carry? 3 #b01 #b10 0))
+  ((bit-borrow-with-carry? 3 #b01 #b01 1)))
+
+(export
+ (define (half-carry8? a b carry)
+   "True if there is a half-carry when adding the 8-bit bytes A+B+CARRY"
+   (bit-carry-with-carry? 3 a b carry)))
+(export
+ (define (carry8? a b carry)
+   "True if there is a carry when adding the 8-bit bytes A+B+CARRY."
+   (bit-carry-with-carry? 7 a b carry)))
+
+(export
+ (define (half-borrow8? a b carry)
+   "True if there is a half-borrow performing 8-bit a-b."
+   (bit-borrow-with-carry? 4 a b carry)))
+(export
+ (define (borrow8? a b carry)
+   "True if there is a borrow performing 8-bit a-b."
+   (bit-borrow-with-carry? 8 a b carry)))
+
+(export
+ (define (carry16? a b)
+   "True if there is a carry when adding 16-bit integers A+B."
+   (bit-carry? 15 a b)))
+(export
+ (define (half-carry16? a b)
+   "True if there is a half carry (from the 11th bit) when adding 16-bit integers A+B."
+   (bit-carry? 11 a b)))
 
 (uninstall-syntax!)
 #+nil

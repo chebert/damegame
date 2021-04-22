@@ -1542,10 +1542,10 @@ Test-fn and handle-fn are both functions of event."
     (ld-instr-spec #b00010010 :a :@de)
 
     (ld-instr-spec #b00100010 :a :@hli)
-    (ld-instr-spec #b00110010 :a :@hld)))
+    (ld-instr-spec #b00110010 :a :@hld))))
 
-  (defun imm16 (addr memory)
-    (combined-register (mem-byte (1+ addr) memory) (mem-byte addr memory))))
+(defun imm16 (addr memory)
+  (combined-register (mem-byte (1+ addr) memory) (mem-byte addr memory)))
 
 ;; S2.2
 (defun ld-16bit-instr-specs ()
@@ -1573,7 +1573,7 @@ Test-fn and handle-fn are both functions of event."
 		:description (format nil "Push the contents of register pair ~A onto the stack." combined-key)
 		:cycles 4))))
     #b11000101 (alist 4 *register-pair-codes*))
-
+   
    ;; POP qq
    (map-opcodes
     (lambda (opcode register-pair)
@@ -2088,12 +2088,8 @@ Places the 0th bit of ~A into the carry-bit and sets the 7th bit to 0."
   (append
    ;; RLCA, RLC r, RLC (HL)
    (rotate-group-instr-specs :rlc #b00000000 'rlc-instr-spec)
-   "Rotate the contents of A to the left 1 bit,
-placing the 7th bit of A into the 0th bit of A and the into carry bit."
    ;; RLA, RL r, RL (HL)
    (rotate-group-instr-specs :rl #b00010000 'rl-instr-spec)
-   "Rotate the contents of A to the left 1 bit,
-placing the carry bit in the 0th bit of A, and setting the carry bit to the 7th bit of A."
    ;; RRCA, RRC r, RRC (HL)
    (rotate-group-instr-specs :rrc #b00001000 'rrc-instr-spec)
    ;; RRA, RR r, RR (HL)
