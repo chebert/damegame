@@ -126,6 +126,10 @@
            #:REGISTER?
            #:ROM?))
 
+(DEFPACKAGE #:8BIT-TRANSFERS
+  (:DOCUMENTATION "Installs opcode compilers for 8-bit transfer instructions: LD.")
+  (:USE #:BINARY #:EXAMPLE #:MACHINE #:OPCODE-COMPILER #:SCHEMEISH.SCHEMEISH))
+
 (DEFPACKAGE #:8BIT-ALU
   (:DOCUMENTATION "Installs opcode compilers for 8-bit arithmetic instructions:
    ADD, ADC, SUB, SBC

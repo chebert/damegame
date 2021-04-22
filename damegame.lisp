@@ -2,6 +2,11 @@
 
 (in-package #:damegame)
 
+(package-file-contents
+ (map 'find-package '(:example :geometry :binary
+		      :flags :ram :opcode-compiler
+		      :machine :8bit-alu :16bit-alu :8bit-transfers)))
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun make-keyword (symbol)
     (intern (symbol-name symbol) (find-package :keyword)))

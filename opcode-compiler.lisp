@@ -62,5 +62,42 @@ Extended? is true for extended-opcodes."
 	  [(find-compiler opcode t) machine extended-opcode memory address]))
        (t [(find-compiler opcode nil) machine opcode memory address])))))
 
+
+
+;; TODO: move these into opcode-parser
+
+(export
+ (define (r-code->register-name code)
+   "Given an an r-code extracted from an opcode, return the register-name or '(hl)."
+   (cond
+     ((= code #b111) :a)
+     ((= code #b000) :b)
+     ((= code #b001) :c)
+     ((= code #b010) :d)
+     ((= code #b011) :e)
+     ((= code #b100) :h)
+     ((= code #b101) :l)
+     ((= code #b110) '(:hl))
+     (t (error "R-CODE->REGISTER-NAME: don't recognize code ~S" code)))))
+(export
+ (define (r-code->getter machine code)
+   "Return a compiled (lambda () byte) that fetches the byte associated with the given r-code."
+   (let ((name (r-code->register-name code)))
+     (if (equal? name '(:hl))
+	 (let ((get-hl (register-getter machine :hl))
+	       (get-byte [machine :get-byte]))
+	   (lambda () [get-byte [get-hl]]))
+	 (register-getter machine name)))))
+(export
+ (define (r-code->setter machine code)
+   "Return a compiled (lambda (byte)) that sets the byte associated with the given r-code."
+   (let ((name (r-code->register-name code)))
+     (if (equal? name '(:hl))
+	 (let ((get-hl (register-getter machine :hl))
+	       (set-byte [machine :set-byte!]))
+	   (lambda () [set-byte [get-hl]]))
+	 (register-setter machine name)))))
+
+
 (uninstall-syntax!)
 (defpackage-form :machine)

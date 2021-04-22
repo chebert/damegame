@@ -35,37 +35,6 @@
 
 ;;; 8-bit logical: AND, OR, XOR, CP
 
-(define (r-code->register-name code)
-  "Given an an r-code extracted from an opcode, return the register-name or '(hl)."
-  (cond
-    ((= code #b111) :a)
-    ((= code #b000) :b)
-    ((= code #b001) :c)
-    ((= code #b010) :d)
-    ((= code #b011) :e)
-    ((= code #b100) :h)
-    ((= code #b101) :l)
-    ((= code #b110) '(:hl))
-    (t (error "R-CODE->REGISTER-NAME: don't recognize code ~S" code))))
-
-(define (r-code->getter machine code)
-  "Return a compiled (lambda () byte) that fetches the byte associated with the given r-code."
-  (let ((name (r-code->register-name code)))
-    (if (equal? name '(:hl))
-	(let ((get-hl (register-getter machine :hl))
-	      (get-byte [machine :get-byte]))
-	  (lambda () [get-byte [get-hl]]))
-	(register-getter machine name))))
-(define (r-code->setter machine code)
-  "Return a compiled (lambda (byte)) that sets the byte associated with the given r-code."
-  (let ((name (r-code->register-name code)))
-    (if (equal? name '(:hl))
-	(let ((get-hl (register-getter machine :hl))
-	      (set-byte [machine :set-byte!]))
-	  (lambda () [set-byte [get-hl]]))
-	(register-setter machine name))))
-
-
 (define ((perform-logical op half-carry?) get-a set-a get-f set-f data)
   "Performs logical operation [op a data] setting flags appropriately."
   (declare (ignore get-f))
