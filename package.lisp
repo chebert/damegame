@@ -107,19 +107,6 @@
            #:MAKE-MEMORY-VECTOR
            #:WITH-MAPPED-ADDRESS))
 
-(DEFPACKAGE #:MACHINE
-  (:USE #:BINARY #:EXAMPLE #:RAM #:SCHEMEISH.SCHEMEISH)
-  (:EXPORT #:MACHINE?
-           #:MAKE-MACHINE
-           #:MAKE-REGISTER
-           #:MAKE-ROM
-           #:R-CODE->GETTER
-           #:R-CODE->SETTER
-           #:REGISTER-GETTER
-           #:REGISTER-SETTER
-           #:REGISTER?
-           #:ROM?))
-
 (DEFPACKAGE #:OPCODE-COMPILER
   (:USE #:BINARY #:SCHEMEISH.SCHEMEISH)
   (:EXPORT #:COMPILE-EXECUTION-PROC
@@ -127,6 +114,17 @@
            #:FLAG-GETTER
            #:OPCODE-MATCHES-TEMPLATE?
            #:REGISTER-COMPILER!))
+
+(DEFPACKAGE #:MACHINE
+  (:USE #:BINARY #:EXAMPLE #:RAM #:SCHEMEISH.SCHEMEISH #:OPCODE-COMPILER #:FLAGS)
+  (:EXPORT #:MACHINE?
+           #:MAKE-MACHINE
+           #:MAKE-REGISTER
+           #:MAKE-ROM
+           #:REGISTER-GETTER
+           #:REGISTER-SETTER
+           #:REGISTER?
+           #:ROM?))
 
 (DEFPACKAGE #:8BIT-ALU
   (:DOCUMENTATION "Installs opcode compilers for 8-bit arithmetic instructions:

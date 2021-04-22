@@ -63,3 +63,4 @@ Extended? is true for extended-opcodes."
        (t [(find-compiler opcode nil) machine opcode memory address])))))
 
 (uninstall-syntax!)
+(defpackage-form :machine)

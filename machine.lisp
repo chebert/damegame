@@ -24,82 +24,6 @@
     (lambda ()
       (not (zero? (logand flag-mask [get-flags]))))))
 
-;; Opcodes
-(define (r-code->register-name code)
-  "Given an an r-code extracted from an opcode, return the register-name or '(hl)."
-  (cond
-    ((= code #b111) 'a)
-    ((= code #b000) 'b)
-    ((= code #b001) 'c)
-    ((= code #b010) 'd)
-    ((= code #b011) 'e)
-    ((= code #b100) 'h)
-    ((= code #b101) 'l)
-    ((= code #b110) '(hl))
-    (t (error "R-CODE->REGISTER-NAME: don't recognize code ~S" code))))
-
-
-(export
- (define (r-code->getter machine code)
-   "Return a compiled (lambda () byte) that fetches the byte associated with the given r-code."
-   (let ((name (r-code->register-name code)))
-     (if (equal? name '(hl))
-	 (let ((get-hl (register-getter machine 'hl))
-	       (get-byte [machine :get-byte]))
-	   (lambda () [get-byte [get-hl]]))
-	 (register-getter machine name)))))
-(export
- (define (r-code->setter machine code)
-   "Return a compiled (lambda (byte)) that sets the byte associated with the given r-code."
-   (let ((name (r-code->register-name code)))
-     (if (equal? name '(hl))
-	 (let ((get-hl (register-getter machine 'hl))
-	       (set-byte [machine :set-byte!]))
-	   (lambda () [set-byte [get-hl]]))
-	 (register-setter machine name)))))
-
-
-;; Compilers
-
-
-(define (compile-inc16 machine reg-name)
-  (let ((get-register (register-getter machine reg-name))
-	(set-register (register-setter machine reg-name))
-	(advance-pc [machine :advance-pc!]))
-    (lambda ()
-      [advance-pc]
-      [set-register (value->u16 (1+ [get-register]))])))
-
-(define (compile-branch machine flag-name flag-set? memory address)
-  (let ((destination (u16 (aref memory (+ 2 address)) (aref memory (1+ address))))
-	(get-flag (flag-getter machine flag-name))
-	(jump [machine :jump!])
-	(advance-pc [machine :advance-pc!]))
-    (lambda ()
-      [advance-pc 3]
-      (when (eq? flag-set? [get-flag])
-	[jump destination]))))
-
-(define (compile-push machine reg-name)
-  (let ((get-sp (register-getter machine 'sp))
-	(set-sp (register-setter machine 'sp))
-	(set-byte [machine :set-byte!])
-	(get-data (register-getter machine reg-name))
-	(advance-pc [machine :advance-pc!]))
-    (lambda ()
-      [advance-pc]
-      (perform-push get-sp set-sp [get-data] set-byte))))
-
-(define (compile-pop machine reg-name)
-  (let ((get-sp (register-getter machine 'sp))
-	(set-sp (register-setter machine 'sp))
-	(set-byte [machine :set-byte!])
-	(set-data (register-setter machine reg-name))
-	(advance-pc [machine :advance-pc!]))
-    (lambda ()
-      [advance-pc]
-      (perform-pop get-sp set-sp set-data set-byte))))
-
 (export
  (define (register-getter machine register-name)
    "Returns (lambda ()) which gets the current value of the register directly."
@@ -164,9 +88,9 @@ compile-execution-proc! and executed using get-execution-proc, or bytes
  (define (make-machine)
    (define register-table
      (append (map (lambda (symbol) (cons symbol (make-register symbol 1)))
-		  '(a b c d e f h l))
+		  '(:a :b :c :d :e :f :h :l))
 	     (map (lambda (symbol) (cons symbol (make-register symbol 2)))
-		  '(pc sp))))
+		  '(:pc :sp))))
 
    (define internal-ram (make-internal-ram))
 
@@ -175,9 +99,10 @@ compile-execution-proc! and executed using get-execution-proc, or bytes
      (or (alist-ref register-table symbol)
 	 (error "GET-REGISTER: Could not find register ~S" symbol)))
 
-   (define pc-register (get-register 'pc))
+   (define pc-register (get-register :pc))
    (define get-pc [pc-register :get-contents])
    (define set-pc! [pc-register :set-contents!])
+   
    (define (advance-pc! (amount 1))
      [set-pc! (+ amount [get-pc])])
 
@@ -186,17 +111,3 @@ compile-execution-proc! and executed using get-execution-proc, or bytes
 	   advance-pc!)))
 
 (uninstall-syntax!)
-(defpackage-form :machine)
-#+nil
-(DEFPACKAGE #:MACHINE
-  (:USE #:BINARY #:EXAMPLE #:RAM #:SCHEMEISH.SCHEMEISH)
-  (:EXPORT #:MACHINE?
-	   #:MAKE-MACHINE
-	   #:MAKE-REGISTER
-	   #:MAKE-ROM
-	   #:R-CODE->GETTER
-	   #:R-CODE->SETTER
-	   #:REGISTER-GETTER
-	   #:REGISTER-SETTER
-	   #:REGISTER?
-	   #:ROM?))
