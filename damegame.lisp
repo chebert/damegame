@@ -5,7 +5,8 @@
 (package-file-contents
  (map 'find-package '(:example :geometry :binary
 		      :flags :ram :opcode-compiler
-		      :machine :8bit-alu :16bit-alu :8bit-transfers)))
+		      :machine :opcode-parser :8bit-alu :16bit-alu :transfers)))
+
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun make-keyword (symbol)

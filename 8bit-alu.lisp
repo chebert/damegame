@@ -61,10 +61,10 @@
 	   (flags->list [[flags :get-contents]])))
    '(1 (:HALF-CARRY? :CARRY?))))
 
-(define ((alu-op-compiler perform) machine opcode memory address)
+(define ((alu-op-compiler perform) machine opcode immediate8 immediate16)
   "Return a compiler that compiles an r-coded opcode (8-bit register or (HL)).
 Calls [perform get-a set-a get-f set-f data]."
-  (declare (ignore memory address))
+  (declare (ignore immediate8 immediate16))
   (let ((r-code (bit-extract opcode 0 3)))
     (let ((get-a (register-getter machine 'a))
 	  (set-a (register-setter machine 'a))
@@ -76,18 +76,17 @@ Calls [perform get-a set-a get-f set-f data]."
 	[advance-pc]
 	[perform get-a set-a get-f set-f [get-data]]))))
 
-(define ((alu-immediate8-op-compiler perform) machine opcode memory address)
+(define ((alu-immediate8-op-compiler perform) machine opcode immediate8 immediate16)
   "Return a compiler that compiles an immediate8 instruction"
-  (declare (ignore opcode))
+  (declare (ignore opcode immediate16))
   (let ((get-a (register-getter machine 'a))
 	(set-a (register-setter machine 'a))
 	(get-f (register-getter machine 'f))
 	(set-f (register-setter machine 'f))
-	(advance-pc [machine :advance-pc!])	
-	(data (aref memory (1+ address))))
+	(advance-pc [machine :advance-pc!]))
     (lambda ()
       [advance-pc 2]
-      [perform get-a set-a get-f set-f data])))
+      [perform get-a set-a get-f set-f immediate8])))
 
 ;;; 8-bit updates: INC/DEC
 
@@ -109,9 +108,9 @@ Calls [perform get-a set-a get-f set-f data]."
 (define perform-inc (perform-update #'1+ #'inc-flags))
 (define perform-dec (perform-update #'1- #'dec-flags))
 
-(define ((update-op-compiler perform) machine opcode memory address)
+(define ((update-op-compiler perform) machine opcode immediate8 immediate16)
   "Return a compile that compiles an INC/DEC update instruction."
-  (declare (ignore memory address))
+  (declare (ignore immediate8 immediate16))
   (let ((r-code (bit-extract opcode 3 3)))
     (let ((get-data (r-code->getter machine r-code))
 	  (set-data (r-code->setter machine r-code))

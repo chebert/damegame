@@ -15,7 +15,6 @@
   (ss-code->register-name (bit-extract opcode 4 2)))
 
 
-
 (define (perform-add-hl get-hl set-hl get-data get-f set-f)
   (let ((hl [get-hl])
 	(data [get-data])
@@ -24,7 +23,8 @@
       [set-hl result]
       [set-f (flags (zero-set? f) nil (carry16? hl data) (half-carry16? hl data))])))
 
-(define (compile-add-hl machine opcode)
+(define (compile-add-hl machine opcode immediate8 immediate16)
+  (declare (ignore immediate8 immediate16))
   (let ((ss-register (opcode->ss-register opcode)))
     (let ((get-hl (register-getter machine :hl))
 	  (set-hl (register-setter machine :hl))
@@ -43,15 +43,15 @@
       [set-sp result]
       [set-f (flags nil nil (half-carry16? sp data) (carry16? sp data))])))
 
-(define (compile-add-sp machine memory address)
+(define (compile-add-sp machine opcode immediate8 immediate16)
+  (declare (ignore opcode immediate16))
   (let ((get-sp (register-getter machine :sp))
 	(set-sp (register-setter machine :sp))
 	(set-f (register-setter machine :f))
-	(advance-pc [machine :advance-pc!])
-	(data (aref memory (1+ address))))
+	(advance-pc [machine :advance-pc!]))
     (lambda ()
       [advance-pc 2]
-      (perform-add-sp get-sp set-sp data set-f))))
+      (perform-add-sp get-sp set-sp immediate8 set-f))))
 
 
 (define ((perform-update op) get-data set-data)
@@ -60,7 +60,8 @@
 (define perform-inc (perform-update #'1+))
 (define perform-dec (perform-update #'1-))
 
-(define ((compile-update perform) machine opcode)
+(define ((compile-update perform) machine opcode immediate8 immediate16)
+  (declare (ignore immediate8 immediate16))
   (let ((ss-register (opcode->ss-register opcode)))
     (let ((get-data (register-getter machine ss-register))
 	  (set-data (register-setter machine ss-register))
@@ -69,17 +70,9 @@
 	[advance-pc]
 	[perform get-data set-data]))))
 
-
-(define ((discard-memory compiler) machine opcode memory address)
-  (declare (ignore memory address))
-  [compiler machine opcode])
-(define ((discard-opcode compiler) machine opcode memory address)
-  (declare (ignore opcode))
-  [compiler machine memory address])
-
-(register-compiler! #b00001001 nil (discard-memory #'compile-add-hl))
-(register-compiler! #b11101000 nil (discard-opcode #'compile-add-sp))
-(register-compiler! #b00000011 nil (discard-memory (compile-update #'perform-inc)))
-(register-compiler! #b00001011 nil (discard-memory (compile-update #'perform-dec)))
+(register-compiler! #b00001001 nil #'compile-add-hl)
+(register-compiler! #b11101000 nil #'compile-add-sp)
+(register-compiler! #b00000011 nil (compile-update #'perform-inc))
+(register-compiler! #b00001011 nil (compile-update #'perform-dec))
 
 (uninstall-syntax!)

@@ -21,6 +21,43 @@
 	     (return-from hash-find-keyf key)))
   failure-result)
 
+(define (vector-ref vector index)
+  (aref vector index))
+(define (vector-set! vector index value)
+  (setf (aref vector index) value))
+
+(define (safe-vector-ref vector index out-of-bounds-result)
+  (if (>= index (length vector))
+      out-of-bounds-result
+      (aref vector index)))
+
+
+(define (remove-indices indices list)
+  "Remove all 0-based indices from list."
+  (nreverse (foldl (lambda (arg index result)
+		     (if (member index indices)
+			 result
+			 (cons arg result)))
+		   ()
+		   list
+		   (range (length list)))))
+
+(define-examples remove-indices
+  ((remove-indices '(1 3) '(a b c d e f)) '(a c e f)))
+
+(define ((ignore-args . indices) f)
+  "Return a function, which when applied to a function F ignores positional arguments matching the 0-based indices."
+  (lambda args
+    (apply f (remove-indices indices args))))
+
+(define-examples ignore-args
+  ([[(ignore-args 1 4) (lambda (a c d) (list a c d))]
+    :a :b :c :d :e]
+   '(:A :C :D)))
+
+
+
+
 (for-macros
   (defvar *compiler-table* (make-hash-table))
   (defvar *extended-compiler-table* (make-hash-table)))
@@ -52,52 +89,36 @@ Extended? is true for extended-opcodes."
    "True if the opcode matches the template."
    (bit-mask-matches? template opcode)))
 
+
 (export
  (define (compile-execution-proc machine memory address)
    "Compiles an execution-procedure given the instruction bytes in memory starting at address."
    (let ((opcode (aref memory address)))
      (cond
        ((= opcode #xCB)
-	(let ((extended-opcode (aref memory (1+ address))))
-	  [(find-compiler opcode t) machine extended-opcode memory address]))
-       (t [(find-compiler opcode nil) machine opcode memory address])))))
+	(let ((extended-opcode (aref memory (1+ address)))
+	      (immediate8 (safe-vector-ref memory (+ 2 address) 0)))
+	  (let ((immediate16 (u16 (safe-vector-ref memory (+ 3 address) 0) immediate8)))
+	    [(find-compiler opcode t) machine extended-opcode immediate8 immediate16])))
+       (t (let ((immediate8 (safe-vector-ref memory (1+ address) 0)))
+	    (let ((immediate16 (u16 (safe-vector-ref memory (+ 2 address) 0)
+				    immediate8)))
+	      [(find-compiler opcode nil) machine opcode immediate8 immediate16])))))))
 
 
-
-;; TODO: move these into opcode-parser
-
+;; Construct full compilers from simple compilers.
 (export
- (define (r-code->register-name code)
-   "Given an an r-code extracted from an opcode, return the register-name or '(hl)."
-   (cond
-     ((= code #b111) :a)
-     ((= code #b000) :b)
-     ((= code #b001) :c)
-     ((= code #b010) :d)
-     ((= code #b011) :e)
-     ((= code #b100) :h)
-     ((= code #b101) :l)
-     ((= code #b110) '(:hl))
-     (t (error "R-CODE->REGISTER-NAME: don't recognize code ~S" code)))))
+ (define ignore-immediates "Returns a compiler which ignores immediate arguments." (ignore-args 2 3)))
 (export
- (define (r-code->getter machine code)
-   "Return a compiled (lambda () byte) that fetches the byte associated with the given r-code."
-   (let ((name (r-code->register-name code)))
-     (if (equal? name '(:hl))
-	 (let ((get-hl (register-getter machine :hl))
-	       (get-byte [machine :get-byte]))
-	   (lambda () [get-byte [get-hl]]))
-	 (register-getter machine name)))))
+ (define ignore-immediate8 "Returns a compiler which ignores the immediate8 argument." (ignore-args 2)))
 (export
- (define (r-code->setter machine code)
-   "Return a compiled (lambda (byte)) that sets the byte associated with the given r-code."
-   (let ((name (r-code->register-name code)))
-     (if (equal? name '(:hl))
-	 (let ((get-hl (register-getter machine :hl))
-	       (set-byte [machine :set-byte!]))
-	   (lambda () [set-byte [get-hl]]))
-	 (register-setter machine name)))))
-
+ (define ignore-immediate16 "Returns a compiler which ignores the immediate16 argument." (ignore-args 3)))
+(export
+ (define just-machine "Returns a compiler that ignores all arguments except machine." (ignore-args 1 2 3)))
+(export
+ (define just-immediate8 "Returns a compiler that ignores all arguments except machine and immediate8." (ignore-args 1 3)))
+(export
+ (define just-immediate16 "Returns a compiler that ignores all arguments except machine and immediate16." (ignore-args 1 2)))
 
 (uninstall-syntax!)
 (defpackage-form :machine)

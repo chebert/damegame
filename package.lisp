@@ -64,10 +64,12 @@
            #:BIT-VALUE-SET
            #:BORROW8?
            #:BYTE-COMPLEMENT
+           #:CARRY16?
            #:CARRY8?
            #:DECIMAL-ADJUSTED-ARITHMETIC
            #:DECIMAL-ADJUSTED-ARITHMETIC-CARRY?
            #:HALF-BORROW8?
+           #:HALF-CARRY16?
            #:HALF-CARRY8?
            #:HEX16-STRING
            #:HEX8-STRING
@@ -89,6 +91,30 @@
            #:U8-STRING
            #:VALUE->U16))
 
+(DEFPACKAGE #:RAM
+  (:USE #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:INTERNAL-RAM?
+           #:MAKE-INTERNAL-RAM
+           #:MAKE-MEMORY-VECTOR
+           #:WITH-MAPPED-ADDRESS))
+
+(DEFPACKAGE #:OPCODE-COMPILER
+  (:USE #:BINARY #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:COMPILE-EXECUTION-PROC
+           #:FIND-COMPILER
+           #:FLAG-GETTER
+           #:IGNORE-IMMEDIATE16
+           #:IGNORE-IMMEDIATE8
+           #:IGNORE-IMMEDIATES
+           #:JUST-IMMEDIATE16
+           #:JUST-IMMEDIATE8
+           #:JUST-MACHINE
+           #:OPCODE-MATCHES-TEMPLATE?
+           #:R-CODE->GETTER
+           #:R-CODE->REGISTER-NAME
+           #:R-CODE->SETTER
+           #:REGISTER-COMPILER!))
+
 (DEFPACKAGE #:FLAGS
   (:USE #:BINARY #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
   (:EXPORT #:CARRY-BIT
@@ -100,23 +126,13 @@
            #:SUBRACTION-SET?
            #:ZERO-SET?))
 
-(DEFPACKAGE #:RAM
-  (:USE #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
-  (:EXPORT #:INTERNAL-RAM?
-           #:MAKE-INTERNAL-RAM
-           #:MAKE-MEMORY-VECTOR
-           #:WITH-MAPPED-ADDRESS))
-
-(DEFPACKAGE #:OPCODE-COMPILER
-  (:USE #:BINARY #:SCHEMEISH.SCHEMEISH)
-  (:EXPORT #:COMPILE-EXECUTION-PROC
-           #:FIND-COMPILER
-           #:FLAG-GETTER
-           #:OPCODE-MATCHES-TEMPLATE?
-           #:REGISTER-COMPILER!))
-
 (DEFPACKAGE #:MACHINE
-  (:USE #:BINARY #:EXAMPLE #:RAM #:SCHEMEISH.SCHEMEISH #:OPCODE-COMPILER #:FLAGS)
+  (:USE #:BINARY
+        #:EXAMPLE
+        #:FLAGS
+        #:OPCODE-COMPILER
+        #:RAM
+        #:SCHEMEISH.SCHEMEISH)
   (:EXPORT #:MACHINE?
            #:MAKE-MACHINE
            #:MAKE-REGISTER
@@ -126,9 +142,27 @@
            #:REGISTER?
            #:ROM?))
 
-(DEFPACKAGE #:8BIT-TRANSFERS
+(defpackage #:opcode-parser
+  (:use #:schemeish.schemeish #:machine #:opcode-compiler))
+
+(DEFPACKAGE #:TRANSFERS
   (:DOCUMENTATION "Installs opcode compilers for 8-bit transfer instructions: LD.")
-  (:USE #:BINARY #:EXAMPLE #:MACHINE #:OPCODE-COMPILER #:SCHEMEISH.SCHEMEISH))
+  (:USE #:BINARY
+        #:EXAMPLE
+        #:FLAGS
+        #:MACHINE
+        #:OPCODE-COMPILER
+        #:OPCODE-PARSER
+        #:SCHEMEISH.SCHEMEISH))
+
+(DEFPACKAGE #:16BIT-ALU
+  (:DOCUMENTATION "Installs 16-bit alu opcode compilers: ADD, INC, DEC.")
+  (:USE #:BINARY
+        #:FLAGS
+        #:MACHINE
+        #:OPCODE-COMPILER
+        #:OPCODE-PARSER
+        #:SCHEMEISH.SCHEMEISH))
 
 (DEFPACKAGE #:8BIT-ALU
   (:DOCUMENTATION "Installs opcode compilers for 8-bit arithmetic instructions:
@@ -142,11 +176,13 @@ and 8-bit updates:
         #:FLAGS
         #:MACHINE
         #:OPCODE-COMPILER
+        #:OPCODE-PARSER
         #:SCHEMEISH.SCHEMEISH))
 
-(DEFPACKAGE #:16BIT-ALU
-  (:DOCUMENTATION "Installs 16-bit alu opcode compilers: ADD, INC, DEC.")
-  (:USE #:BINARY #:FLAGS #:MACHINE #:OPCODE-COMPILER #:SCHEMEISH.SCHEMEISH))
+(DEFPACKAGE #:OPCODE-PARSER
+  (:USE #:MACHINE #:OPCODE-COMPILER #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:R-CODE->GETTER #:R-CODE->REGISTER-NAME #:R-CODE->SETTER))
+
 
 (defpackage #:sdl-wrapper
   (:use #:cl #:sb-alien)

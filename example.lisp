@@ -91,7 +91,3 @@ Otherwise value is compared using EQUAL? against expected."
    (declare (ignore ignored))
    `(for-macros
       (remove-examples! ',name))))
-
-(define-examples check-examples
-  ((+ 1 2 3) 6)
-  ((not (ignore-errors (error "Throws an error")))))
