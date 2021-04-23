@@ -2,19 +2,6 @@
 
 (install-syntax!)
 
-(define (ss-code->register-name ss-code)
-  "Return the register or register-pair name associated with ss-code extracted from an opcode."
-  (cond
-    ((= ss-code #b00) :bc)
-    ((= ss-code #b01) :de)
-    ((= ss-code #b10) :hl)
-    ((= ss-code #b11) :sp)
-    (t (error "Unrecognized SS-CODE: ~S" ss-code))))
-
-(define (opcode->ss-register opcode)
-  (ss-code->register-name (bit-extract opcode 4 2)))
-
-
 (define (perform-add-hl get-hl set-hl get-data get-f set-f)
   (let ((hl [get-hl])
 	(data [get-data])
@@ -25,7 +12,7 @@
 
 (define (compile-add-hl machine opcode immediate8 immediate16)
   (declare (ignore immediate8 immediate16))
-  (let ((ss-register (opcode->ss-register opcode)))
+  (let ((ss-register (extract-ss-register-name opcode)))
     (let ((get-hl (register-getter machine :hl))
 	  (set-hl (register-setter machine :hl))
 	  (get-data (register-getter machine ss-register))
@@ -62,7 +49,7 @@
 
 (define ((compile-update perform) machine opcode immediate8 immediate16)
   (declare (ignore immediate8 immediate16))
-  (let ((ss-register (opcode->ss-register opcode)))
+  (let ((ss-register (extract-ss-register-name opcode)))
     (let ((get-data (register-getter machine ss-register))
 	  (set-data (register-setter machine ss-register))
 	  (advance-pc [machine :advance-pc!]))

@@ -101,7 +101,6 @@
 (DEFPACKAGE #:OPCODE-COMPILER
   (:USE #:BINARY #:EXAMPLE #:SCHEMEISH.SCHEMEISH)
   (:EXPORT #:COMPILE-EXECUTION-PROC
-           #:FIND-COMPILER
            #:FLAG-GETTER
            #:IGNORE-IMMEDIATE16
            #:IGNORE-IMMEDIATE8
@@ -110,9 +109,6 @@
            #:JUST-IMMEDIATE8
            #:JUST-MACHINE
            #:OPCODE-MATCHES-TEMPLATE?
-           #:R-CODE->GETTER
-           #:R-CODE->REGISTER-NAME
-           #:R-CODE->SETTER
            #:REGISTER-COMPILER!))
 
 (DEFPACKAGE #:FLAGS
@@ -142,11 +138,26 @@
            #:REGISTER?
            #:ROM?))
 
-(defpackage #:opcode-parser
-  (:use #:schemeish.schemeish #:machine #:opcode-compiler))
+(DEFPACKAGE #:OPCODE-PARSER
+  (:DOCUMENTATION "Provides tools for parsing register-names from opcodes.")
+  (:USE #:BINARY #:MACHINE #:OPCODE-COMPILER #:SCHEMEISH.SCHEMEISH)
+  (:EXPORT #:DD-CODE->REGISTER-NAME
+           #:EXTRACT-DD-REGISTER-NAME
+           #:EXTRACT-QQ-REGISTER-NAME
+           #:EXTRACT-SS-REGISTER-NAME
+           #:QQ-CODE->REGISTER-NAME
+           #:R-CODE->GETTER
+           #:R-CODE->REGISTER-NAME
+           #:R-CODE->SETTER
+           #:SS-CODE->REGISTER-NAME))
 
-(DEFPACKAGE #:TRANSFERS
-  (:DOCUMENTATION "Installs opcode compilers for 8-bit transfer instructions: LD.")
+(DEFPACKAGE #:8BIT-ALU
+  (:DOCUMENTATION "Installs opcode compilers for 8-bit arithmetic instructions:
+   ADD, ADC, SUB, SBC
+8-bit logical instructions:
+  AND, OR, XOR, CP
+and 8-bit updates:
+  INC, DEC")
   (:USE #:BINARY
         #:EXAMPLE
         #:FLAGS
@@ -164,13 +175,8 @@
         #:OPCODE-PARSER
         #:SCHEMEISH.SCHEMEISH))
 
-(DEFPACKAGE #:8BIT-ALU
-  (:DOCUMENTATION "Installs opcode compilers for 8-bit arithmetic instructions:
-   ADD, ADC, SUB, SBC
-8-bit logical instructions:
-  AND, OR, XOR, CP
-and 8-bit updates:
-  INC, DEC")
+(DEFPACKAGE #:TRANSFERS
+  (:DOCUMENTATION "Installs opcode compilers for 8-bit transfer instructions: LD.")
   (:USE #:BINARY
         #:EXAMPLE
         #:FLAGS
@@ -178,10 +184,6 @@ and 8-bit updates:
         #:OPCODE-COMPILER
         #:OPCODE-PARSER
         #:SCHEMEISH.SCHEMEISH))
-
-(DEFPACKAGE #:OPCODE-PARSER
-  (:USE #:MACHINE #:OPCODE-COMPILER #:SCHEMEISH.SCHEMEISH)
-  (:EXPORT #:R-CODE->GETTER #:R-CODE->REGISTER-NAME #:R-CODE->SETTER))
 
 
 (defpackage #:sdl-wrapper
