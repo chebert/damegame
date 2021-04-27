@@ -134,33 +134,27 @@
   ((bit-value-set #b11001101 3 0) #b11000101))
 
 (export
- (define (rotate-left byte bit0 continue)
-   "Calls [continue new-byte old-bit7]
+ (define (rotate-left byte bit0)
+   "Returns (values new-byte old-bit7)
 Byte will be shifted to the left 1 bit.
 Bit0 will be the 0th bit in the new byte."
-   [continue (u8 (logior (ash byte 1) bit0))
-	     (bit-value byte 7)]))
+   (values (u8 (logior (ash byte 1) bit0))
+	   (bit-value byte 7))))
 
 (define-examples rotate-left
-  ((let ((values))
-     (rotate-left #b10010101 1
-		  (lambda args (setq values args)))
-     values)
+  ((multiple-value-list (rotate-left #b10010101 1))
    '(#b00101011 1)))
 
 (export
- (define (rotate-right byte bit7 continue)
-   "calls [continue new-byte old-bit0].
+ (define (rotate-right byte bit7)
+   "Returns (values new-byte old-bit0).
 Byte will be shifted to the right 1 bit.
 bit7 will be the 7th bit in the new byte."
-   [continue (u8 (bit-value-set (ash byte -1) 7 bit7))
-	     (bit-value byte 0)]))
+   (values (u8 (bit-value-set (ash byte -1) 7 bit7))
+	   (bit-value byte 0))))
 
 (define-examples rotate-right
-  ((let ((values))
-     (rotate-right #b10010101 1
-		   (lambda args (setq values args)))
-     values)
+  ((multiple-value-list (rotate-right #b10010101 1))
    '(#b11001010 1)))
 
 (export
